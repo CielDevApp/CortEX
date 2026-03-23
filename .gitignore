@@ -1,0 +1,39 @@
+# Xcode
+DerivedData/
+*.xcuserdata/
+xcuserdata/
+*.xccheckout
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+build/
+.build/
+
+# CocoaPods
+Pods/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Backup copies
+*~
+*.swp
+
+# Claude Code temp
+.claude/
+
+# App data (never commit)
+*.cortex
+favorites_cache.json
+nh_favorites_cache.json
+
+# Development tools (not part of app)
+hent-AI-master/
+scripts/
+*.pth
+weights.h5
+CortEX/

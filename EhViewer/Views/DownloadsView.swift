@@ -1,0 +1,353 @@
+import SwiftUI
+import UniformTypeIdentifiers
+
+struct DownloadsView: View {
+    @ObservedObject private var manager = DownloadManager.shared
+    @State private var exportShareItem: ShareableURL?
+    @State private var showImportPicker = false
+    @State private var importMessage: String?
+    @State private var highlightedGid: Int?
+    @State private var readerMeta: DownloadedGallery?
+    @State private var liveReaderMeta: DownloadedGallery?
+
+    private var activeList: [(gid: Int, progress: DownloadManager.DownloadProgress)] {
+        manager.activeDownloads.sorted(by: { $0.key < $1.key }).map { (gid: $0.key, progress: $0.value) }
+    }
+
+    private var completedList: [DownloadedGallery] {
+        manager.downloads.values
+            .filter { $0.isComplete }
+            .sorted(by: { $0.downloadDate > $1.downloadDate })
+    }
+
+    private var incompleteList: [DownloadedGallery] {
+        manager.downloads.values
+            .filter { !$0.isComplete && manager.activeDownloads[$0.gid] == nil }
+            .sorted(by: { $0.downloadDate > $1.downloadDate })
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                // ダウンロード中
+                if !activeList.isEmpty {
+                    Section("ダウンロード中") {
+                        ForEach(activeList, id: \.gid) { item in
+                            downloadingRow(gid: item.gid, progress: item.progress)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    if let meta = manager.downloads[item.gid] {
+                                        liveReaderMeta = meta
+                                    }
+                                }
+                                .contextMenu {
+                                    Button {
+                                        manager.cancelDownload(gid: item.gid)
+                                    } label: {
+                                        Label("ダウンロード中止", systemImage: "stop.circle")
+                                    }
+                                    Button(role: .destructive) {
+                                        manager.cancelDownload(gid: item.gid)
+                                        manager.deleteDownload(gid: item.gid)
+                                    } label: {
+                                        Label("削除", systemImage: "trash")
+                                    }
+                                }
+                        }
+                    }
+                }
+
+                // ダウンロード済み
+                if !completedList.isEmpty {
+                    Section("保存済み (\(completedList.count))") {
+                        ForEach(completedList) { meta in
+                            completedRow(meta: meta)
+                                .contextMenu {
+                                    Button {
+                                        if let url = GalleryExporter.exportAsZip(gid: meta.gid) {
+                                            exportShareItem = ShareableURL(url: url)
+                                        }
+                                    } label: {
+                                        Label("エクスポート", systemImage: "square.and.arrow.up")
+                                    }
+                                    Button(role: .destructive) {
+                                        manager.deleteDownload(gid: meta.gid)
+                                    } label: {
+                                        Label("削除", systemImage: "trash")
+                                    }
+                                }
+                                .swipeActions(edge: .trailing) {
+                                    Button(role: .destructive) {
+                                        manager.deleteDownload(gid: meta.gid)
+                                    } label: {
+                                        Label("削除", systemImage: "trash")
+                                    }
+                                }
+                        }
+                    }
+                }
+
+                // 未完了
+                if !incompleteList.isEmpty {
+                    Section {
+                        ForEach(incompleteList) { meta in
+                            incompleteRow(meta: meta)
+                                .contextMenu {
+                                    Button(role: .destructive) {
+                                        manager.deleteDownload(gid: meta.gid)
+                                    } label: {
+                                        Label("削除", systemImage: "trash")
+                                    }
+                                }
+                                .swipeActions(edge: .trailing) {
+                                    Button(role: .destructive) {
+                                        manager.deleteDownload(gid: meta.gid)
+                                    } label: {
+                                        Label("削除", systemImage: "trash")
+                                    }
+                                }
+                        }
+                    } header: {
+                        HStack {
+                            Text("未完了")
+                            Spacer()
+                            Button {
+                                manager.resumeAllIncomplete()
+                            } label: {
+                                Label("すべて再開", systemImage: "arrow.clockwise")
+                                    .font(.caption)
+                            }
+                        }
+                    }
+                }
+
+                if manager.downloads.isEmpty && manager.activeDownloads.isEmpty {
+                    ContentUnavailableView {
+                        Label("保存済みギャラリーがありません", systemImage: "arrow.down.circle")
+                    } description: {
+                        Text("ギャラリー詳細画面からダウンロードできます")
+                    }
+                }
+            }
+            #if os(iOS)
+            .listStyle(.insetGrouped)
+            #endif
+            .navigationTitle("保存済み")
+            .toolbar {
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        showImportPicker = true
+                    } label: {
+                        Image(systemName: "square.and.arrow.down")
+                    }
+                }
+            }
+            .fileImporter(
+                isPresented: $showImportPicker,
+                allowedContentTypes: [.zip, .archive, .data],
+                allowsMultipleSelection: false
+            ) { result in
+                if case .success(let urls) = result, let url = urls.first {
+                    if GalleryExporter.importFromZip(url: url) != nil {
+                        importMessage = "インポート完了"
+                    } else {
+                        importMessage = "インポート失敗"
+                    }
+                }
+            }
+            .sheet(item: $exportShareItem) { item in
+                ActivityView(activityItems: [item.url])
+            }
+            #if os(iOS)
+            .fullScreenCover(item: $readerMeta) { meta in
+                LocalReaderView(meta: meta)
+            }
+            .fullScreenCover(item: $liveReaderMeta) { meta in
+                LocalReaderView(meta: meta, isLiveDownload: true)
+            }
+            #endif
+            .alert("インポート", isPresented: .constant(importMessage != nil)) {
+                Button("OK") { importMessage = nil }
+            } message: {
+                Text(importMessage ?? "")
+            }
+            .onChange(of: manager.lastImportedGid) { _, gid in
+                guard let gid else { return }
+                withAnimation(.easeInOut(duration: 0.4)) { highlightedGid = gid }
+                // 3秒後にハイライト解除
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    withAnimation(.easeOut(duration: 0.6)) { highlightedGid = nil }
+                    manager.lastImportedGid = nil
+                }
+            }
+            .onAppear {
+                // タブ遷移後にハイライト開始
+                if let gid = manager.lastImportedGid {
+                    withAnimation(.easeInOut(duration: 0.4)) { highlightedGid = gid }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        withAnimation(.easeOut(duration: 0.6)) { highlightedGid = nil }
+                        manager.lastImportedGid = nil
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - ダウンロード中の行
+
+    @ViewBuilder
+    private func downloadingRow(gid: Int, progress: DownloadManager.DownloadProgress) -> some View {
+        let title = manager.downloads[gid]?.title ?? "ダウンロード中..."
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                coverThumbnail(gid: gid)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(title)
+                            .font(.subheadline)
+                            .lineLimit(2)
+                        ProgressView()
+                            .scaleEffect(0.7)
+                    }
+                    Text("\(progress.current) / \(progress.total) ページ")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    manager.cancelDownload(gid: gid)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.red)
+                }
+                .buttonStyle(.plain)
+            }
+            ProgressView(value: progress.fraction)
+                .tint(.blue)
+        }
+        .padding(.vertical, 4)
+    }
+
+    // MARK: - 完了済みの行
+
+    @ViewBuilder
+    private func completedRow(meta: DownloadedGallery) -> some View {
+        let isHighlighted = highlightedGid == meta.gid
+        Button {
+            readerMeta = meta
+        } label: {
+            HStack(spacing: 10) {
+                coverThumbnail(gid: meta.gid)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(meta.title)
+                            .font(.subheadline)
+                            .lineLimit(2)
+                        if isHighlighted {
+                            Text("NEW")
+                                .font(.caption2.bold())
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(.green)
+                                .clipShape(Capsule())
+                        }
+                    }
+                    HStack(spacing: 4) {
+                        Text("\(meta.pageCount) ページ")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        if meta.isNhentai {
+                            Text("NH")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(.orange)
+                                .clipShape(RoundedRectangle(cornerRadius: 3))
+                        }
+                    }
+                    Text(meta.downloadDate, style: .date)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .listRowBackground(
+            isHighlighted ? Color.green.opacity(0.12) : nil
+        )
+    }
+
+    // MARK: - 未完了の行
+
+    @ViewBuilder
+    private func incompleteRow(meta: DownloadedGallery) -> some View {
+        HStack(spacing: 10) {
+            coverThumbnail(gid: meta.gid)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(meta.title)
+                    .font(.subheadline)
+                    .lineLimit(2)
+                Text("\(meta.downloadedPages.count) / \(meta.pageCount) ページ")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            Spacer()
+            Button {
+                let gallery = Gallery(
+                    gid: meta.gid, token: meta.token,
+                    title: meta.title, category: nil, coverURL: nil,
+                    rating: 0, pageCount: meta.pageCount,
+                    postedDate: "", uploader: nil, tags: []
+                )
+                manager.startDownload(gallery: gallery, host: .exhentai)
+            } label: {
+                Image(systemName: "arrow.clockwise.circle.fill")
+                    .foregroundStyle(.blue)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.vertical, 4)
+    }
+
+    // MARK: - カバーサムネイル
+
+    @ViewBuilder
+    private func coverThumbnail(gid: Int) -> some View {
+        if let cover = manager.loadCoverImage(gid: gid) {
+            Image(platformImage: cover)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 50, height: 70)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+        } else {
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Color.gray.opacity(0.2))
+                .frame(width: 50, height: 70)
+                .overlay {
+                    Image(systemName: "photo")
+                        .foregroundStyle(.secondary)
+                }
+        }
+    }
+}
+
+// MARK: - ヘルパー
+
+struct ShareableURL: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+#if canImport(UIKit)
+struct ActivityView: UIViewControllerRepresentable {
+    let activityItems: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+#endif
