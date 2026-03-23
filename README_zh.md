@@ -79,6 +79,8 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 - **8种语言** — 日 / 英 / 简中 / 繁中 / 韩 / 德 / 法 / 西
 - **动态标签** — 根据登录状态自动切换 E-Hentai ↔ EXhentai
 - **基准测试** — CIFilter vs Metal 速度测试 + 设备型号显示
+- **锁屏壁纸** — 收藏的画廊封面自动显示为锁屏背景
+- **标签栏自动隐藏** — 向下滚动时隐藏标签栏，增加显示空间
 
 ---
 
