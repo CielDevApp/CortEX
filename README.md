@@ -84,6 +84,21 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 - iOS 18.0+ / iPadOS 18.0+ (iOS 26 / iPadOS 26 tested)
 - iPhone / iPad (iPad spread mode supported)
 
+## Installation
+
+### Build from Source
+1. Clone: `git clone https://github.com/CielDevApp/CortEX.git`
+2. Open `EhViewer.xcodeproj` in Xcode 16+
+3. Select your Team in Signing & Capabilities
+4. Change Bundle Identifier to something unique (e.g. `com.yourname.cortex`)
+5. Connect your device and hit Run
+
+### Sideload (no Mac)
+1. Download the IPA from [Releases](https://github.com/CielDevApp/CortEX/releases)
+2. Install via AltStore, Sideloadly, or TrollStore
+
+> Note: Free Apple Developer accounts have a 7-day signing limit. Use AltStore for auto-refresh.
+
 ## Built With
 - Swift / SwiftUI
 - 76 Swift files / ~20,000 lines
