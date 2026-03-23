@@ -4,6 +4,14 @@
 
 ---
 
+## Demo
+
+https://github.com/user-attachments/assets/demo.mp4
+
+> *Content blurred for privacy*
+
+---
+
 ## Features
 
 ### Multi-Site Integration
