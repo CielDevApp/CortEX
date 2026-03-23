@@ -6,7 +6,7 @@
 
 ## Demo
 
-https://github.com/user-attachments/assets/demo.mp4
+https://github.com/Cielchan114514/CortEX/raw/main/assets/demo.mp4
 
 > *Content blurred for privacy*
 
