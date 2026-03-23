@@ -1,0 +1,397 @@
+import Foundation
+import SwiftUI
+
+// MARK: - ページロード & リクエストキュー
+extension ReaderViewModel {
+
+    /// ロードをリクエスト（重複チェック+キューイング）
+    func requestLoad(_ index: Int) {
+        guard index >= 0, index < totalPages else { return }
+        if rawImages[index] != nil { return }
+        if completedPages.contains(index) {
+            LogManager.shared.log("Reader", "requestLoad \(index) skip: already completed (but no rawImage)")
+            return
+        }
+        if loadingPages.contains(index) { return }
+        if loadingPages.count >= maxConcurrent {
+            LogManager.shared.log("Reader", "requestLoad \(index) skip: maxConcurrent reached (\(loadingPages.count))")
+            return
+        }
+
+        // サムネプレースホルダー
+        if holder(for: index).image == nil && !isOfflineMode {
+            if let thumb = thumbnailImage(for: index) {
+                holder(for: index).setLoaded(thumb)
+                placeholderPages.insert(index)
+            }
+        }
+
+        loadingPages.insert(index)
+        let isVisible = abs(index - currentIndex) <= 2
+        let priority: TaskPriority = isVisible ? .userInitiated : .utility
+        Task(priority: priority) {
+            let success = await loadSingle(index)
+            self.loadingPages.remove(index)
+            if success {
+                self.completedPages.insert(index)
+            }
+        }
+    }
+
+    /// ページをロード。成功したらtrue、URLが未準備ならfalse
+    @discardableResult
+    func loadSingle(_ index: Int) async -> Bool {
+        guard index < totalPages else {
+            LogManager.shared.log("Reader", "loadSingle \(index) exit: index>=totalPages (\(totalPages))")
+            return false
+        }
+
+        // ダウンロード済みローカル画像
+        if let localImage = DownloadManager.shared.loadLocalImage(gid: gallery.gid, page: index) {
+            LogManager.shared.log("Reader", "loadSingle \(index) exit: local image hit")
+            rawImages[index] = localImage
+            applyFilterPipeline(index: index, raw: localImage)
+            return true
+        }
+
+        let mode = qualityMode
+        LogManager.shared.log("Reader", "loadSingle \(index) mode=\(mode) thumbs=\(thumbnails.count) pageURLs=\(imagePageURLs.count)")
+
+        // モード0,1: サムネベース（オフライン）
+        if mode <= 1, index < thumbnails.count {
+            if let thumb = await getThumbImage(index: index) {
+                if mode == 1 {
+                    if holder(for: index).image == nil {
+                        holder(for: index).setLoaded(thumb)
+                    }
+                    let capturedIndex = index
+                    let processed = await Task.detached(priority: .userInitiated) {
+                        guard let upscaled = LanczosUpscaler.shared.upscale(thumb, scale: 4.0) else { return thumb }
+                        return LanczosUpscaler.shared.enhanceLowQuality(upscaled) ?? upscaled
+                    }.value
+                    rawImages[index] = processed
+                    applyFilterPipeline(index: index, raw: processed)
+                    Task.detached(priority: .utility) {
+                        if let enhanced = LanczosUpscaler.shared.upscaleWithTextEnhance(thumb, scale: 4.0) {
+                            let result = LanczosUpscaler.shared.enhanceLowQuality(enhanced) ?? enhanced
+                            await MainActor.run {
+                                self.rawImages[capturedIndex] = result
+                                self.applyFilterPipeline(index: capturedIndex, raw: result)
+                            }
+                        }
+                    }
+                } else {
+                    rawImages[index] = thumb
+                    applyFilterPipeline(index: index, raw: thumb)
+                }
+                LogManager.shared.log("Reader", "loadSingle \(index) exit: mode\(mode) thumb success")
+                return true
+            }
+            LogManager.shared.log("Reader", "loadSingle \(index): mode\(mode) thumb nil, falling through")
+        }
+
+        // モード2,3: フル画像
+        guard index < imagePageURLs.count else {
+            LogManager.shared.log("Reader", "loadSingle \(index) exit: imagePageURLs not ready (count=\(imagePageURLs.count), mode=\(mode))")
+            return false
+        }
+
+        if holder(for: index).image == nil {
+            holder(for: index).setLoading()
+        }
+
+        let resolvedHit = resolvedImageURLs[index] != nil
+        do {
+            var imageURL: URL
+            if let resolved = resolvedImageURLs[index] {
+                imageURL = resolved
+            } else {
+                imageURL = try await client.fetchImageURL(pageURL: imagePageURLs[index])
+                resolvedImageURLs[index] = imageURL
+                Self.saveResolvedURLs(resolvedImageURLs, gid: gallery.gid)
+            }
+
+            let cacheHit = ImageCache.shared.image(for: imageURL) != nil
+            LogManager.shared.log("Reader", "loadSingle \(index): resolved=\(resolvedHit) cache=\(cacheHit) url=\(imageURL.absoluteString.prefix(80))")
+
+            if let cached = ImageCache.shared.image(for: imageURL) {
+                // 自動保存: キャッシュヒット時もローカルに保存
+                #if canImport(UIKit)
+                if UserDefaults.standard.bool(forKey: "autoSaveOnRead") {
+                    if let data = cached.jpegData(compressionQuality: 0.92) {
+                        DownloadManager.shared.autoSavePage(
+                            gid: gallery.gid, token: gallery.token, title: gallery.title,
+                            pageCount: totalPages, page: index, imageData: data
+                        )
+                    }
+                }
+                #endif
+
+                let display = Self.downsample(cached)
+                rawImages[index] = display
+                applyFilterPipeline(index: index, raw: display)
+                LogManager.shared.log("Reader", "loadSingle \(index) exit: cache hit, displayed")
+                if mode >= 3 {
+                    let capturedIndex = index
+                    Task.detached(priority: .utility) {
+                        let enhanced = mode == 4
+                            ? LanczosUpscaler.shared.enhanceUltimate(cached)
+                            : LanczosUpscaler.shared.sharpenOnly(cached)
+                        if let enhanced {
+                            await MainActor.run {
+                                self.rawImages[capturedIndex] = enhanced
+                                self.applyFilterPipeline(index: capturedIndex, raw: enhanced)
+                            }
+                        }
+                    }
+                }
+                return true
+            }
+
+            let isVisible = abs(index - currentIndex) <= 2
+            if !isVisible {
+                await ExtremeMode.shared.delay(nanoseconds: requestDelay)
+            }
+
+            let imageData = try await client.fetchImageData(url: imageURL, host: host)
+
+            // 自動保存: 設定ONの場合のみ
+            if UserDefaults.standard.bool(forKey: "autoSaveOnRead") {
+                DownloadManager.shared.autoSavePage(
+                    gid: gallery.gid, token: gallery.token, title: gallery.title,
+                    pageCount: totalPages, page: index, imageData: imageData
+                )
+            }
+
+            let decodePriority: TaskPriority = isVisible ? .userInitiated : .utility
+            let image: PlatformImage? = await Task.detached(priority: decodePriority) {
+                guard let img = PlatformImage(data: imageData) else { return nil }
+                #if canImport(UIKit)
+                if let prepared = await img.byPreparingForDisplay() { return prepared }
+                let renderer = UIGraphicsImageRenderer(size: img.size)
+                return renderer.image { _ in img.draw(at: .zero) }
+                #else
+                return img
+                #endif
+            }.value
+
+            guard let image else {
+                LogManager.shared.log("Reader", "loadSingle \(index) exit: image decode failed")
+                holder(for: index).setFailed("画像デコード失敗")
+                return true
+            }
+
+            ImageCache.shared.set(image, for: imageURL)
+            let display = Self.downsample(image)
+            rawImages[index] = display
+            applyFilterPipeline(index: index, raw: display)
+            LogManager.shared.log("Reader", "loadSingle \(index) exit: fetched & displayed (\(image.pixelWidth)x\(image.pixelHeight))")
+
+            if mode >= 3 {
+                let capturedIndex = index
+                Task.detached(priority: .utility) {
+                    let enhanced = mode == 4
+                        ? LanczosUpscaler.shared.enhanceUltimate(image)
+                        : LanczosUpscaler.shared.sharpenOnly(image)
+                    if let enhanced {
+                        await MainActor.run {
+                            self.rawImages[capturedIndex] = enhanced
+                            self.applyFilterPipeline(index: capturedIndex, raw: enhanced)
+                        }
+                    }
+                }
+            }
+        } catch {
+            if resolvedHit && !ExtremeMode.shared.isEnabled {
+                LogManager.shared.log("Reader", "loadSingle \(index): resolved URL expired, retrying fresh")
+                resolvedImageURLs.removeValue(forKey: index)
+                Self.saveResolvedURLs(resolvedImageURLs, gid: gallery.gid)
+                do {
+                    let freshURL = try await client.fetchImageURL(pageURL: imagePageURLs[index])
+                    resolvedImageURLs[index] = freshURL
+                    Self.saveResolvedURLs(resolvedImageURLs, gid: gallery.gid)
+                    let isVisible = abs(index - currentIndex) <= 2
+                    if !isVisible { await ExtremeMode.shared.delay(nanoseconds: requestDelay) }
+                    let imageData = try await client.fetchImageData(url: freshURL, host: host)
+
+                    // 自動保存（リトライ時、設定ONの場合のみ）
+                    if UserDefaults.standard.bool(forKey: "autoSaveOnRead") {
+                        DownloadManager.shared.autoSavePage(
+                            gid: gallery.gid, token: gallery.token, title: gallery.title,
+                            pageCount: totalPages, page: index, imageData: imageData
+                        )
+                    }
+
+                    let decodePriority: TaskPriority = isVisible ? .userInitiated : .utility
+                    let retryImage: PlatformImage? = await Task.detached(priority: decodePriority) {
+                        guard let img = PlatformImage(data: imageData) else { return nil }
+                        #if canImport(UIKit)
+                        if let prepared = await img.byPreparingForDisplay() { return prepared }
+                        let renderer = UIGraphicsImageRenderer(size: img.size)
+                        return renderer.image { _ in img.draw(at: .zero) }
+                        #else
+                        return img
+                        #endif
+                    }.value
+                    if let retryImage {
+                        ImageCache.shared.set(retryImage, for: freshURL)
+                        let display = Self.downsample(retryImage)
+                        rawImages[index] = display
+                        applyFilterPipeline(index: index, raw: display)
+                        LogManager.shared.log("Reader", "loadSingle \(index) exit: retry success (\(retryImage.pixelWidth)x\(retryImage.pixelHeight))")
+                        return true
+                    }
+                } catch {
+                    LogManager.shared.log("Reader", "loadSingle \(index) exit: retry also failed: \(error.localizedDescription)")
+                }
+            }
+            LogManager.shared.log("Reader", "loadSingle \(index) exit: error \(error.localizedDescription)")
+            holder(for: index).setFailed(error.localizedDescription)
+        }
+        return true
+    }
+
+    // MARK: - ページURL取得
+
+    func loadImagePages() async {
+        guard !hasLoadedImagePages else { return }
+        hasLoadedImagePages = true
+
+        if isOfflineMode {
+            if thumbnails.isEmpty {
+                do {
+                    let infos = try await client.fetchThumbnailInfos(host: host, gallery: gallery, page: 0)
+                    if !infos.isEmpty {
+                        thumbnails = infos
+                        let spriteURLs = Set(infos.map(\.spriteURL))
+                        for url in spriteURLs {
+                            if ImageCache.shared.image(for: url) == nil {
+                                if let data = try? await client.fetchImageData(url: url, host: host) {
+                                    if let img = PlatformImage(data: data) { ImageCache.shared.setThumb(img, for: url) }
+                                }
+                            }
+                        }
+                    }
+                } catch {}
+            }
+            if !thumbnails.isEmpty {
+                totalPages = thumbnails.count
+                isLoading = false
+                let start = min(initialPage, thumbnails.count - 1)
+                requestLoad(start)
+                if start + 1 < thumbnails.count { requestLoad(start + 1) }
+                if initialPage > 0 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.scrollTarget = self.initialPage }
+                }
+                if thumbnails.count >= 20 {
+                    Task(priority: .utility) { await self.fetchMoreThumbnails() }
+                }
+                return
+            }
+        }
+
+        if imagePageURLs.isEmpty {
+            if let cached = Self.loadURLCache(gid: gallery.gid) {
+                imagePageURLs = cached
+                totalPages = cached.count
+                LogManager.shared.log("Reader", "URL cache hit: \(cached.count) pages for gid=\(gallery.gid)")
+                isLoading = false
+                let center = max(currentIndex, initialPage)
+                requestLoad(center)
+                requestLoad(center + 1)
+                requestLoad(center - 1)
+                if initialPage != currentIndex { requestLoad(initialPage) }
+                return
+            }
+        }
+
+        isLoading = true
+        errorMessage = nil
+        await fetchAndCacheURLs()
+        isLoading = false
+    }
+
+    func fetchAndCacheURLs() async {
+        do {
+            var allPageURLs: [URL] = []
+            var seenURLs: Set<URL> = []
+            var page = 0
+            let knownTotal = gallery.pageCount
+            while true {
+                let urls = try await client.fetchImagePageURLs(host: host, gallery: gallery, page: page)
+                if urls.isEmpty { break }
+                let newURLs = urls.filter { !seenURLs.contains($0) }
+                if newURLs.isEmpty { break }
+                seenURLs.formUnion(urls)
+                allPageURLs.append(contentsOf: newURLs)
+                page += 1
+                imagePageURLs = allPageURLs
+                if knownTotal > 0 && allPageURLs.count >= knownTotal { break }
+                if page > 200 { break }
+                await ExtremeMode.shared.delay(nanoseconds: requestDelay)
+            }
+            imagePageURLs = allPageURLs
+            if allPageURLs.count > totalPages { totalPages = allPageURLs.count }
+            if !allPageURLs.isEmpty {
+                Self.saveURLCache(allPageURLs, gid: gallery.gid)
+                let center = max(currentIndex, initialPage)
+                requestLoad(center)
+                requestLoad(center + 1)
+                requestLoad(center - 1)
+            } else if errorMessage == nil {
+                errorMessage = "ページURLを取得できませんでした"
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func fetchMoreThumbnails() async {
+        var page = 1
+        var seenIndices = Set(thumbnails.map(\.index))
+        while page <= 100 {
+            await ExtremeMode.shared.delay(nanoseconds: requestDelay)
+            do {
+                let infos = try await client.fetchThumbnailInfos(host: host, gallery: gallery, page: page)
+                if infos.isEmpty { break }
+                let newInfos = infos.filter { !seenIndices.contains($0.index) }
+                if newInfos.isEmpty { break }
+                seenIndices.formUnion(newInfos.map(\.index))
+                let spriteURLs = Set(newInfos.map(\.spriteURL))
+                for url in spriteURLs {
+                    if ImageCache.shared.image(for: url) == nil {
+                        if let data = try? await client.fetchImageData(url: url, host: host) {
+                            if let img = PlatformImage(data: data) { ImageCache.shared.setThumb(img, for: url) }
+                        }
+                    }
+                }
+                await MainActor.run {
+                    thumbnails.append(contentsOf: newInfos)
+                    totalPages = thumbnails.count
+                }
+                page += 1
+            } catch { break }
+        }
+        LogManager.shared.log("Reader", "thumbnail loading complete: \(thumbnails.count) pages")
+    }
+
+    // MARK: - サムネ画像取得
+
+    func getThumbImage(index: Int) async -> PlatformImage? {
+        guard index < thumbnails.count else { return nil }
+        let info = thumbnails[index]
+        let croppedKey = "\(info.spriteURL.absoluteString)_\(Int(info.offsetX))"
+        let stableHash = croppedKey.utf8.reduce(into: UInt64(5381)) { h, c in h = h &* 33 &+ UInt64(c) }
+        let cacheURL = URL(string: "ehviewer-crop://\(stableHash)")!
+        if let cached = ImageCache.shared.image(for: cacheURL) { return cached }
+        if let sprite = ImageCache.shared.image(for: info.spriteURL) {
+            let x = abs(Int(info.offsetX))
+            let w = Int(info.width), h = Int(info.height)
+            let clampedX = min(x, sprite.pixelWidth - 1)
+            let clampedW = min(w, sprite.pixelWidth - clampedX)
+            let clampedH = min(h, sprite.pixelHeight)
+            return sprite.croppedImage(rect: CGRect(x: clampedX, y: 0, width: clampedW, height: clampedH))
+        }
+        return nil
+    }
+}
