@@ -73,7 +73,7 @@
 ---
 
 ## Requirements
-- iOS 18.0+ / iPadOS 18.0+
+- iOS 18.0+ / iPadOS 18.0+ (iOS 26 / iPadOS 26 tested)
 - iPhone / iPad (iPad spread mode supported)
 
 ## Built With
