@@ -13,6 +13,7 @@ struct FavoritesView: View {
     @State private var nhErrorMessage: String?
     @State private var searchText = ""
     @State private var nhSortOrder: FavoritesSort = .dateDesc
+    @State private var tabBarHidden = false
 
     var body: some View {
         NavigationStack {
@@ -119,10 +120,23 @@ struct FavoritesView: View {
                 .refreshable {
                     await viewModel.refreshFromServer()
                 }
+                .onScrollGeometryChange(for: CGFloat.self) { geo in
+                    geo.contentOffset.y
+                } action: { oldVal, newVal in
+                    let delta = newVal - oldVal
+                    if abs(delta) > 100 { return }
+                    if delta > 8 { tabBarHidden = true }
+                    else if delta < -5 { tabBarHidden = false }
+                }
 
                 } // end E-Hentai else
             }
             .navigationTitle("お気に入り")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(tabBarHidden ? .hidden : .visible, for: .tabBar)
+            .animation(.smooth(duration: 0.25), value: tabBarHidden)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .automatic) {
                     Button {
@@ -306,6 +320,14 @@ struct FavoritesView: View {
                 .listStyle(.insetGrouped)
                 #endif
                 .refreshable { await syncNhFavorites() }
+                .onScrollGeometryChange(for: CGFloat.self) { geo in
+                    geo.contentOffset.y
+                } action: { oldVal, newVal in
+                    let delta = newVal - oldVal
+                    if abs(delta) > 100 { return }
+                    if delta > 8 { tabBarHidden = true }
+                    else if delta < -5 { tabBarHidden = false }
+                }
             }
         }
         .onAppear {

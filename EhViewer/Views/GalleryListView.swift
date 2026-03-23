@@ -40,6 +40,7 @@ struct GalleryListView: View {
     @State private var isSearchActive = false
     @State private var hasInitialized = false
     @State private var searchText = ""
+    @State private var tabBarHidden = false
 
     private var currentVM: GalleryListViewModel {
         switch selectedTab {
@@ -74,6 +75,11 @@ struct GalleryListView: View {
                 }
             }
             .navigationTitle("Cort:EX")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(tabBarHidden ? .hidden : .visible, for: .tabBar)
+            .animation(.smooth(duration: 0.25), value: tabBarHidden)
+            #endif
             .navigationDestination(for: Gallery.self) { gallery in
                 GalleryDetailView(gallery: gallery, host: currentHost)
             }
@@ -155,11 +161,11 @@ struct GalleryListView: View {
 
             switch selectedTab {
             case .all:
-                GalleryScrollList(viewModel: allVM, authVM: authVM)
+                GalleryScrollList(viewModel: allVM, authVM: authVM, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
             case .doujinshi:
-                GalleryScrollList(viewModel: doujinshiVM, authVM: authVM)
+                GalleryScrollList(viewModel: doujinshiVM, authVM: authVM, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
             case .manga:
-                GalleryScrollList(viewModel: mangaVM, authVM: authVM)
+                GalleryScrollList(viewModel: mangaVM, authVM: authVM, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
             }
         }
         .overlay {
@@ -240,7 +246,7 @@ struct GalleryListView: View {
             TipView(NhentaiSearchTip(), arrowEdge: .top)
                 .padding(.horizontal)
 
-            NhentaiScrollList(viewModel: nhVM)
+            NhentaiScrollList(viewModel: nhVM, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
         }
         .overlay {
             if nhVM.isLoading && nhVM.galleries.isEmpty {
@@ -289,6 +295,8 @@ struct GalleryScrollList: View {
     @ObservedObject var viewModel: GalleryListViewModel
     @ObservedObject var authVM: AuthViewModel
     @State private var scrollPosition: Int?
+    var onScrollDown: (() -> Void)?
+    var onScrollUp: (() -> Void)?
 
     var body: some View {
         ScrollView {
@@ -334,6 +342,14 @@ struct GalleryScrollList: View {
                 }
             }
         }
+        .onScrollGeometryChange(for: CGFloat.self) { geo in
+            geo.contentOffset.y
+        } action: { oldVal, newVal in
+            let delta = newVal - oldVal
+            if abs(delta) > 100 { return } // レイアウト変更による大ジャンプを無視
+            if delta > 8 { onScrollDown?() }
+            else if delta < -5 { onScrollUp?() }
+        }
         .scrollPosition(id: $scrollPosition, anchor: .top)
         .refreshable { await viewModel.refresh() }
     }
@@ -343,6 +359,8 @@ struct GalleryScrollList: View {
 
 struct NhentaiScrollList: View {
     @ObservedObject var viewModel: NhentaiListViewModel
+    var onScrollDown: (() -> Void)?
+    var onScrollUp: (() -> Void)?
 
     var body: some View {
         ScrollView {
@@ -375,6 +393,13 @@ struct NhentaiScrollList: View {
                     .padding(.top, 100)
                 }
             }
+        }
+        .onScrollGeometryChange(for: CGFloat.self) { geo in
+            geo.contentOffset.y
+        } action: { oldVal, newVal in
+            let delta = newVal - oldVal
+            if delta > 15 { onScrollDown?() }
+            else if delta < -15 { onScrollUp?() }
         }
         .refreshable { await viewModel.refresh() }
     }
