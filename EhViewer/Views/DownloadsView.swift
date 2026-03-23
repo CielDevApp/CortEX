@@ -9,6 +9,7 @@ struct DownloadsView: View {
     @State private var highlightedGid: Int?
     @State private var readerMeta: DownloadedGallery?
     @State private var liveReaderMeta: DownloadedGallery?
+    @State private var tabBarHidden = false
 
     private var activeList: [(gid: Int, progress: DownloadManager.DownloadProgress)] {
         manager.activeDownloads.sorted(by: { $0.key < $1.key }).map { (gid: $0.key, progress: $0.value) }
@@ -133,6 +134,19 @@ struct DownloadsView: View {
             .listStyle(.insetGrouped)
             #endif
             .navigationTitle("保存済み")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(tabBarHidden ? .hidden : .visible, for: .tabBar)
+            .animation(.smooth(duration: 0.25), value: tabBarHidden)
+            #endif
+            .onScrollGeometryChange(for: CGFloat.self) { geo in
+                geo.contentOffset.y
+            } action: { oldVal, newVal in
+                let delta = newVal - oldVal
+                if abs(delta) > 100 { return }
+                if delta > 8 { tabBarHidden = true }
+                else if delta < -5 { tabBarHidden = false }
+            }
             .toolbar {
                 ToolbarItem(placement: .automatic) {
                     Button {

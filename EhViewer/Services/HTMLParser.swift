@@ -184,6 +184,8 @@ enum HTMLParser: Sendable {
         updatedGallery.postedDate = postedDate
         updatedGallery.uploader = uploader
 
+        let comments = parseComments(html: html)
+
         return GalleryDetail(
             gallery: updatedGallery,
             jpnTitle: jpnTitle,
@@ -193,8 +195,66 @@ enum HTMLParser: Sendable {
             isFavorited: isFavorited,
             previewURLs: [],
             thumbnailPageURLs: previewURLs,
-            normalizedTags: normalizedTags
+            normalizedTags: normalizedTags,
+            comments: comments
         )
+    }
+
+    // MARK: - Comment Parsing
+
+    /// E-Hentaiのコメントを解析
+    /// HTML構造: div#cdiv > div.c1 > div.c3(投稿者/日時) + div.c5(スコア) + div.c6(本文)
+    nonisolated static func parseComments(html: String) -> [GalleryComment] {
+        var comments: [GalleryComment] = []
+
+        guard let cdivMatch = firstMatch(html, pattern: #"id="cdiv"[^>]*>([\s\S]*)"#),
+              cdivMatch.count >= 2 else { return [] }
+        let cdiv = cdivMatch[1]
+
+        let c1Blocks = matchAll(cdiv, pattern: #"<div class="c1"[\s\S]*?(?=<div class="c1"|<div class="c7"|$)"#)
+
+        for block in c1Blocks {
+            // c3: "Posted on DD MMMM YYYY, HH:MM by:   Author"
+            guard let c3Match = firstMatch(block, pattern: #"<div class="c3">([\s\S]*?)</div>"#),
+                  c3Match.count >= 2 else { continue }
+            let c3 = c3Match[1].replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+
+            var author = ""
+            var dateStr = ""
+            if let byRange = c3.range(of: " by:") {
+                let beforeBy = c3[c3.startIndex..<byRange.lowerBound]
+                author = String(c3[byRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if let postedRange = beforeBy.range(of: "Posted on ") {
+                    dateStr = String(beforeBy[postedRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+
+            // c5: スコア
+            let score = firstMatch(block, pattern: #"<div class="c5[^"]*"[^>]*>[\s\S]*?<span[^>]*>([^<]+)</span>"#)
+                .flatMap { $0.count >= 2 ? $0[1] : nil }
+
+            // c6: 本文（HTMLタグ除去）
+            var content = ""
+            if let c6Match = firstMatch(block, pattern: #"<div class="c6"[^>]*>([\s\S]*?)</div>"#),
+               c6Match.count >= 2 {
+                content = c6Match[1]
+                    .replacingOccurrences(of: "<br[^>]*>", with: "\n", options: .regularExpression)
+                    .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                content = decodeHTMLEntities(content) ?? content
+            }
+
+            guard !author.isEmpty, !content.isEmpty else { continue }
+
+            comments.append(GalleryComment(
+                author: author,
+                date: dateStr,
+                score: score,
+                content: content
+            ))
+        }
+
+        return comments
     }
 
     // MARK: - Image URL Parsing

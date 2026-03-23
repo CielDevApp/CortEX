@@ -77,6 +77,13 @@ struct Gallery: Identifiable, Hashable, Sendable, Codable {
     }
 }
 
+struct GalleryComment: Sendable {
+    let author: String
+    let date: String
+    let score: String?
+    let content: String
+}
+
 struct GalleryDetail: Sendable {
     var gallery: Gallery
     var jpnTitle: String?
@@ -87,6 +94,7 @@ struct GalleryDetail: Sendable {
     var previewURLs: [URL]
     var thumbnailPageURLs: [URL]
     var normalizedTags: [String: [String]]
+    var comments: [GalleryComment] = []
 }
 
 struct PageNumber: Sendable {

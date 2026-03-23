@@ -105,6 +105,9 @@ struct GalleryDetailView: View {
                     }
                     readButton(startPage: 0)
                     downloadButton(detail)
+                    if !detail.comments.isEmpty {
+                        commentsSection(detail.comments)
+                    }
                     thumbnailGrid(detail)
                 }
                 .padding()
@@ -434,6 +437,46 @@ struct GalleryDetailView: View {
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // MARK: - Comments
+
+    @ViewBuilder
+    private func commentsSection(_ comments: [GalleryComment]) -> some View {
+        GroupBox("コメント（\(comments.count)）") {
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(Array(comments.prefix(10).enumerated()), id: \.offset) { _, comment in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(comment.author)
+                                .font(.caption.bold())
+                                .foregroundStyle(.blue)
+                            Spacer()
+                            if let score = comment.score {
+                                Text(score)
+                                    .font(.caption2)
+                                    .foregroundStyle(score.hasPrefix("-") ? .red : .green)
+                            }
+                        }
+                        Text(comment.date)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(comment.content)
+                            .font(.caption)
+                            .lineLimit(8)
+                    }
+                    .padding(.vertical, 4)
+                    if comment.author != comments.prefix(10).last?.author || comment.date != comments.prefix(10).last?.date {
+                        Divider()
+                    }
+                }
+                if comments.count > 10 {
+                    Text("他 \(comments.count - 10) 件のコメント")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
