@@ -79,7 +79,9 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 - **8 Languages** — JA / EN / ZH-Hans / ZH-Hant / KO / DE / FR / ES
 - **Dynamic Tabs** — Auto-switch E-Hentai ↔ EXhentai based on login
 - **Benchmark** — CIFilter vs Metal speed test with device model display
-- **Lock Screen Wallpaper** — Favorites gallery covers automatically appear as lock screen background
+- **Lock Screen Wallpaper** — Favorites gallery covers automatically appear as lock screen background (blurred until unlock)
+
+<img src="assets/lockscreen.png" width="300" alt="Lock Screen Wallpaper">
 - **Tab Bar Auto-Hide** — Scrolling down hides the tab bar for more content space
 
 ---
