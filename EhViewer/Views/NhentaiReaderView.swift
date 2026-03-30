@@ -344,12 +344,13 @@ struct NhentaiReaderView: View {
         guard images[index] == nil, !loadingPages.contains(index) else { return }
         loadingPages.insert(index)
 
-        let page = gallery.images.pages[index]
+        guard let pages = gallery.images?.pages, index < pages.count else { return }
+        let page = pages[index]
 
         Task {
             do {
                 let data = try await NhentaiClient.fetchPageImage(
-                    galleryId: gallery.id, mediaId: gallery.media_id, page: index + 1, ext: page.ext
+                    galleryId: gallery.id, mediaId: gallery.media_id, page: index + 1, ext: page.ext, path: page.path
                 )
 
                 pageDataCache[index] = data

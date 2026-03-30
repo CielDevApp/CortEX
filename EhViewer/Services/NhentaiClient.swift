@@ -11,37 +11,95 @@ enum NhentaiClient {
         let id: Int
         let media_id: String
         let title: NhTitle
-        let images: NhImages
+        let images: NhImages?
         let num_pages: Int
         let tags: [NhTag]?
+        let thumbnailPath: String?  // v2 search: サムネパス
 
         var displayTitle: String { title.japanese ?? title.english ?? title.pretty ?? "\(id)" }
         var englishTitle: String { title.english ?? title.pretty ?? "\(id)" }
 
-        // nhentai APIは大きいIDを文字列で返すことがある
+        // v1 + v2 両対応デコーダー
         init(from decoder: Decoder) throws {
-            let c = try decoder.container(keyedBy: CodingKeys.self)
+            let c = try decoder.container(keyedBy: DecodingKeys.self)
+
+            // ID: Int or String
             if let intId = try? c.decode(Int.self, forKey: .id) {
                 id = intId
             } else {
                 let strId = try c.decode(String.self, forKey: .id)
                 id = Int(strId) ?? 0
             }
+
             media_id = try c.decode(String.self, forKey: .media_id)
-            title = try c.decode(NhTitle.self, forKey: .title)
-            images = try c.decode(NhImages.self, forKey: .images)
-            num_pages = try c.decode(Int.self, forKey: .num_pages)
-            tags = try c.decodeIfPresent([NhTag].self, forKey: .tags)
+
+            // title: v1は NhTitle オブジェクト、v2は english_title / japanese_title フラットフィールド
+            if let titleObj = try? c.decode(NhTitle.self, forKey: .title) {
+                title = titleObj
+            } else {
+                let en = try c.decodeIfPresent(String.self, forKey: .english_title)
+                let jp = try c.decodeIfPresent(String.self, forKey: .japanese_title)
+                title = NhTitle(english: en, japanese: jp, pretty: en)
+            }
+
+            // images: v1は NhImages オブジェクト、v2はトップレベルに pages/cover/thumbnail
+            if let imagesObj = try? c.decode(NhImages.self, forKey: .images) {
+                images = imagesObj
+            } else {
+                let pages = (try? c.decodeIfPresent([NhPage].self, forKey: .pages)) ?? []
+                let cover = try? c.decodeIfPresent(NhPage.self, forKey: .cover)
+                let thumb = try? c.decodeIfPresent(NhPage.self, forKey: .thumbnail)
+                if !pages.isEmpty || cover != nil {
+                    images = NhImages(pages: pages, cover: cover, thumbnail: thumb)
+                } else {
+                    images = nil
+                }
+            }
+
+            // num_pages
+            num_pages = (try? c.decode(Int.self, forKey: .num_pages)) ?? 0
+
+            // tags: v1は [NhTag]、v2検索結果は tag_ids: [Int]
+            if let tagObjs = try? c.decodeIfPresent([NhTag].self, forKey: .tags) {
+                tags = tagObjs
+            } else {
+                tags = nil
+            }
+
+            // v2 search: thumbnail (文字列パス)
+            if let thumbStr = try? c.decodeIfPresent(String.self, forKey: .thumbnail) {
+                thumbnailPath = thumbStr
+            } else {
+                thumbnailPath = nil
+            }
         }
 
-        private enum CodingKeys: String, CodingKey {
+        private enum DecodingKeys: String, CodingKey {
             case id, media_id, title, images, num_pages, tags
+            case english_title, japanese_title, tag_ids
+            case pages, cover, thumbnail
         }
 
-        // NhentaiFavoritesCache用の手動init
-        init(id: Int, media_id: String, title: NhTitle, images: NhImages, num_pages: Int, tags: [NhTag]?) {
+        private enum EncodingKeys: String, CodingKey {
+            case id, media_id, title, images, num_pages, tags, thumbnailPath
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: EncodingKeys.self)
+            try c.encode(id, forKey: .id)
+            try c.encode(media_id, forKey: .media_id)
+            try c.encode(title, forKey: .title)
+            try c.encodeIfPresent(images, forKey: .images)
+            try c.encode(num_pages, forKey: .num_pages)
+            try c.encodeIfPresent(tags, forKey: .tags)
+            try c.encodeIfPresent(thumbnailPath, forKey: .thumbnailPath)
+        }
+
+        // 手動init
+        init(id: Int, media_id: String, title: NhTitle, images: NhImages?, num_pages: Int, tags: [NhTag]?, thumbnailPath: String? = nil) {
             self.id = id; self.media_id = media_id; self.title = title
             self.images = images; self.num_pages = num_pages; self.tags = tags
+            self.thumbnailPath = thumbnailPath
         }
     }
 
@@ -58,11 +116,16 @@ enum NhentaiClient {
     }
 
     struct NhPage: Codable, Sendable {
-        let t: String  // j=jpg, p=png, g=gif
+        let t: String  // j=jpg, p=png, g=gif, w=webp
         let w: Int
         let h: Int
+        let path: String?  // v2: "galleries/XXXX/1.webp"
 
         var ext: String {
+            // v2: pathから拡張子を取得
+            if let path, let lastDot = path.lastIndex(of: ".") {
+                return String(path[path.index(after: lastDot)...])
+            }
             switch t {
             case "j": return "jpg"
             case "p": return "png"
@@ -70,6 +133,43 @@ enum NhentaiClient {
             case "w": return "webp"
             default: return "jpg"
             }
+        }
+
+        // v1 + v2 両対応デコーダー
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            // v2: path, width, height
+            path = try c.decodeIfPresent(String.self, forKey: .path)
+            if let width = try? c.decode(Int.self, forKey: .width) {
+                w = width
+                h = (try? c.decode(Int.self, forKey: .height)) ?? 0
+                // pathから拡張子コードを推定
+                if let p = path, p.hasSuffix(".webp") { t = "w" }
+                else if let p = path, p.hasSuffix(".png") { t = "p" }
+                else if let p = path, p.hasSuffix(".gif") { t = "g" }
+                else { t = "j" }
+            } else {
+                // v1: t, w, h
+                t = (try? c.decode(String.self, forKey: .t)) ?? "j"
+                w = (try? c.decode(Int.self, forKey: .w)) ?? 0
+                h = (try? c.decode(Int.self, forKey: .h)) ?? 0
+            }
+        }
+
+        init(t: String, w: Int, h: Int, path: String? = nil) {
+            self.t = t; self.w = w; self.h = h; self.path = path
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case t, w, h, path, width, height
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(t, forKey: .t)
+            try c.encode(w, forKey: .w)
+            try c.encode(h, forKey: .h)
+            try c.encodeIfPresent(path, forKey: .path)
         }
     }
 
@@ -79,12 +179,18 @@ enum NhentaiClient {
         let name: String
         let url: String?
         let count: Int?
+        let slug: String?
     }
 
     struct NhSearchResult: Codable, Sendable {
         let result: [NhGallery]
         let num_pages: Int
         let per_page: Int
+        let total: Int?
+
+        init(result: [NhGallery], num_pages: Int, per_page: Int, total: Int? = nil) {
+            self.result = result; self.num_pages = num_pages; self.per_page = per_page; self.total = total
+        }
     }
 
     // MARK: - API
@@ -124,15 +230,15 @@ enum NhentaiClient {
         return request
     }
 
-    /// ギャラリー情報取得
+    /// ギャラリー情報取得（v2 API）
     static func fetchGallery(id: Int) async throws -> NhGallery {
-        let url = URL(string: "https://nhentai.net/api/gallery/\(id)")!
-        let request = buildRequest(url: url)
-        let (data, _) = try await apiSession.data(for: request)
+        let urlStr = "https://nhentai.net/api/v2/galleries/\(id)"
+        let data = try await NhentaiWebBridge.shared.fetch(url: urlStr)
         return try JSONDecoder().decode(NhGallery.self, from: data)
     }
 
-    /// タイトル検索（sort: nil, "popular", "popular-today", "popular-week"）
+    /// タイトル検索（v2 API）
+    /// sort: nil=date, "popular", "popular-today", "popular-week", "popular-month"
     static func search(query: String, page: Int = 1, sort: String? = nil) async throws -> NhSearchResult {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         var urlString: String
@@ -140,31 +246,28 @@ enum NhentaiClient {
 
         if trimmed.isEmpty && (sort == nil || sort?.isEmpty == true) {
             // 空クエリ＆ソートなし → 全件API（新着順）
-            urlString = "https://nhentai.net/api/galleries/all?page=\(page)"
-        } else {
+            urlString = "https://nhentai.net/api/v2/galleries?page=\(page)"
+        } else if !trimmed.isEmpty {
             var searchQuery = trimmed
-            if searchQuery.isEmpty {
-                // 空クエリだがソートあり → search APIに""で投げる
-                searchQuery = "\"\""
-            } else if !searchQuery.contains(":") && !searchQuery.hasPrefix("\"") {
-                // タグ形式でなければ引用符で囲む（フレーズ検索）
+            if !searchQuery.contains(":") && !searchQuery.hasPrefix("\"") {
                 searchQuery = "\"\(searchQuery)\""
                 clientFilter = trimmed.lowercased()
             }
             let encoded = searchQuery.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? searchQuery
-            urlString = "https://nhentai.net/api/galleries/search?query=\(encoded)&page=\(page)"
+            urlString = "https://nhentai.net/api/v2/search?query=\(encoded)&page=\(page)"
+        } else {
+            // 空クエリだがソートあり
+            urlString = "https://nhentai.net/api/v2/galleries?page=\(page)"
         }
 
         if let sort, !sort.isEmpty {
-            urlString += "&sort=\(sort)"
+            let sortValue = sort == "popular" ? "popular" : sort
+            urlString += "&sort=\(sortValue)"
         }
 
         LogManager.shared.log("nhentai", "API: \(urlString)")
-        guard let url = URL(string: urlString) else { throw URLError(.badURL) }
-        let request = buildRequest(url: url)
-        let (data, response) = try await apiSession.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        LogManager.shared.log("nhentai", "response: status=\(status) size=\(data.count)")
+        let data = try await NhentaiWebBridge.shared.fetch(url: urlString)
+        LogManager.shared.log("nhentai", "response: size=\(data.count)")
         var result: NhSearchResult
         do {
             result = try JSONDecoder().decode(NhSearchResult.self, from: data)
@@ -243,19 +346,28 @@ enum NhentaiClient {
     private static let fallbackImageCDNs = ["i", "i1", "i2", "i3"]
     private static let fallbackThumbCDNs = ["t", "t1", "t2", "t3"]
 
-    /// ページ画像URL（デフォルトCDN）
-    static func imageURL(mediaId: String, page: Int, ext: String) -> URL {
-        URL(string: "https://i.nhentai.net/galleries/\(mediaId)/\(page).\(ext)")!
+    /// ページ画像URL（v2 path対応）
+    static func imageURL(mediaId: String, page: Int, ext: String, path: String? = nil) -> URL {
+        if let path {
+            return URL(string: "https://i.nhentai.net/\(path)")!
+        }
+        return URL(string: "https://i.nhentai.net/galleries/\(mediaId)/\(page).\(ext)")!
     }
 
-    /// サムネURL
-    static func thumbURL(mediaId: String, page: Int, ext: String) -> URL {
-        URL(string: "https://t.nhentai.net/galleries/\(mediaId)/\(page)t.\(ext)")!
+    /// サムネURL（v2 thumbnail path対応）
+    static func thumbURL(mediaId: String, page: Int, ext: String, path: String? = nil) -> URL {
+        if let path {
+            return URL(string: "https://t.nhentai.net/\(path)")!
+        }
+        return URL(string: "https://t.nhentai.net/galleries/\(mediaId)/\(page)t.\(ext)")!
     }
 
-    /// カバーURL
-    static func coverURL(mediaId: String, ext: String) -> URL {
-        URL(string: "https://t.nhentai.net/galleries/\(mediaId)/cover.\(ext)")!
+    /// カバーURL（v2 path対応）
+    static func coverURL(mediaId: String, ext: String, path: String? = nil) -> URL {
+        if let path {
+            return URL(string: "https://t.nhentai.net/\(path)")!
+        }
+        return URL(string: "https://t.nhentai.net/galleries/\(mediaId)/cover.\(ext)")!
     }
 
     // MARK: - 画像データ取得
@@ -321,7 +433,18 @@ enum NhentaiClient {
     }
 
     /// ページ画像取得（CDN動的解決 + フォールバック）
-    static func fetchPageImage(galleryId: Int, mediaId: String, page: Int, ext: String) async throws -> Data {
+    static func fetchPageImage(galleryId: Int, mediaId: String, page: Int, ext: String, path: String? = nil) async throws -> Data {
+        // 0. v2 path直接アクセス
+        if let path {
+            for cdn in fallbackImageCDNs {
+                let url = URL(string: "https://\(cdn).nhentai.net/\(path)")!
+                if let result = await fetchRawImage(url: url),
+                   result.status == 200 && !result.data.isEmpty && !isHTMLResponse(result.data) {
+                    return result.data
+                }
+            }
+        }
+
         // 1. CDN動的解決（ギャラリーページHTMLから実際のCDN URLを取得）
         if let cdn = await discoverCDN(galleryId: galleryId) {
             let url = URL(string: "https://\(cdn.image).nhentai.net/galleries/\(mediaId)/\(page).\(ext)")!
@@ -360,8 +483,19 @@ enum NhentaiClient {
         return try await fetchPageImage(galleryId: 0, mediaId: mediaId, page: page, ext: ext)
     }
 
-    /// カバー画像取得（拡張子フォールバック付き）
-    static func fetchCoverImage(galleryId: Int, mediaId: String, ext: String) async throws -> Data {
+    /// カバー画像取得（v2 path対応 + 拡張子フォールバック）
+    static func fetchCoverImage(galleryId: Int, mediaId: String, ext: String, path: String? = nil) async throws -> Data {
+        // v2: pathが指定されていればそれを使う
+        if let path {
+            for cdn in fallbackThumbCDNs {
+                let url = URL(string: "https://\(cdn).nhentai.net/\(path)")!
+                if let result = await fetchLightImage(url: url),
+                   result.status == 200 && !result.data.isEmpty && !isHTMLResponse(result.data) {
+                    return result.data
+                }
+            }
+        }
+
         var exts = [ext]
         for e in ["jpg", "webp", "png"] where e != ext { exts.append(e) }
 
@@ -399,31 +533,28 @@ enum NhentaiClient {
 
     // MARK: - お気に入り操作（要ログイン）
 
-    /// お気に入り登録/解除トグル
+    /// お気に入り登録/解除トグル（v2 API）
     static func toggleFavorite(galleryId: Int) async throws -> Bool {
-        let url = URL(string: "https://nhentai.net/api/gallery/\(galleryId)/favorite")!
-        var request = buildRequest(url: url)
-        request.httpMethod = "POST"
+        let urlStr = "https://nhentai.net/api/v2/galleries/\(galleryId)/favorite"
         // CSRFトークン
+        var csrfToken: String?
         if let cookies = NhentaiCookieManager.loadCookies() {
             for part in cookies.components(separatedBy: "; ") {
                 if part.hasPrefix("csrftoken=") {
-                    let token = String(part.dropFirst("csrftoken=".count))
-                    request.setValue(token, forHTTPHeaderField: "X-CSRFToken")
+                    csrfToken = String(part.dropFirst("csrftoken=".count))
                 }
             }
         }
 
-        let (data, response) = try await apiSession.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        LogManager.shared.log("nhentai", "toggleFavorite id=\(galleryId) status=\(status)")
+        let data = try await NhentaiWebBridge.shared.post(url: urlStr, csrfToken: csrfToken)
+        LogManager.shared.log("nhentai", "toggleFavorite id=\(galleryId) size=\(data.count)")
 
         // レスポンス: {"favorited": true/false}
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let favorited = json["favorited"] as? Bool {
             return favorited
         }
-        return status == 200
+        return true
     }
 
     /// お気に入り1ページ取得（HTML解析）→ (galleries, hasNextPage)
@@ -434,18 +565,29 @@ enum NhentaiClient {
         }
 
         LogManager.shared.log("nhFav", "fetching page \(page)...")
-        let url = URL(string: "https://nhentai.net/favorites/?page=\(page)")!
-        let request = buildRequest(url: url)
-        let (data, response) = try await apiSession.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard let html = String(data: data, encoding: .utf8) else {
-            LogManager.shared.log("nhFav", "page \(page): failed to decode HTML")
+        let urlStr = "https://nhentai.net/api/v2/favorites?page=\(page)"
+
+        do {
+            let data = try await NhentaiWebBridge.shared.fetch(url: urlStr)
+            let decoded = try JSONDecoder().decode(NhSearchResult.self, from: data)
+            let hasNext = page < decoded.num_pages
+            LogManager.shared.log("nhFav", "page \(page): \(decoded.result.count) items, hasNext=\(hasNext)")
+            return (decoded.result, hasNext)
+        } catch {
+            LogManager.shared.log("nhFav", "v2 API failed: \(error.localizedDescription), falling back to HTML")
+        }
+
+        // フォールバック: HTML解析
+        let htmlUrlStr = "https://nhentai.net/favorites/?page=\(page)"
+        let (html, status) = try await NhentaiWebBridge.shared.fetchHTML(url: htmlUrlStr)
+
+        guard !html.isEmpty else {
+            LogManager.shared.log("nhFav", "page \(page): empty HTML")
             return ([], false)
         }
 
         LogManager.shared.log("nhFav", "page \(page): status=\(status) html=\(html.count) chars")
 
-        // お気に入りページからギャラリーIDを抽出
         var ids: [Int] = []
         let idPattern = #"/g/(\d+)/"#
         if let regex = try? NSRegularExpression(pattern: idPattern) {
@@ -457,17 +599,8 @@ enum NhentaiClient {
             }
         }
 
-        LogManager.shared.log("nhFav", "page \(page): found \(ids.count) gallery IDs")
-
-        if ids.isEmpty && html.count > 0 {
-            let preview = String(html.prefix(300)).replacingOccurrences(of: "\n", with: " ")
-            LogManager.shared.log("nhFav", "page \(page) HTML: \(preview)")
-        }
-
-        // 次ページ判定
         let hasNext = html.contains("page=\(page + 1)") || html.contains("class=\"next\"")
 
-        // 各IDのギャラリー情報をAPI取得
         var galleries: [NhGallery] = []
         for (i, id) in ids.enumerated() {
             if let g = try? await fetchGallery(id: id) {

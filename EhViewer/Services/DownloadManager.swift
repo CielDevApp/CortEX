@@ -467,7 +467,7 @@ class DownloadManager: ObservableObject {
         )
 
         // カバー保存
-        if let cover = nhGallery.images.cover {
+        if let cover = nhGallery.images?.cover {
             let coverPath = coverFilePath(gid: gid)
             if !fileManager.fileExists(atPath: coverPath.path) {
                 if let data = try? await NhentaiClient.fetchCoverImage(galleryId: nhGallery.id, mediaId: nhGallery.media_id, ext: cover.ext) {
@@ -477,8 +477,9 @@ class DownloadManager: ObservableObject {
         }
 
         // 全ページURLを生成
+        let nhPages = nhGallery.images?.pages ?? []
         let allPageURLs: [URL] = (0..<totalPages).map { index in
-            let page = nhGallery.images.pages[index]
+            let page = index < nhPages.count ? nhPages[index] : NhentaiClient.NhPage(t: "j", w: 0, h: 0)
             return NhentaiClient.imageURL(mediaId: nhGallery.media_id, page: index + 1, ext: page.ext)
         }
 
@@ -489,7 +490,7 @@ class DownloadManager: ObservableObject {
         state.downloadedSet = Set(meta.downloadedPages)
         state.nhGalleryId = nhGallery.id
         state.nhMediaId = nhGallery.media_id
-        state.nhPages = nhGallery.images.pages
+        state.nhPages = nhGallery.images?.pages ?? []
         biDirStates[gid] = state
 
         updateProgress(gid: gid, current: state.downloadedSet.count, total: totalPages)

@@ -32,11 +32,13 @@ class NhentaiListViewModel: ObservableObject {
         }
 
         isLoading = false
+        Task { await enrichGalleries() }
     }
 
     func loadNextPage() async {
         guard !isLoading, hasMore else { return }
         isLoading = true
+        let startIndex = galleries.count
         currentPage += 1
 
         do {
@@ -50,6 +52,25 @@ class NhentaiListViewModel: ObservableObject {
         }
 
         isLoading = false
+        Task { await enrichGalleries(from: startIndex) }
+    }
+
+    /// v2 search結果にnum_pagesがないので、バックグラウンドで詳細を取得して補完
+    /// レート制限対策: 1.5秒間隔で順次取得
+    @MainActor
+    private func enrichGalleries(from startIndex: Int = 0) async {
+        for i in startIndex..<galleries.count {
+            guard galleries[i].num_pages == 0 else { continue }
+            do {
+                let full = try await NhentaiClient.fetchGallery(id: galleries[i].id)
+                var updated = galleries
+                updated[i] = full
+                galleries = updated
+            } catch {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+            }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+        }
     }
 
     func search() async {
