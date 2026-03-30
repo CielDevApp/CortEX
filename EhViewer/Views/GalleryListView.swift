@@ -442,9 +442,11 @@ struct NhentaiCardView: View {
                         .background(.orange)
                         .clipShape(RoundedRectangle(cornerRadius: 3))
 
-                    Text("\(gallery.num_pages) ページ")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if gallery.num_pages > 0 {
+                        Text("\(gallery.num_pages) ページ")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 if let tags = gallery.tags {
@@ -461,8 +463,15 @@ struct NhentaiCardView: View {
     }
 
     private func loadCover() {
-        guard let cover = gallery.images.cover else { return }
-        let url = NhentaiClient.coverURL(mediaId: gallery.media_id, ext: cover.ext)
+        // v2: thumbnailPathがあればそれを使う、なければimages.cover
+        let url: URL
+        if let thumbPath = gallery.thumbnailPath {
+            url = URL(string: "https://t.nhentai.net/\(thumbPath)")!
+        } else if let cover = gallery.images?.cover {
+            url = NhentaiClient.coverURL(mediaId: gallery.media_id, ext: cover.ext, path: cover.path)
+        } else {
+            return
+        }
 
         if let cached = ImageCache.shared.image(for: url) {
             coverImage = cached
@@ -473,7 +482,9 @@ struct NhentaiCardView: View {
             // 最大2回リトライ（CDNレート制限対策）
             for attempt in 1...2 {
                 do {
-                    let data = try await NhentaiClient.fetchCoverImage(galleryId: gallery.id, mediaId: gallery.media_id, ext: cover.ext)
+                    let coverExt = gallery.images?.cover?.ext ?? "jpg"
+                    let coverPath = gallery.thumbnailPath ?? gallery.images?.cover?.path
+                    let data = try await NhentaiClient.fetchCoverImage(galleryId: gallery.id, mediaId: gallery.media_id, ext: coverExt, path: coverPath)
                     if let img = PlatformImage(data: data) {
                         ImageCache.shared.setThumb(img, for: url)
                         coverImage = img
