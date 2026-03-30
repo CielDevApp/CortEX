@@ -161,7 +161,7 @@ struct GalleryDetailView: View {
                             } label: {
                                 HStack(spacing: 10) {
                                     // カバーサムネ
-                                    if let cover = nh.images.cover {
+                                    if let cover = nh.images?.cover {
                                         AsyncImage(url: NhentaiClient.coverURL(mediaId: nh.media_id, ext: cover.ext)) { image in
                                             image.resizable().aspectRatio(contentMode: .fill)
                                         } placeholder: {

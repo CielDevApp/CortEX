@@ -1,16 +1,20 @@
 import SwiftUI
+import Combine
 
 /// nhentaiギャラリー詳細画面（E-HentaiのGalleryDetailViewと同等）
 struct NhentaiDetailView: View {
-    let gallery: NhentaiClient.NhGallery
+    let initialGallery: NhentaiClient.NhGallery
+    @StateObject private var detail = NhDetailLoader()
 
     @ObservedObject private var downloadManager = DownloadManager.shared
     @State private var coverImage: PlatformImage?
     @State private var readerRequest: NhReaderRequest?
     @State private var isFavorited: Bool
 
+    private var gallery: NhentaiClient.NhGallery { detail.gallery ?? initialGallery }
+
     init(gallery: NhentaiClient.NhGallery) {
-        self.gallery = gallery
+        self.initialGallery = gallery
         self._isFavorited = State(initialValue: NhentaiFavoritesCache.shared.contains(id: gallery.id))
     }
 
@@ -43,7 +47,11 @@ struct NhentaiDetailView: View {
         .navigationDestination(for: NhTagSearch.self) { search in
             NhTagSearchResultView(search: search)
         }
-        .task { await loadCover() }
+        .id(initialGallery.id)
+        .task {
+            await loadFullDetail()
+            await loadCover()
+        }
     }
 
     // MARK: - Header
@@ -288,12 +296,18 @@ struct NhentaiDetailView: View {
         }
     }
 
+    // MARK: - Detail Loading
+
+    private func loadFullDetail() async {
+        await detail.load(id: initialGallery.id)
+    }
+
     // MARK: - Cover Loading
 
     private func loadCover() async {
-        guard let cover = gallery.images.cover else { return }
+        guard let cover = gallery.images?.cover else { return }
         if let data = try? await NhentaiClient.fetchCoverImage(
-            galleryId: gallery.id, mediaId: gallery.media_id, ext: cover.ext
+            galleryId: gallery.id, mediaId: gallery.media_id, ext: cover.ext, path: cover.path
         ), let img = PlatformImage(data: data) {
             coverImage = img
         }
@@ -350,10 +364,10 @@ private struct NhThumbCell: View {
         .buttonStyle(.plain)
         .onAppear {
             guard thumbImage == nil, !failed, !isLoading else { return }
-            guard index < gallery.images.pages.count else { failed = true; return }
+            guard let pages = gallery.images?.pages, index < pages.count else { failed = true; return }
             isLoading = true
             let mediaId = gallery.media_id
-            let page = gallery.images.pages[index]
+            let page = pages[index]
             let ext = page.ext
             let pageNum = index + 1
             Task.detached(priority: .utility) {
@@ -450,6 +464,27 @@ struct NhTagSearchResultView: View {
             hasMore = currentPage < result.num_pages
         } catch {
             LogManager.shared.log("nhentai", "tag search next failed: \(error.localizedDescription)")
+        }
+        isLoading = false
+    }
+}
+
+// MARK: - Detail Loader
+
+@MainActor
+class NhDetailLoader: ObservableObject {
+    @Published var gallery: NhentaiClient.NhGallery?
+    @Published var isLoading = false
+
+    func load(id: Int) async {
+        guard gallery == nil || gallery?.num_pages == 0 else { return }
+        isLoading = true
+        do {
+            let full = try await NhentaiClient.fetchGallery(id: id)
+            gallery = full
+            LogManager.shared.log("nhentai", "detail loaded: id=\(full.id) pages=\(full.num_pages) tags=\(full.tags?.count ?? 0)")
+        } catch {
+            LogManager.shared.log("nhentai", "detail load failed: \(error.localizedDescription)")
         }
         isLoading = false
     }
