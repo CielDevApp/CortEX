@@ -119,7 +119,8 @@ enum NhentaiClient {
         let t: String  // j=jpg, p=png, g=gif, w=webp
         let w: Int
         let h: Int
-        let path: String?  // v2: "galleries/XXXX/1.webp"
+        let path: String?      // v2: "galleries/XXXX/1.webp"
+        let thumbPath: String?  // v2: "galleries/XXXX/1t.webp"
 
         var ext: String {
             // v2: pathから拡張子を取得
@@ -138,8 +139,9 @@ enum NhentaiClient {
         // v1 + v2 両対応デコーダー
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
-            // v2: path, width, height
+            // v2: path, width, height, thumbnail
             path = try c.decodeIfPresent(String.self, forKey: .path)
+            thumbPath = try c.decodeIfPresent(String.self, forKey: .thumbnail)
             if let width = try? c.decode(Int.self, forKey: .width) {
                 w = width
                 h = (try? c.decode(Int.self, forKey: .height)) ?? 0
@@ -149,19 +151,22 @@ enum NhentaiClient {
                 else if let p = path, p.hasSuffix(".gif") { t = "g" }
                 else { t = "j" }
             } else {
-                // v1: t, w, h
+                // v1: t, w, h（thumbPathはv2のみ）
                 t = (try? c.decode(String.self, forKey: .t)) ?? "j"
                 w = (try? c.decode(Int.self, forKey: .w)) ?? 0
                 h = (try? c.decode(Int.self, forKey: .h)) ?? 0
+                if thumbPath == nil {
+                    // v1にはthumbnailフィールドがないのでnilのまま
+                }
             }
         }
 
-        init(t: String, w: Int, h: Int, path: String? = nil) {
-            self.t = t; self.w = w; self.h = h; self.path = path
+        init(t: String, w: Int, h: Int, path: String? = nil, thumbPath: String? = nil) {
+            self.t = t; self.w = w; self.h = h; self.path = path; self.thumbPath = thumbPath
         }
 
         private enum CodingKeys: String, CodingKey {
-            case t, w, h, path, width, height
+            case t, w, h, path, width, height, thumbnail, thumbPath
         }
 
         func encode(to encoder: Encoder) throws {
@@ -170,6 +175,7 @@ enum NhentaiClient {
             try c.encode(w, forKey: .w)
             try c.encode(h, forKey: .h)
             try c.encodeIfPresent(path, forKey: .path)
+            try c.encodeIfPresent(thumbPath, forKey: .thumbPath)
         }
     }
 
@@ -510,8 +516,19 @@ enum NhentaiClient {
         throw URLError(.badServerResponse)
     }
 
-    /// サムネ画像取得（拡張子フォールバック付き）
-    static func fetchThumbImage(mediaId: String, page: Int, ext: String) async throws -> Data {
+    /// サムネ画像取得（v2 path対応 + 拡張子フォールバック）
+    static func fetchThumbImage(mediaId: String, page: Int, ext: String, path: String? = nil) async throws -> Data {
+        // v2: thumbPathが指定されていればそれを使う
+        if let path {
+            for cdn in fallbackThumbCDNs {
+                let url = URL(string: "https://\(cdn).nhentai.net/\(path)")!
+                if let result = await fetchLightImage(url: url),
+                   result.status == 200 && !result.data.isEmpty && !isHTMLResponse(result.data) {
+                    return result.data
+                }
+            }
+        }
+
         var exts = [ext]
         for e in ["jpg", "webp", "png"] where e != ext { exts.append(e) }
 

@@ -362,22 +362,33 @@ private struct NhThumbCell: View {
             }
         }
         .buttonStyle(.plain)
-        .onAppear {
-            guard thumbImage == nil, !failed, !isLoading else { return }
-            guard let pages = gallery.images?.pages, index < pages.count else { failed = true; return }
-            isLoading = true
-            let mediaId = gallery.media_id
-            let page = pages[index]
-            let ext = page.ext
-            let pageNum = index + 1
-            Task.detached(priority: .utility) {
-                if let data = try? await NhentaiClient.fetchThumbImage(
-                    mediaId: mediaId, page: pageNum, ext: ext
-                ), let img = PlatformImage(data: data) {
-                    await MainActor.run { thumbImage = img; isLoading = false }
-                } else {
-                    await MainActor.run { failed = true; isLoading = false }
+        .onChange(of: gallery.num_pages) { _, newCount in
+            if thumbImage == nil && !isLoading && newCount > 0 {
+                if let pages = gallery.images?.pages, index < pages.count {
+                    failed = false
+                    loadThumb()
                 }
+            }
+        }
+        .onAppear { loadThumb() }
+    }
+
+    private func loadThumb() {
+        guard thumbImage == nil, !failed, !isLoading else { return }
+        guard let pages = gallery.images?.pages, index < pages.count else { return }
+        isLoading = true
+        let mediaId = gallery.media_id
+        let page = pages[index]
+        let ext = page.ext
+        let pageNum = index + 1
+        let thumbPath = page.thumbPath
+        Task.detached(priority: .utility) {
+            if let data = try? await NhentaiClient.fetchThumbImage(
+                mediaId: mediaId, page: pageNum, ext: ext, path: thumbPath
+            ), let img = PlatformImage(data: data) {
+                await MainActor.run { thumbImage = img; isLoading = false }
+            } else {
+                await MainActor.run { failed = true; isLoading = false }
             }
         }
     }
