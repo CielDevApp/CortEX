@@ -84,6 +84,7 @@ struct GalleryDetailView: View {
     @State private var isSearchingNh = false
     @State private var copiedTitle = false
     @State private var selectedNhGallery: NhentaiClient.NhGallery?
+    @State private var isLoadingNhDetail = false
     @State private var readerRequest: ReaderRequest?
     @State private var thumbnails: [ThumbnailInfo] = []
     @State private var croppedThumbs: [Int: PlatformImage] = [:]
@@ -155,9 +156,25 @@ struct GalleryDetailView: View {
                             .font(.subheadline.bold())
                             .foregroundStyle(.orange)
 
+                        if isLoadingNhDetail {
+                            ProgressView("読み込み中...")
+                                .padding(.vertical, 8)
+                        }
+
                         ForEach(nhSearchResults) { nh in
                             Button {
-                                selectedNhGallery = nh
+                                Task {
+                                    isLoadingNhDetail = true
+                                    do {
+                                        let full = try await NhentaiClient.fetchGallery(id: nh.id)
+                                        selectedNhGallery = full
+                                        LogManager.shared.log("nhentai", "nhSearch tap: id=\(full.id) pages=\(full.num_pages)")
+                                    } catch {
+                                        LogManager.shared.log("nhentai", "nhSearch tap failed: \(error.localizedDescription)")
+                                        selectedNhGallery = nh
+                                    }
+                                    isLoadingNhDetail = false
+                                }
                             } label: {
                                 HStack(spacing: 10) {
                                     // カバーサムネ
