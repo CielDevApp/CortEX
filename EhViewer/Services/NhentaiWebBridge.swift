@@ -313,7 +313,8 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
         return nil
     }
 
-    /// お気に入りトグル：別WebViewでギャラリーページを開き、SPA内のボタンをクリック
+    // MARK: - お気に入りトグル
+
     /// v2 APIのfavoriteエンドポイントは機能フラグで無効化されてるため、
     /// Webサイトのフロントエンド経由でのみ操作可能
     func toggleFavoriteViaPage(galleryId: Int) async throws -> Bool {
@@ -325,6 +326,9 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
 
         let delegate = FavNavigationDelegate()
         favWV.navigationDelegate = delegate
+
+        // .default() websiteDataStoreはアプリ全体で共有されるため、
+        // ログイン済みWebViewのCookieは自動的にfavWVでも利用可能
 
         // ギャラリーページを読み込む
         let pageUrl = URL(string: "https://nhentai.net/g/\(galleryId)/")!
@@ -354,26 +358,19 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
         """
         _ = try? await favWV.callAsyncJavaScript(patchJS, arguments: [:], contentWorld: .page)
 
-        // SPA hydrationをポーリング（ボタン出現まで最大12秒）
+        // SPA hydrationをポーリング（#favoriteボタン出現まで最大12秒）
         var buttonFound = false
         for attempt in 1...24 {
             try await Task.sleep(nanoseconds: 500_000_000)
             let pollJS = """
             const selectors = [
+                '#favorite',
                 'button[class*="favorite"]', 'button[class*="fav"]',
-                '.gallery-favorite', '#favorite', '.btn-fav',
-                'a[class*="favorite"]', 'a[class*="fav"]',
-                'span[class*="favorite"]', 'div[class*="favorite"]',
-                'button:has(i.fa-heart)', 'button:has(svg)',
-                '[role="button"][class*="fav"]'
+                '.gallery-favorite', '.btn-fav',
+                'button:has(i.fa-heart)'
             ];
             for (const sel of selectors) {
                 try { if (document.querySelector(sel)) return true; } catch(e) {}
-            }
-            // テキスト検索
-            for (const el of document.querySelectorAll('button, a, span, div')) {
-                const t = el.textContent?.toLowerCase() || '';
-                if ((t.includes('favorite') || t === '♥' || t === '❤') && el.offsetParent !== null) return true;
             }
             return false;
             """
@@ -409,12 +406,10 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
         // favoriteボタンを探してクリック
         let clickJS = """
         const selectors = [
+            '#favorite',
             'button[class*="favorite"]', 'button[class*="fav"]',
-            '.gallery-favorite', '#favorite', '.btn-fav',
-            'a[class*="favorite"]', 'a[class*="fav"]',
-            'span[class*="favorite"]', 'div[class*="favorite"]',
-            'button:has(i.fa-heart)', 'button:has(svg)',
-            '[role="button"][class*="fav"]'
+            '.gallery-favorite', '.btn-fav',
+            'button:has(i.fa-heart)'
         ];
 
         let btn = null;
