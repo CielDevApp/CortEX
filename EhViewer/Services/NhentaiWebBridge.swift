@@ -323,57 +323,143 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
         let favWV = WKWebView(frame: CGRect(x: 0, y: 0, width: 375, height: 812), configuration: config)
         favWV.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
 
+        let delegate = FavNavigationDelegate()
+        favWV.navigationDelegate = delegate
+
         // ギャラリーページを読み込む
         let pageUrl = URL(string: "https://nhentai.net/g/\(galleryId)/")!
         LogManager.shared.log("nhBridge", "toggleFav: loading /g/\(galleryId)/")
         favWV.load(URLRequest(url: pageUrl))
 
-        // SPA完全初期化を待つ（didFinish + 追加待機）
-        try await Task.sleep(nanoseconds: 6_000_000_000)
+        // ナビゲーション完了を待つ（最大15秒）
+        await delegate.waitForLoad(timeout: 15)
+        LogManager.shared.log("nhBridge", "toggleFav: page loaded, waiting for SPA hydration...")
+
+        // fetch()をモンキーパッチしてボタンクリック時のAPIリクエストを捕捉
+        let patchJS = """
+        window.__favCapture = [];
+        const _origFetch = window.fetch;
+        window.fetch = function(...args) {
+            const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
+            const method = args[1]?.method || 'GET';
+            window.__favCapture.push({url, method, ts: Date.now()});
+            return _origFetch.apply(this, args);
+        };
+        const _origXHR = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+            window.__favCapture.push({url: String(url), method, ts: Date.now(), type: 'xhr'});
+            return _origXHR.call(this, method, url, ...rest);
+        };
+        'patched';
+        """
+        _ = try? await favWV.callAsyncJavaScript(patchJS, arguments: [:], contentWorld: .page)
+
+        // SPA hydrationをポーリング（ボタン出現まで最大12秒）
+        var buttonFound = false
+        for attempt in 1...24 {
+            try await Task.sleep(nanoseconds: 500_000_000)
+            let pollJS = """
+            const selectors = [
+                'button[class*="favorite"]', 'button[class*="fav"]',
+                '.gallery-favorite', '#favorite', '.btn-fav',
+                'a[class*="favorite"]', 'a[class*="fav"]',
+                'span[class*="favorite"]', 'div[class*="favorite"]',
+                'button:has(i.fa-heart)', 'button:has(svg)',
+                '[role="button"][class*="fav"]'
+            ];
+            for (const sel of selectors) {
+                try { if (document.querySelector(sel)) return true; } catch(e) {}
+            }
+            // テキスト検索
+            for (const el of document.querySelectorAll('button, a, span, div')) {
+                const t = el.textContent?.toLowerCase() || '';
+                if ((t.includes('favorite') || t === '♥' || t === '❤') && el.offsetParent !== null) return true;
+            }
+            return false;
+            """
+            let found = (try? await favWV.callAsyncJavaScript(pollJS, arguments: [:], contentWorld: .page)) as? Bool ?? false
+            if found {
+                buttonFound = true
+                LogManager.shared.log("nhBridge", "toggleFav: button found after \(attempt * 500)ms")
+                break
+            }
+        }
+
+        if !buttonFound {
+            // デバッグ: DOM状態をダンプ
+            let debugJS = """
+            const els = Array.from(document.querySelectorAll('button, a[href], [role="button"], [onclick]'));
+            const info = els.slice(0, 20).map(e => ({
+                tag: e.tagName, cls: e.className?.substring?.(0, 60) || '',
+                text: e.textContent?.trim()?.substring(0, 40) || '',
+                href: e.href?.substring?.(0, 60) || ''
+            }));
+            return JSON.stringify({
+                url: location.href, title: document.title,
+                bodyLen: document.body?.innerHTML?.length || 0,
+                elements: info
+            });
+            """
+            let debugResult = try? await favWV.callAsyncJavaScript(debugJS, arguments: [:], contentWorld: .page)
+            LogManager.shared.log("nhBridge", "toggleFav: no button found, DOM dump=\(String(describing: debugResult))")
+            favWV.stopLoading()
+            return false
+        }
 
         // favoriteボタンを探してクリック
-        let js = """
-        // nhentaiのfavoriteボタンを探す（複数のセレクタを試行）
+        let clickJS = """
         const selectors = [
-            'button[class*="favorite"]',
-            'button[class*="fav"]',
-            '.gallery-favorite',
-            '#favorite',
-            'a[href*="favorite"]',
-            'button:has(svg)',
-            'button:has(i[class*="heart"])',
-            'button:has(i[class*="fav"])'
+            'button[class*="favorite"]', 'button[class*="fav"]',
+            '.gallery-favorite', '#favorite', '.btn-fav',
+            'a[class*="favorite"]', 'a[class*="fav"]',
+            'span[class*="favorite"]', 'div[class*="favorite"]',
+            'button:has(i.fa-heart)', 'button:has(svg)',
+            '[role="button"][class*="fav"]'
         ];
 
         let btn = null;
+        let matchedSel = '';
         for (const sel of selectors) {
             try { btn = document.querySelector(sel); } catch(e) {}
-            if (btn) break;
+            if (btn) { matchedSel = sel; break; }
         }
 
-        // ボタンが見つからなければテキストで検索
+        // テキスト検索フォールバック
         if (!btn) {
-            const buttons = document.querySelectorAll('button');
-            for (const b of buttons) {
-                const text = b.textContent.toLowerCase();
-                if (text.includes('favorite') || text.includes('fav')) {
-                    btn = b;
+            for (const el of document.querySelectorAll('button, a, span, div')) {
+                const t = el.textContent?.toLowerCase() || '';
+                if ((t.includes('favorite') || t === '♥' || t === '❤') && el.offsetParent !== null) {
+                    btn = el;
+                    matchedSel = 'text:' + t.substring(0, 20);
                     break;
                 }
             }
         }
 
         if (btn) {
+            // クリック前のキャプチャ状態をリセット
+            window.__favCapture = [];
             btn.click();
-            return JSON.stringify({success: true, method: 'click', buttonText: btn.textContent.trim().substring(0, 50)});
+
+            // クリック後に少し待ってからキャプチャを収集
+            await new Promise(r => setTimeout(r, 2000));
+            const captured = window.__favCapture || [];
+
+            return JSON.stringify({
+                success: true,
+                method: 'click',
+                selector: matchedSel,
+                buttonTag: btn.tagName,
+                buttonClass: (btn.className || '').substring(0, 80),
+                buttonText: btn.textContent?.trim()?.substring(0, 50) || '',
+                capturedRequests: captured.slice(0, 5)
+            });
         }
 
-        // デバッグ: ページの状態を返す
-        const allButtons = Array.from(document.querySelectorAll('button')).map(b => b.className + ':' + b.textContent.trim().substring(0, 30));
-        return JSON.stringify({success: false, method: 'none', url: location.href, title: document.title, buttons: allButtons.slice(0, 10)});
+        return JSON.stringify({success: false, method: 'none'});
         """
 
-        let result = try? await favWV.callAsyncJavaScript(js, arguments: [:], contentWorld: .page)
+        let result = try? await favWV.callAsyncJavaScript(clickJS, arguments: [:], contentWorld: .page)
 
         // WebView破棄
         favWV.stopLoading()
@@ -387,10 +473,16 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
 
         let success = json["success"] as? Bool ?? false
         let method = json["method"] as? String ?? ""
-        LogManager.shared.log("nhBridge", "toggleFav: success=\(success) method=\(method) detail=\(json)")
+        let captured = json["capturedRequests"] as? [[String: Any]] ?? []
+        LogManager.shared.log("nhBridge", "toggleFav: success=\(success) method=\(method) selector=\(json["selector"] ?? "") btn=\(json["buttonClass"] ?? "") text=\(json["buttonText"] ?? "")")
+        if !captured.isEmpty {
+            LogManager.shared.log("nhBridge", "toggleFav: captured API calls=\(captured)")
+        }
 
         return success
     }
+
+    // MARK: - HTMLページ取得
 
     /// HTMLページ取得（ステータスコードも返す）
     func fetchHTML(url: String) async throws -> (html: String, status: Int) {
@@ -427,6 +519,67 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
         }
 
         return (html: body, status: status)
+    }
+}
+
+/// toggleFavoriteViaPage用のナビゲーションデリゲート
+@MainActor
+private final class FavNavigationDelegate: NSObject, WKNavigationDelegate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var loaded = false
+
+    func waitForLoad(timeout: TimeInterval) async {
+        if loaded { return }
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            self.continuation = cont
+            // タイムアウト
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                if let c = self.continuation {
+                    self.continuation = nil
+                    self.loaded = true
+                    LogManager.shared.log("nhBridge", "FavNav: timeout after \(timeout)s")
+                    c.resume()
+                }
+            }
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard let cont = continuation else { return }
+        // Cloudflareチャレンジかチェック
+        webView.evaluateJavaScript("document.title") { [weak self] result, _ in
+            guard let self else { return }
+            let title = (result as? String) ?? ""
+            let isChallenge = title.lowercased().contains("just a moment")
+                || title.lowercased().contains("cloudflare")
+            if isChallenge {
+                LogManager.shared.log("nhBridge", "FavNav: Cloudflare challenge, waiting...")
+                return // タイムアウトまで待つか次のdidFinishを待つ
+            }
+            LogManager.shared.log("nhBridge", "FavNav: loaded title=\(title.prefix(50))")
+            self.loaded = true
+            self.continuation = nil
+            cont.resume()
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        LogManager.shared.log("nhBridge", "FavNav: failed \(error.localizedDescription)")
+        if let cont = continuation {
+            continuation = nil
+            loaded = true
+            cont.resume()
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        LogManager.shared.log("nhBridge", "FavNav: provisional failed \(error.localizedDescription)")
+        if let cont = continuation {
+            continuation = nil
+            loaded = true
+            cont.resume()
+        }
     }
 }
 #endif
