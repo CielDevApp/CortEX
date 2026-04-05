@@ -567,15 +567,19 @@ enum NhentaiClient {
         LogManager.shared.log("nhFav", "fetching page \(page)...")
         let urlStr = "https://nhentai.net/api/v2/favorites?page=\(page)"
 
-        do {
-            let data = try await NhentaiWebBridge.shared.fetch(url: urlStr)
-            let decoded = try JSONDecoder().decode(NhSearchResult.self, from: data)
-            let hasNext = page < decoded.num_pages
-            LogManager.shared.log("nhFav", "page \(page): \(decoded.result.count) items, hasNext=\(hasNext)")
-            return (decoded.result, hasNext)
-        } catch {
-            LogManager.shared.log("nhFav", "v2 API failed: \(error.localizedDescription), falling back to HTML")
+        // Cookie-only認証を先に試す（Bearer認証は401を返す場合がある）
+        for cookieOnly in [true, false] {
+            do {
+                let data = try await NhentaiWebBridge.shared.fetch(url: urlStr, cookieOnly: cookieOnly)
+                let decoded = try JSONDecoder().decode(NhSearchResult.self, from: data)
+                let hasNext = page < decoded.num_pages
+                LogManager.shared.log("nhFav", "page \(page): \(decoded.result.count) items, hasNext=\(hasNext) cookieOnly=\(cookieOnly)")
+                return (decoded.result, hasNext)
+            } catch {
+                LogManager.shared.log("nhFav", "v2 API failed (cookieOnly=\(cookieOnly)): \(error.localizedDescription)")
+            }
         }
+        LogManager.shared.log("nhFav", "v2 API all attempts failed, falling back to HTML")
 
         // フォールバック: HTML解析
         let htmlUrlStr = "https://nhentai.net/favorites/?page=\(page)"
