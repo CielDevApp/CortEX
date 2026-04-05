@@ -232,27 +232,28 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
         return data
     }
 
-    /// お気に入りトグル：メインWebBridgeのWebViewからdocument.cookieのaccess_tokenを使ってv2 API POST
+    /// お気に入りトグル：access_tokenを使ってv2 API POST
     func toggleFavoriteViaPage(galleryId: Int) async throws -> Bool {
         if !isReady { await initialize() }
         guard let wv = webView else { throw URLError(.cannotConnectToHost) }
 
-        // document.cookieからaccess_tokenを取得してv2 APIにPOST
+        // WKHTTPCookieStoreから直接access_tokenを取得（HttpOnly対策）
+        let wvStore = wv.configuration.websiteDataStore.httpCookieStore
+        let allCookies = await wvStore.allCookies()
+        let accessTokenCookies = allCookies
+            .filter { $0.name == "access_token" && $0.domain.contains("nhentai") }
+            .sorted { ($0.expiresDate ?? .distantPast) > ($1.expiresDate ?? .distantPast) }
+        let swiftToken = accessTokenCookies.first?.value ?? ""
+
+        LogManager.shared.log("nhBridge", "toggleFav: swift token=\(swiftToken.prefix(20))... (\(accessTokenCookies.count) cookies)")
+
+        if swiftToken.isEmpty {
+            LogManager.shared.log("nhBridge", "toggleFav: no access_token in cookie store")
+            return false
+        }
+
+        // JSでfetchを実行（トークンはSwift側から渡す）
         let js = """
-        // document.cookieからaccess_tokenを取得
-        const cookies = document.cookie.split('; ');
-        let token = '';
-        for (const c of cookies) {
-            if (c.startsWith('access_token=')) {
-                token = c.substring('access_token='.length);
-                break;
-            }
-        }
-
-        if (!token) {
-            return JSON.stringify({success: false, error: 'no_token', cookies: document.cookie.substring(0, 200)});
-        }
-
         try {
             const resp = await fetch('https://nhentai.net/api/v2/galleries/' + galleryId + '/favorite', {
                 method: 'POST',
@@ -263,7 +264,7 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
                 credentials: 'include'
             });
             const text = await resp.text();
-            return JSON.stringify({success: resp.ok, status: resp.status, body: text, token_prefix: token.substring(0, 20)});
+            return JSON.stringify({success: resp.ok, status: resp.status, body: text});
         } catch(e) {
             return JSON.stringify({success: false, error: e.message});
         }
@@ -271,7 +272,7 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
 
         let result = try await wv.callAsyncJavaScript(
             js,
-            arguments: ["galleryId": galleryId],
+            arguments: ["galleryId": galleryId, "token": swiftToken],
             contentWorld: .page
         )
 
