@@ -1,4 +1,4 @@
-# Cort:EX ver.02a
+# Cort:EX ver.02a f1
 
 **E-Hentai / EXhentai / nhentai 統合ビューア for iOS / iPadOS**
 
@@ -110,7 +110,7 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 
 ## 更新履歴
 
-### ver.02a (2026-04-05)
+### ver.02a f1 (2026-04-05)
 - **nhentai API v2移行** — v1からv2 APIへ全面移行、WKWebView経由のCloudflare TLSフィンガープリント突破
 - **nhentaiお気に入りトグル** — SPA内 `#favorite` ボタンクリックによるサーバー側追加/削除（SvelteKit hydrationポーリング対応）
 - **お気に入り同期最適化** — キャッシュ済みギャラリーをスキップしてAPIコール大幅削減、429リトライ+指数バックオフ
