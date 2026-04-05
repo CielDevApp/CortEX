@@ -94,15 +94,17 @@ struct NhentaiDetailView: View {
                 // お気に入りボタン
                 if NhentaiCookieManager.isLoggedIn() {
                     Button {
-                        Task {
-                            if let result = try? await NhentaiClient.toggleFavorite(galleryId: gallery.id) {
-                                isFavorited = result
-                                if result {
-                                    NhentaiFavoritesCache.shared.addToCache(gallery)
-                                } else {
-                                    NhentaiFavoritesCache.shared.removeFromCache(id: gallery.id)
-                                }
-                            }
+                        // まずローカルで即座にトグル（UIレスポンス優先）
+                        isFavorited.toggle()
+                        if isFavorited {
+                            NhentaiFavoritesCache.shared.addToCache(gallery)
+                        } else {
+                            NhentaiFavoritesCache.shared.removeFromCache(id: gallery.id)
+                        }
+                        // サーバー同期はバックグラウンドで（失敗しても握り潰す）
+                        let gid = gallery.id
+                        Task.detached {
+                            _ = try? await NhentaiClient.toggleFavorite(galleryId: gid)
                         }
                     } label: {
                         Label(
