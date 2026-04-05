@@ -17,6 +17,15 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
         super.init()
     }
 
+    /// ログイン後などにWebViewを再初期化（Cookieを最新化）
+    func reset() {
+        webView?.stopLoading()
+        webView = nil
+        isReady = false
+        isInitializing = false
+        LogManager.shared.log("nhBridge", "reset")
+    }
+
     // MARK: - Setup
 
     private func ensureWebView() {
@@ -37,6 +46,25 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
 
         ensureWebView()
         guard let wv = webView else { return }
+
+        // NhentaiCookieManagerからCookieをWKWebViewに注入
+        if let cookieString = NhentaiCookieManager.cookieHeader() {
+            let store = wv.configuration.websiteDataStore.httpCookieStore
+            for part in cookieString.components(separatedBy: "; ") {
+                let kv = part.split(separator: "=", maxSplits: 1)
+                guard kv.count == 2 else { continue }
+                let name = String(kv[0])
+                let value = String(kv[1])
+                if let cookie = HTTPCookie(properties: [
+                    .name: name, .value: value,
+                    .domain: ".nhentai.net", .path: "/",
+                    .secure: "TRUE"
+                ]) {
+                    await store.setCookie(cookie)
+                }
+            }
+            LogManager.shared.log("nhBridge", "injected cookies from NhentaiCookieManager")
+        }
 
         LogManager.shared.log("nhBridge", "initializing: loading nhentai.net...")
 
@@ -99,15 +127,18 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
         if !isReady { await initialize() }
         guard let wv = webView else { throw URLError(.cannotConnectToHost) }
 
+        let token = NhentaiCookieManager.loadToken() ?? ""
         let js = """
-        const response = await fetch(targetUrl);
+        const headers = {};
+        if (authToken) headers['Authorization'] = 'Bearer ' + authToken;
+        const response = await fetch(targetUrl, {credentials: 'include', headers: headers});
         const text = await response.text();
         return JSON.stringify({status: response.status, body: text});
         """
 
         let result = try await wv.callAsyncJavaScript(
             js,
-            arguments: ["targetUrl": url],
+            arguments: ["targetUrl": url, "authToken": token],
             contentWorld: .page
         )
 
@@ -174,15 +205,18 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
         if !isReady { await initialize() }
         guard let wv = webView else { throw URLError(.cannotConnectToHost) }
 
+        let token = NhentaiCookieManager.loadToken() ?? ""
         let js = """
-        const response = await fetch(targetUrl);
+        const headers = {};
+        if (authToken) headers['Authorization'] = 'Bearer ' + authToken;
+        const response = await fetch(targetUrl, {credentials: 'include', headers: headers});
         const text = await response.text();
         return JSON.stringify({status: response.status, body: text});
         """
 
         let result = try await wv.callAsyncJavaScript(
             js,
-            arguments: ["targetUrl": url],
+            arguments: ["targetUrl": url, "authToken": token],
             contentWorld: .page
         )
 

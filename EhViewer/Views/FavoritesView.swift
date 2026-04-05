@@ -346,7 +346,7 @@ struct FavoritesView: View {
         }
     }
 
-    /// nhentaiお気に入りをサーバーと同期（WKWebView経由）
+    /// nhentaiお気に入りをサーバーと同期（WKWebView HTML解析）
     private func syncNhFavorites() async {
         LogManager.shared.log("nhFav", "=== syncNhFavorites START ===")
         LogManager.shared.log("nhFav", "isLoggedIn=\(NhentaiCookieManager.isLoggedIn()) hasCf=\(NhentaiCookieManager.hasCfClearance())")
@@ -354,20 +354,15 @@ struct FavoritesView: View {
         nhErrorMessage = nil
         do {
             #if canImport(UIKit)
-            // WKWebViewでJavaScript描画後のお気に入りページからID抽出
-            LogManager.shared.log("nhFav", "creating NhentaiFavoritesFetcher...")
             let fetcher = NhentaiFavoritesFetcher()
-            LogManager.shared.log("nhFav", "calling fetchAllFavoriteIds...")
             let ids = try await fetcher.fetchAllFavoriteIds()
-            LogManager.shared.log("nhFav", "WKWebView returned \(ids.count) IDs: \(ids.prefix(10))")
+            LogManager.shared.log("nhFav", "WKWebView returned \(ids.count) IDs")
 
-            // 各IDのギャラリー情報をAPI取得
             var galleries: [NhentaiClient.NhGallery] = []
             for (i, id) in ids.enumerated() {
                 if let g = try? await NhentaiClient.fetchGallery(id: id) {
                     galleries.append(g)
                 }
-                // 5件ごとにUI更新
                 if (i + 1) % 5 == 0 || i == ids.count - 1 {
                     nhFavorites = galleries
                     nhFavCache.save(galleries)
