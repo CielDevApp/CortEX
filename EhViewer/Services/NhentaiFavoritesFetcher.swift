@@ -25,7 +25,15 @@ class NhentaiFavoritesFetcher: NSObject, WKNavigationDelegate {
 
             let url = URL(string: "https://nhentai.net/favorites/?page=\(page)")!
             LogManager.shared.log("nhFav", "[3] loading URL: \(url)")
-            wv.load(URLRequest(url: url))
+
+            // WKWebsiteDataStore.default()のCookieを確認
+            let store = wv.configuration.websiteDataStore.httpCookieStore
+            store.getAllCookies { cookies in
+                let nhCookies = cookies.filter { $0.domain.contains("nhentai") }
+                let names = nhCookies.map { "\($0.name)=\($0.value.prefix(10))..." }.joined(separator: "; ")
+                LogManager.shared.log("nhFav", "[3.5] WKWebView cookies: \(nhCookies.count) (\(names))")
+                wv.load(URLRequest(url: url))
+            }
 
             // タイムアウト: 30秒
             DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in

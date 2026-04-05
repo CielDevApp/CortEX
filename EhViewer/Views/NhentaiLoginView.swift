@@ -92,6 +92,9 @@ struct NhentaiLoginView: View {
             .onChange(of: loginDetected) { _, detected in
                 if detected {
                     LogManager.shared.log("nhAuth", "login detected via WebView")
+                    Task { @MainActor in
+                        NhentaiWebBridge.shared.reset()
+                    }
                 }
             }
         }
@@ -317,6 +320,10 @@ struct NhentaiWebView: UIViewRepresentable {
                     if hasCf {
                         self.parent.cdnPhase = .done
                         LogManager.shared.log("nhAuth", "CDN verification completed with cf_clearance")
+                        // WebBridgeをリセットして最新Cookie（cf_clearance+sessionid）で再初期化
+                        Task { @MainActor in
+                            NhentaiWebBridge.shared.reset()
+                        }
                     } else {
                         self.parent.cdnPhase = .failed
                         LogManager.shared.log("nhAuth", "CDN verification completed but no cf_clearance found")
@@ -376,6 +383,10 @@ struct NhentaiWebView: UIViewRepresentable {
                 let hasSession = nhCookies.contains { $0.name == "sessionid" || $0.name == "token" }
                 if hasSession || nhCookies.count >= 2 {
                     NhentaiCookieManager.saveCookies(cookieString)
+
+                    // v2 APIトークンをlocalStorage/sessionStorageから抽出
+                    self.extractAuthToken(from: webView)
+
                     DispatchQueue.main.async {
                         self.parent.loginDetected = true
 
@@ -386,6 +397,49 @@ struct NhentaiWebView: UIViewRepresentable {
                             }
                         }
                     }
+                }
+            }
+        }
+        // MARK: - Auth Token Extraction
+
+        private func extractAuthToken(from webView: WKWebView) {
+            // nhentaiのSPAがlocalStorageにトークンを保存してる可能性を調査
+            let js = """
+            (function() {
+                var result = {};
+                // localStorage
+                for (var i = 0; i < localStorage.length; i++) {
+                    var key = localStorage.key(i);
+                    if (key.toLowerCase().includes('token') || key.toLowerCase().includes('auth') || key.toLowerCase().includes('user')) {
+                        result['ls_' + key] = localStorage.getItem(key);
+                    }
+                }
+                // sessionStorage
+                for (var i = 0; i < sessionStorage.length; i++) {
+                    var key = sessionStorage.key(i);
+                    if (key.toLowerCase().includes('token') || key.toLowerCase().includes('auth') || key.toLowerCase().includes('user')) {
+                        result['ss_' + key] = sessionStorage.getItem(key);
+                    }
+                }
+                return JSON.stringify(result);
+            })()
+            """
+            webView.evaluateJavaScript(js) { result, error in
+                if let jsonStr = result as? String, !jsonStr.isEmpty, jsonStr != "{}" {
+                    LogManager.shared.log("nhAuth", "token storage: \(jsonStr.prefix(500))")
+                    // トークンが見つかったら保存
+                    if let data = jsonStr.data(using: .utf8),
+                       let dict = try? JSONSerialization.jsonObject(with: data) as? [String: String] {
+                        for (key, value) in dict {
+                            if key.contains("token") && !value.isEmpty {
+                                NhentaiCookieManager.saveToken(value)
+                                LogManager.shared.log("nhAuth", "saved auth token from \(key)")
+                                break
+                            }
+                        }
+                    }
+                } else {
+                    LogManager.shared.log("nhAuth", "no token found in storage")
                 }
             }
         }
