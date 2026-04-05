@@ -137,49 +137,67 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
 
     // MARK: - API
 
-    /// GETリクエスト（JSON API用）
-    func fetch(url: String) async throws -> Data {
+    /// GETリクエスト（JSON API用、429リトライ付き）
+    func fetch(url: String, cookieOnly: Bool = false) async throws -> Data {
         if !isReady { await initialize() }
         guard let wv = webView else { throw URLError(.cannotConnectToHost) }
 
-        let js = """
-        const headers = {};
-        const cookies = document.cookie.split('; ');
-        for (const c of cookies) {
-            const [name, ...val] = c.split('=');
-            if (name === 'access_token') {
-                headers['Authorization'] = 'Bearer ' + val.join('=');
-                break;
+        // 最大3回リトライ（429時はバックオフ）
+        for attempt in 0..<3 {
+            let js: String
+            if cookieOnly {
+                js = """
+                const response = await fetch(targetUrl, {credentials: 'include'});
+                const text = await response.text();
+                return JSON.stringify({status: response.status, body: text});
+                """
+            } else {
+                js = """
+                const headers = {};
+                const cookies = document.cookie.split('; ');
+                for (const c of cookies) {
+                    const [name, ...val] = c.split('=');
+                    if (name === 'access_token') {
+                        headers['Authorization'] = 'Bearer ' + val.join('=');
+                        break;
+                    }
+                }
+                const response = await fetch(targetUrl, {credentials: 'include', headers: headers});
+                const text = await response.text();
+                return JSON.stringify({status: response.status, body: text});
+                """
+            }
+
+            let result = try await wv.callAsyncJavaScript(
+                js,
+                arguments: ["targetUrl": url],
+                contentWorld: .page
+            )
+
+            guard let jsonStr = result as? String,
+                  let jsonData = jsonStr.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                  let status = json["status"] as? Int,
+                  let body = json["body"] as? String else {
+                LogManager.shared.log("nhBridge", "unexpected response: \(String(describing: result))")
+                throw URLError(.badServerResponse)
+            }
+
+            LogManager.shared.log("nhBridge", "GET \(url.suffix(80)): status=\(status) size=\(body.count)")
+
+            if status == 200, let data = body.data(using: .utf8) {
+                return data
+            } else if status == 429 && attempt < 2 {
+                let wait = UInt64((attempt + 1) * 3) * 1_000_000_000
+                LogManager.shared.log("nhBridge", "429 rate limited, waiting \((attempt + 1) * 3)s...")
+                try? await Task.sleep(nanoseconds: wait)
+                continue
+            } else {
+                LogManager.shared.log("nhBridge", "non-200: \(body.prefix(200))")
+                throw URLError(.init(rawValue: status))
             }
         }
-        const response = await fetch(targetUrl, {credentials: 'include', headers: headers});
-        const text = await response.text();
-        return JSON.stringify({status: response.status, body: text});
-        """
-
-        let result = try await wv.callAsyncJavaScript(
-            js,
-            arguments: ["targetUrl": url],
-            contentWorld: .page
-        )
-
-        guard let jsonStr = result as? String,
-              let jsonData = jsonStr.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-              let status = json["status"] as? Int,
-              let body = json["body"] as? String else {
-            LogManager.shared.log("nhBridge", "unexpected response: \(String(describing: result))")
-            throw URLError(.badServerResponse)
-        }
-
-        LogManager.shared.log("nhBridge", "GET \(url.suffix(80)): status=\(status) size=\(body.count)")
-
-        if status == 200, let data = body.data(using: .utf8) {
-            return data
-        } else {
-            LogManager.shared.log("nhBridge", "non-200: \(body.prefix(200))")
-            throw URLError(.init(rawValue: status))
-        }
+        throw URLError(.badServerResponse)
     }
 
     /// POSTリクエスト（お気に入りトグル等）
