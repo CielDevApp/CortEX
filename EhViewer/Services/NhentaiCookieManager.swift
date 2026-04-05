@@ -92,4 +92,19 @@ enum NhentaiCookieManager: Sendable {
     static func hasCfClearance() -> Bool {
         loadCookies()?.contains("cf_clearance") ?? false
     }
+
+    // MARK: - v2 API Token
+
+    static func saveToken(_ token: String) {
+        save(key: "nh_api_token", value: token)
+        LogManager.shared.log("nhAuth", "API token saved (\(token.prefix(20))...)")
+    }
+
+    static func loadToken() -> String? {
+        load(key: "nh_api_token")
+    }
+
+    static func hasToken() -> Bool {
+        loadToken() != nil
+    }
 }
