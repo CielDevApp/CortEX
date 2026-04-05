@@ -1,4 +1,4 @@
-# Cort:EX ver.02a
+# Cort:EX ver.02a f1
 
 **E-Hentai / EXhentai / nhentai 统一浏览器 for iOS / iPadOS**
 
@@ -110,7 +110,7 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 
 ## 更新日志
 
-### ver.02a (2026-04-05)
+### ver.02a f1 (2026-04-05)
 - **nhentai API v2迁移** — 从v1全面迁移至v2 API，通过WKWebView绕过Cloudflare TLS指纹检测
 - **nhentai收藏切换** — 通过SPA `#favorite` 按钮点击实现服务端添加/移除（SvelteKit hydration轮询）
 - **收藏同步优化** — 跳过已缓存画廊大幅减少API调用，429重试+指数退避
