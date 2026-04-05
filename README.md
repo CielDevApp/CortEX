@@ -112,6 +112,28 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 - 76 Swift files / ~20,000 lines
 - Metal / CoreML / Vision / WebKit / ActivityKit / TipKit
 
+## Changelog
+
+### ver.02a (2026-04-05)
+- **nhentai API v2 Migration** — Full migration from v1 to v2 API with Cloudflare TLS fingerprint bypass via WKWebView
+- **nhentai Favorites Toggle** — Server-side add/remove via SPA `#favorite` button click with SvelteKit hydration polling
+- **Favorites Sync Optimization** — Cache-aware sync skips already-fetched galleries; 429 retry with exponential backoff
+- **v2 Auth Support** — `isLoggedIn()` now recognizes `access_token` (v2) in addition to legacy `sessionid`
+- **Thumbnail / Cover v2** — `thumbnailPath` and cover `path` from v2 API, CDN fallback across i/i1/i2/i3
+- **Deleted Gallery Recovery** — Fetches full detail via `fetchGallery` before opening reader
+- **nhentai Detail View** — Tag-tap search, thumbnail grid, download, filter pipeline
+- **Lock Screen Wallpaper** — Favorites covers as blurred lock screen background
+- **Tab Bar Auto-Hide** — Hides on scroll for more content space
+
+### ver.02a (Initial Release)
+- E-Hentai / EXhentai / nhentai unified viewer
+- 4-mode reader with iPad spread view
+- 3-engine image processing (CIFilter / Metal / CoreML Real-ESRGAN)
+- Bidirectional download with Live Activity
+- Face ID / Touch ID / PIN security
+- PHOENIX MODE backup, ECO / EXTREME performance modes
+- Vision OCR translation, TipKit hints, 8-language localization
+
 ## License
 This project is licensed under the GPL-3.0 License - see the [LICENSE](LICENSE) file for details.
 
