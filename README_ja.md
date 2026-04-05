@@ -108,6 +108,28 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 - 76 Swiftファイル / 約20,000行
 - Metal / CoreML / Vision / WebKit / ActivityKit / TipKit
 
+## 更新履歴
+
+### ver.02a (2026-04-05)
+- **nhentai API v2移行** — v1からv2 APIへ全面移行、WKWebView経由のCloudflare TLSフィンガープリント突破
+- **nhentaiお気に入りトグル** — SPA内 `#favorite` ボタンクリックによるサーバー側追加/削除（SvelteKit hydrationポーリング対応）
+- **お気に入り同期最適化** — キャッシュ済みギャラリーをスキップしてAPIコール大幅削減、429リトライ+指数バックオフ
+- **v2認証対応** — `isLoggedIn()` が `access_token`（v2）も認識するよう拡張
+- **サムネ / カバー v2対応** — v2 APIの `thumbnailPath` / `path` 使用、CDNフォールバック（i/i1/i2/i3）
+- **削除作品復活** — リーダー表示前に `fetchGallery` で詳細取得
+- **nhentai詳細画面** — タグタップ検索、サムネグリッド、ダウンロード、フィルタパイプライン
+- **ロック画面壁紙** — お気に入りカバー画像をブラー付きロック画面背景に自動反映
+- **タブバー自動非表示** — 下スクロールでタブバーが隠れ、表示領域拡大
+
+### ver.02a（初回リリース）
+- E-Hentai / EXhentai / nhentai 統合ビューア
+- 4モードリーダー（iPad見開き対応）
+- 3基画像処理エンジン（CIFilter / Metal / CoreML Real-ESRGAN）
+- 双方向ダウンロード + Live Activity
+- Face ID / Touch ID / PINセキュリティ
+- PHOENIX MODE バックアップ、ECO / EXTREME パフォーマンスモード
+- Vision OCR翻訳、TipKitヒント、8言語ローカライズ
+
 ## ライセンス
 GPL-3.0 ライセンス — 詳細は[LICENSE](LICENSE)ファイルを参照。
 

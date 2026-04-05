@@ -108,6 +108,28 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 - 76个Swift文件 / 约20,000行代码
 - Metal / CoreML / Vision / WebKit / ActivityKit / TipKit
 
+## 更新日志
+
+### ver.02a (2026-04-05)
+- **nhentai API v2迁移** — 从v1全面迁移至v2 API，通过WKWebView绕过Cloudflare TLS指纹检测
+- **nhentai收藏切换** — 通过SPA `#favorite` 按钮点击实现服务端添加/移除（SvelteKit hydration轮询）
+- **收藏同步优化** — 跳过已缓存画廊大幅减少API调用，429重试+指数退避
+- **v2认证支持** — `isLoggedIn()` 现在也识别 `access_token`（v2），不再仅依赖旧版 `sessionid`
+- **缩略图 / 封面 v2** — 使用v2 API的 `thumbnailPath` 和 `path`，CDN回退（i/i1/i2/i3）
+- **已删除作品恢复** — 打开阅读器前通过 `fetchGallery` 获取完整详情
+- **nhentai详情页** — 标签点击搜索、缩略图网格、下载、滤镜管线
+- **锁屏壁纸** — 收藏封面自动显示为模糊锁屏背景
+- **标签栏自动隐藏** — 向下滚动时隐藏标签栏，增加显示空间
+
+### ver.02a（首次发布）
+- E-Hentai / EXhentai / nhentai 统一浏览器
+- 4模式阅读器（支持iPad双页展开）
+- 3引擎图像处理（CIFilter / Metal / CoreML Real-ESRGAN）
+- 双向下载 + Live Activity
+- Face ID / Touch ID / PIN安全
+- PHOENIX MODE备份、ECO / EXTREME性能模式
+- Vision OCR翻译、TipKit提示、8语言本地化
+
 ## 许可证
 本项目采用 GPL-3.0 许可证 - 详见 [LICENSE](LICENSE) 文件。
 
