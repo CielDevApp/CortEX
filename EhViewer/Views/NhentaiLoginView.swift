@@ -379,8 +379,14 @@ struct NhentaiWebView: UIViewRepresentable {
                     LogManager.shared.log("nhAuth", "cf_clearance captured from login page")
                 }
 
+                // access_token抽出
+                if let accessToken = nhCookies.first(where: { $0.name == "access_token" }) {
+                    NhentaiCookieManager.saveToken(accessToken.value)
+                    LogManager.shared.log("nhAuth", "access_token captured from login cookies")
+                }
+
                 // ログイン検出
-                let hasSession = nhCookies.contains { $0.name == "sessionid" || $0.name == "token" }
+                let hasSession = nhCookies.contains { $0.name == "sessionid" || $0.name == "token" || $0.name == "access_token" }
                 if hasSession || nhCookies.count >= 2 {
                     NhentaiCookieManager.saveCookies(cookieString)
 

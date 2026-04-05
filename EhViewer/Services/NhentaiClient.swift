@@ -550,28 +550,11 @@ enum NhentaiClient {
 
     // MARK: - お気に入り操作（要ログイン）
 
-    /// お気に入り登録/解除トグル（v2 API）
+    /// お気に入り登録/解除トグル（WKWebViewでギャラリーページのfavoriteボタンをJSクリック）
     static func toggleFavorite(galleryId: Int) async throws -> Bool {
-        let urlStr = "https://nhentai.net/api/v2/galleries/\(galleryId)/favorite"
-        // CSRFトークン
-        var csrfToken: String?
-        if let cookies = NhentaiCookieManager.loadCookies() {
-            for part in cookies.components(separatedBy: "; ") {
-                if part.hasPrefix("csrftoken=") {
-                    csrfToken = String(part.dropFirst("csrftoken=".count))
-                }
-            }
-        }
-
-        let data = try await NhentaiWebBridge.shared.post(url: urlStr, csrfToken: csrfToken)
-        LogManager.shared.log("nhentai", "toggleFavorite id=\(galleryId) size=\(data.count)")
-
-        // レスポンス: {"favorited": true/false}
-        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let favorited = json["favorited"] as? Bool {
-            return favorited
-        }
-        return true
+        let result = try await NhentaiWebBridge.shared.toggleFavoriteViaPage(galleryId: galleryId)
+        LogManager.shared.log("nhentai", "toggleFavorite id=\(galleryId) result=\(result)")
+        return result
     }
 
     /// お気に入り1ページ取得（HTML解析）→ (galleries, hasNextPage)

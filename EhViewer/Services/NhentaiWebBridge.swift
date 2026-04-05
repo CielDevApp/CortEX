@@ -47,7 +47,7 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
         ensureWebView()
         guard let wv = webView else { return }
 
-        // NhentaiCookieManagerからCookieをWKWebViewに注入
+        // NhentaiCookieManagerからCookieをWKWebViewに注入 + access_token抽出
         if let cookieString = NhentaiCookieManager.cookieHeader() {
             let store = wv.configuration.websiteDataStore.httpCookieStore
             for part in cookieString.components(separatedBy: "; ") {
@@ -55,6 +55,7 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
                 guard kv.count == 2 else { continue }
                 let name = String(kv[0])
                 let value = String(kv[1])
+                // access_tokenはWKWebView cookie storeから取得するのでここではスキップ
                 if let cookie = HTTPCookie(properties: [
                     .name: name, .value: value,
                     .domain: ".nhentai.net", .path: "/",
@@ -64,6 +65,14 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
                 }
             }
             LogManager.shared.log("nhBridge", "injected cookies from NhentaiCookieManager")
+        }
+
+        // WKWebViewのCookieストアからもaccess_tokenを探す
+        let wvStore = wv.configuration.websiteDataStore.httpCookieStore
+        let allCookies = await wvStore.allCookies()
+        if let accessCookie = allCookies.first(where: { $0.name == "access_token" && $0.domain.contains("nhentai") }) {
+            NhentaiCookieManager.saveToken(accessCookie.value)
+            LogManager.shared.log("nhBridge", "access_token extracted from WKWebView cookie store")
         }
 
         LogManager.shared.log("nhBridge", "initializing: loading nhentai.net...")
@@ -90,6 +99,12 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
                     LogManager.shared.log("nhBridge", "Cloudflare challenge detected, waiting...")
                 } else {
                     LogManager.shared.log("nhBridge", "ready! title: \(title.prefix(50))")
+                    // document.cookieの中身を確認
+                    webView.evaluateJavaScript("document.cookie") { cookieResult, _ in
+                        let cookies = (cookieResult as? String) ?? ""
+                        let hasAccess = cookies.contains("access_token")
+                        LogManager.shared.log("nhBridge", "document.cookie: hasAccessToken=\(hasAccess) length=\(cookies.count) cookies=\(cookies.prefix(200))")
+                    }
                     self.isReady = true
                     self.isInitializing = false
                     self._initContinuation = nil
@@ -127,10 +142,16 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
         if !isReady { await initialize() }
         guard let wv = webView else { throw URLError(.cannotConnectToHost) }
 
-        let token = NhentaiCookieManager.loadToken() ?? ""
         let js = """
         const headers = {};
-        if (authToken) headers['Authorization'] = 'Bearer ' + authToken;
+        const cookies = document.cookie.split('; ');
+        for (const c of cookies) {
+            const [name, ...val] = c.split('=');
+            if (name === 'access_token') {
+                headers['Authorization'] = 'Bearer ' + val.join('=');
+                break;
+            }
+        }
         const response = await fetch(targetUrl, {credentials: 'include', headers: headers});
         const text = await response.text();
         return JSON.stringify({status: response.status, body: text});
@@ -138,7 +159,7 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
 
         let result = try await wv.callAsyncJavaScript(
             js,
-            arguments: ["targetUrl": url, "authToken": token],
+            arguments: ["targetUrl": url],
             contentWorld: .page
         )
 
@@ -166,9 +187,20 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
         if !isReady { await initialize() }
         guard let wv = webView else { throw URLError(.cannotConnectToHost) }
 
+        // WKWebViewのCookieストアからaccess_tokenを直接取得（最新のものを使う）
+        let wvStore = wv.configuration.websiteDataStore.httpCookieStore
+        let allCookies = await wvStore.allCookies()
+        let accessTokenCookies = allCookies.filter { $0.name == "access_token" && $0.domain.contains("nhentai") }
+        // 有効期限が最も遅いものを選択
+        let accessToken = accessTokenCookies
+            .sorted { ($0.expiresDate ?? .distantPast) > ($1.expiresDate ?? .distantPast) }
+            .first?.value ?? ""
+        LogManager.shared.log("nhBridge", "POST auth token: \(accessToken.prefix(20))... (from \(accessTokenCookies.count) cookies, values: \(accessTokenCookies.map { "\($0.value.prefix(10))..exp=\($0.expiresDate?.description.prefix(19) ?? "nil")" }))")
+
         let js = """
         const headers = {'X-Requested-With': 'XMLHttpRequest'};
         if (csrf) headers['X-CSRFToken'] = csrf;
+        if (authToken) headers['Authorization'] = 'Bearer ' + authToken;
         const response = await fetch(targetUrl, {
             method: 'POST',
             headers: headers,
@@ -180,7 +212,7 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
 
         let result = try await wv.callAsyncJavaScript(
             js,
-            arguments: ["targetUrl": url, "csrf": csrfToken ?? ""],
+            arguments: ["targetUrl": url, "csrf": csrfToken ?? "", "authToken": accessToken],
             contentWorld: .page
         )
 
@@ -200,15 +232,86 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
         return data
     }
 
+    /// お気に入りトグル：メインWebBridgeのWebViewからdocument.cookieのaccess_tokenを使ってv2 API POST
+    func toggleFavoriteViaPage(galleryId: Int) async throws -> Bool {
+        if !isReady { await initialize() }
+        guard let wv = webView else { throw URLError(.cannotConnectToHost) }
+
+        // document.cookieからaccess_tokenを取得してv2 APIにPOST
+        let js = """
+        // document.cookieからaccess_tokenを取得
+        const cookies = document.cookie.split('; ');
+        let token = '';
+        for (const c of cookies) {
+            if (c.startsWith('access_token=')) {
+                token = c.substring('access_token='.length);
+                break;
+            }
+        }
+
+        if (!token) {
+            return JSON.stringify({success: false, error: 'no_token', cookies: document.cookie.substring(0, 200)});
+        }
+
+        try {
+            const resp = await fetch('https://nhentai.net/api/v2/galleries/' + galleryId + '/favorite', {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + token,
+                    'Content-Type': 'application/json'
+                },
+                credentials: 'include'
+            });
+            const text = await resp.text();
+            return JSON.stringify({success: resp.ok, status: resp.status, body: text, token_prefix: token.substring(0, 20)});
+        } catch(e) {
+            return JSON.stringify({success: false, error: e.message});
+        }
+        """
+
+        let result = try await wv.callAsyncJavaScript(
+            js,
+            arguments: ["galleryId": galleryId],
+            contentWorld: .page
+        )
+
+        guard let jsonStr = result as? String,
+              let jsonData = jsonStr.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+            LogManager.shared.log("nhBridge", "toggleFav: unexpected result: \(String(describing: result))")
+            throw URLError(.badServerResponse)
+        }
+
+        let success = json["success"] as? Bool ?? false
+        let status = json["status"] as? Int ?? 0
+        let error = json["error"] as? String
+        let tokenPrefix = json["token_prefix"] as? String ?? ""
+        let body = json["body"] as? String ?? ""
+
+        if let error {
+            LogManager.shared.log("nhBridge", "toggleFav: error=\(error) cookies=\(json["cookies"] as? String ?? "")")
+        } else {
+            LogManager.shared.log("nhBridge", "toggleFav: success=\(success) status=\(status) token=\(tokenPrefix)... body=\(body.prefix(100))")
+        }
+
+        return success
+    }
+
     /// HTMLページ取得（ステータスコードも返す）
     func fetchHTML(url: String) async throws -> (html: String, status: Int) {
         if !isReady { await initialize() }
         guard let wv = webView else { throw URLError(.cannotConnectToHost) }
 
-        let token = NhentaiCookieManager.loadToken() ?? ""
         let js = """
         const headers = {};
-        if (authToken) headers['Authorization'] = 'Bearer ' + authToken;
+        const cookies = document.cookie.split('; ');
+        for (const c of cookies) {
+            const [name, ...val] = c.split('=');
+            if (name === 'access_token') {
+                headers['Authorization'] = 'Bearer ' + val.join('=');
+                break;
+            }
+        }
         const response = await fetch(targetUrl, {credentials: 'include', headers: headers});
         const text = await response.text();
         return JSON.stringify({status: response.status, body: text});
@@ -216,7 +319,7 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
 
         let result = try await wv.callAsyncJavaScript(
             js,
-            arguments: ["targetUrl": url, "authToken": token],
+            arguments: ["targetUrl": url],
             contentWorld: .page
         )
 
