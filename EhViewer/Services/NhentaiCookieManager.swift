@@ -61,7 +61,7 @@ enum NhentaiCookieManager: Sendable {
 
     static func isLoggedIn() -> Bool {
         guard let cookies = loadCookies() else { return false }
-        return cookies.contains("sessionid") || cookies.contains("csrftoken")
+        return cookies.contains("sessionid") || cookies.contains("csrftoken") || cookies.contains("access_token")
     }
 
     static func clearCookies() {
