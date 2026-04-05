@@ -1,4 +1,4 @@
-# Cort:EX ver.02a
+# Cort:EX ver.02a f1
 
 <img src="assets/preview.png" alt="CortEX Preview">
 
@@ -114,7 +114,7 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 
 ## Changelog
 
-### ver.02a (2026-04-05)
+### ver.02a f1 (2026-04-05)
 - **nhentai API v2 Migration** — Full migration from v1 to v2 API with Cloudflare TLS fingerprint bypass via WKWebView
 - **nhentai Favorites Toggle** — Server-side add/remove via SPA `#favorite` button click with SvelteKit hydration polling
 - **Favorites Sync Optimization** — Cache-aware sync skips already-fetched galleries; 429 retry with exponential backoff
