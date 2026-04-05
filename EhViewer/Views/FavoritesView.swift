@@ -358,17 +358,23 @@ struct FavoritesView: View {
             let ids = try await fetcher.fetchAllFavoriteIds()
             LogManager.shared.log("nhFav", "WKWebView returned \(ids.count) IDs")
 
+            // キャッシュ済みギャラリーを辞書化（APIコール削減）
+            let cached = nhFavCache.load()
+            let cachedDict = Dictionary(uniqueKeysWithValues: cached.map { ($0.id, $0) })
+            LogManager.shared.log("nhFav", "cache has \(cachedDict.count) items, need to fetch \(ids.filter { cachedDict[$0] == nil }.count) new")
+
             var galleries: [NhentaiClient.NhGallery] = []
             for (i, id) in ids.enumerated() {
-                if let g = try? await NhentaiClient.fetchGallery(id: id) {
+                if let cachedGallery = cachedDict[id] {
+                    galleries.append(cachedGallery)
+                } else if let g = try? await NhentaiClient.fetchGallery(id: id) {
                     galleries.append(g)
+                    // API呼び出し後は1秒待機（レートリミット対策）
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
                 }
-                if (i + 1) % 5 == 0 || i == ids.count - 1 {
+                if (i + 1) % 10 == 0 || i == ids.count - 1 {
                     nhFavorites = galleries
                     nhFavCache.save(galleries)
-                }
-                if i < ids.count - 1 {
-                    try? await Task.sleep(nanoseconds: 200_000_000)
                 }
             }
 
