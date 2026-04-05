@@ -232,36 +232,102 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
         return data
     }
 
-    /// お気に入りトグル：access_tokenを使ってv2 API POST
+    /// refresh_tokenを使って新しいaccess_tokenを取得
+    private func refreshAccessToken() async -> String? {
+        guard let wv = webView else { return nil }
+
+        let store = wv.configuration.websiteDataStore.httpCookieStore
+        let allCookies = await store.allCookies()
+        let refreshToken = allCookies
+            .filter { $0.name == "refresh_token" && $0.domain.contains("nhentai") }
+            .sorted { ($0.expiresDate ?? .distantPast) > ($1.expiresDate ?? .distantPast) }
+            .first?.value
+
+        guard let refreshToken, !refreshToken.isEmpty else {
+            LogManager.shared.log("nhBridge", "refreshToken: no refresh_token in cookie store")
+            return nil
+        }
+
+        LogManager.shared.log("nhBridge", "refreshToken: refreshing with \(refreshToken.prefix(15))...")
+
+        let js = """
+        try {
+            const resp = await fetch('https://nhentai.net/api/v2/auth/refresh', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({refresh_token: rt}),
+                credentials: 'include'
+            });
+            const text = await resp.text();
+            return JSON.stringify({status: resp.status, body: text});
+        } catch(e) {
+            return JSON.stringify({status: 0, error: e.message});
+        }
+        """
+
+        guard let result = try? await wv.callAsyncJavaScript(
+            js,
+            arguments: ["rt": refreshToken],
+            contentWorld: .page
+        ),
+              let jsonStr = result as? String,
+              let jsonData = jsonStr.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+              let status = json["status"] as? Int,
+              let body = json["body"] as? String else {
+            LogManager.shared.log("nhBridge", "refreshToken: JS execution failed")
+            return nil
+        }
+
+        LogManager.shared.log("nhBridge", "refreshToken: status=\(status)")
+
+        if status == 200, let bodyData = body.data(using: .utf8),
+           let tokenJson = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
+           let newAccess = tokenJson["access_token"] as? String {
+            LogManager.shared.log("nhBridge", "refreshToken: got new access_token \(newAccess.prefix(15))...")
+            // 新しいrefresh_tokenも更新
+            if let newRefresh = tokenJson["refresh_token"] as? String {
+                if let cookie = HTTPCookie(properties: [
+                    .name: "refresh_token", .value: newRefresh,
+                    .domain: ".nhentai.net", .path: "/", .secure: "TRUE"
+                ]) {
+                    await store.setCookie(cookie)
+                }
+            }
+            // access_tokenもcookieに保存
+            if let cookie = HTTPCookie(properties: [
+                .name: "access_token", .value: newAccess,
+                .domain: ".nhentai.net", .path: "/", .secure: "TRUE"
+            ]) {
+                await store.setCookie(cookie)
+            }
+            return newAccess
+        }
+
+        LogManager.shared.log("nhBridge", "refreshToken: failed body=\(body.prefix(200))")
+        return nil
+    }
+
+    /// お気に入りトグル：refresh_tokenで最新access_tokenを取得してv2 API POST
     func toggleFavoriteViaPage(galleryId: Int) async throws -> Bool {
         if !isReady { await initialize() }
         guard let wv = webView else { throw URLError(.cannotConnectToHost) }
 
-        // WKHTTPCookieStoreから直接access_tokenを取得（HttpOnly対策）
-        let wvStore = wv.configuration.websiteDataStore.httpCookieStore
-        let allCookies = await wvStore.allCookies()
-        let accessTokenCookies = allCookies
-            .filter { $0.name == "access_token" && $0.domain.contains("nhentai") }
-            .sorted { ($0.expiresDate ?? .distantPast) > ($1.expiresDate ?? .distantPast) }
-        let swiftToken = accessTokenCookies.first?.value ?? ""
-
-        LogManager.shared.log("nhBridge", "toggleFav: swift token=\(swiftToken.prefix(20))... (\(accessTokenCookies.count) cookies)")
-
-        if swiftToken.isEmpty {
-            LogManager.shared.log("nhBridge", "toggleFav: no access_token in cookie store")
+        // 1. まずrefresh_tokenで最新のaccess_tokenを取得
+        guard let freshToken = await refreshAccessToken() else {
+            LogManager.shared.log("nhBridge", "toggleFav: failed to get fresh token")
             return false
         }
 
-        // JSでfetchを実行（トークンはSwift側から渡す）
+        // 2. 新しいトークンでお気に入りAPI POST
         let js = """
         try {
-            const resp = await fetch('https://nhentai.net/api/v2/galleries/' + galleryId + '/favorite', {
+            const resp = await fetch('https://nhentai.net/api/v2/galleries/' + gid + '/favorite', {
                 method: 'POST',
                 headers: {
                     'Authorization': 'Bearer ' + token,
                     'Content-Type': 'application/json'
-                },
-                credentials: 'include'
+                }
             });
             const text = await resp.text();
             return JSON.stringify({success: resp.ok, status: resp.status, body: text});
@@ -272,28 +338,22 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
 
         let result = try await wv.callAsyncJavaScript(
             js,
-            arguments: ["galleryId": galleryId, "token": swiftToken],
+            arguments: ["gid": galleryId, "token": freshToken],
             contentWorld: .page
         )
 
         guard let jsonStr = result as? String,
               let jsonData = jsonStr.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
-            LogManager.shared.log("nhBridge", "toggleFav: unexpected result: \(String(describing: result))")
+            LogManager.shared.log("nhBridge", "toggleFav: unexpected result")
             throw URLError(.badServerResponse)
         }
 
         let success = json["success"] as? Bool ?? false
         let status = json["status"] as? Int ?? 0
-        let error = json["error"] as? String
-        let tokenPrefix = json["token_prefix"] as? String ?? ""
         let body = json["body"] as? String ?? ""
 
-        if let error {
-            LogManager.shared.log("nhBridge", "toggleFav: error=\(error) cookies=\(json["cookies"] as? String ?? "")")
-        } else {
-            LogManager.shared.log("nhBridge", "toggleFav: success=\(success) status=\(status) token=\(tokenPrefix)... body=\(body.prefix(100))")
-        }
+        LogManager.shared.log("nhBridge", "toggleFav: status=\(status) success=\(success) body=\(body.prefix(100))")
 
         return success
     }
