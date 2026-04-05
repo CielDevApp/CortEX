@@ -236,15 +236,20 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
     private func refreshAccessToken() async -> String? {
         guard let wv = webView else { return nil }
 
-        let store = wv.configuration.websiteDataStore.httpCookieStore
-        let allCookies = await store.allCookies()
-        let refreshToken = allCookies
-            .filter { $0.name == "refresh_token" && $0.domain.contains("nhentai") }
-            .sorted { ($0.expiresDate ?? .distantPast) > ($1.expiresDate ?? .distantPast) }
-            .first?.value
+        // document.cookieから直接refresh_tokenを取得（WKCookieStoreは古いトークンが残る）
+        let cookieStr = try? await wv.evaluateJavaScript("document.cookie") as? String
+        var refreshToken: String?
+        if let cookieStr {
+            for part in cookieStr.components(separatedBy: "; ") {
+                if part.hasPrefix("refresh_token=") {
+                    refreshToken = String(part.dropFirst("refresh_token=".count))
+                    break
+                }
+            }
+        }
 
         guard let refreshToken, !refreshToken.isEmpty else {
-            LogManager.shared.log("nhBridge", "refreshToken: no refresh_token in cookie store")
+            LogManager.shared.log("nhBridge", "refreshToken: no refresh_token in document.cookie")
             return nil
         }
 
@@ -285,21 +290,21 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
            let tokenJson = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
            let newAccess = tokenJson["access_token"] as? String {
             LogManager.shared.log("nhBridge", "refreshToken: got new access_token \(newAccess.prefix(15))...")
-            // 新しいrefresh_tokenも更新
+            // 新しいトークンをdocument.cookieに直接セット
+            let cookieStore = wv.configuration.websiteDataStore.httpCookieStore
             if let newRefresh = tokenJson["refresh_token"] as? String {
                 if let cookie = HTTPCookie(properties: [
                     .name: "refresh_token", .value: newRefresh,
                     .domain: ".nhentai.net", .path: "/", .secure: "TRUE"
                 ]) {
-                    await store.setCookie(cookie)
+                    await cookieStore.setCookie(cookie)
                 }
             }
-            // access_tokenもcookieに保存
             if let cookie = HTTPCookie(properties: [
                 .name: "access_token", .value: newAccess,
                 .domain: ".nhentai.net", .path: "/", .secure: "TRUE"
             ]) {
-                await store.setCookie(cookie)
+                await cookieStore.setCookie(cookie)
             }
             return newAccess
         }
@@ -308,52 +313,81 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
         return nil
     }
 
-    /// お気に入りトグル：refresh_tokenで最新access_tokenを取得してv2 API POST
+    /// お気に入りトグル：別WebViewでギャラリーページを開き、SPA内のボタンをクリック
+    /// v2 APIのfavoriteエンドポイントは機能フラグで無効化されてるため、
+    /// Webサイトのフロントエンド経由でのみ操作可能
     func toggleFavoriteViaPage(galleryId: Int) async throws -> Bool {
-        if !isReady { await initialize() }
-        guard let wv = webView else { throw URLError(.cannotConnectToHost) }
+        // 別WebView（メインを壊さない）
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .default()
+        let favWV = WKWebView(frame: CGRect(x: 0, y: 0, width: 375, height: 812), configuration: config)
+        favWV.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
 
-        // 1. まずrefresh_tokenで最新のaccess_tokenを取得
-        guard let freshToken = await refreshAccessToken() else {
-            LogManager.shared.log("nhBridge", "toggleFav: failed to get fresh token")
-            return false
-        }
+        // ギャラリーページを読み込む
+        let pageUrl = URL(string: "https://nhentai.net/g/\(galleryId)/")!
+        LogManager.shared.log("nhBridge", "toggleFav: loading /g/\(galleryId)/")
+        favWV.load(URLRequest(url: pageUrl))
 
-        // 2. 新しいトークンでお気に入りAPI POST
+        // SPA完全初期化を待つ（didFinish + 追加待機）
+        try await Task.sleep(nanoseconds: 6_000_000_000)
+
+        // favoriteボタンを探してクリック
         let js = """
-        try {
-            const resp = await fetch('https://nhentai.net/api/v2/galleries/' + gid + '/favorite', {
-                method: 'POST',
-                headers: {
-                    'Authorization': 'Bearer ' + token,
-                    'Content-Type': 'application/json'
-                }
-            });
-            const text = await resp.text();
-            return JSON.stringify({success: resp.ok, status: resp.status, body: text});
-        } catch(e) {
-            return JSON.stringify({success: false, error: e.message});
+        // nhentaiのfavoriteボタンを探す（複数のセレクタを試行）
+        const selectors = [
+            'button[class*="favorite"]',
+            'button[class*="fav"]',
+            '.gallery-favorite',
+            '#favorite',
+            'a[href*="favorite"]',
+            'button:has(svg)',
+            'button:has(i[class*="heart"])',
+            'button:has(i[class*="fav"])'
+        ];
+
+        let btn = null;
+        for (const sel of selectors) {
+            try { btn = document.querySelector(sel); } catch(e) {}
+            if (btn) break;
         }
+
+        // ボタンが見つからなければテキストで検索
+        if (!btn) {
+            const buttons = document.querySelectorAll('button');
+            for (const b of buttons) {
+                const text = b.textContent.toLowerCase();
+                if (text.includes('favorite') || text.includes('fav')) {
+                    btn = b;
+                    break;
+                }
+            }
+        }
+
+        if (btn) {
+            btn.click();
+            return JSON.stringify({success: true, method: 'click', buttonText: btn.textContent.trim().substring(0, 50)});
+        }
+
+        // デバッグ: ページの状態を返す
+        const allButtons = Array.from(document.querySelectorAll('button')).map(b => b.className + ':' + b.textContent.trim().substring(0, 30));
+        return JSON.stringify({success: false, method: 'none', url: location.href, title: document.title, buttons: allButtons.slice(0, 10)});
         """
 
-        let result = try await wv.callAsyncJavaScript(
-            js,
-            arguments: ["gid": galleryId, "token": freshToken],
-            contentWorld: .page
-        )
+        let result = try? await favWV.callAsyncJavaScript(js, arguments: [:], contentWorld: .page)
+
+        // WebView破棄
+        favWV.stopLoading()
 
         guard let jsonStr = result as? String,
               let jsonData = jsonStr.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
-            LogManager.shared.log("nhBridge", "toggleFav: unexpected result")
-            throw URLError(.badServerResponse)
+            LogManager.shared.log("nhBridge", "toggleFav: JS failed, result=\(String(describing: result))")
+            return false
         }
 
         let success = json["success"] as? Bool ?? false
-        let status = json["status"] as? Int ?? 0
-        let body = json["body"] as? String ?? ""
-
-        LogManager.shared.log("nhBridge", "toggleFav: status=\(status) success=\(success) body=\(body.prefix(100))")
+        let method = json["method"] as? String ?? ""
+        LogManager.shared.log("nhBridge", "toggleFav: success=\(success) method=\(method) detail=\(json)")
 
         return success
     }
