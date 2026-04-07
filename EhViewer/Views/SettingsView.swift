@@ -51,7 +51,7 @@ struct SettingsView: View {
                 Section("情報") {
                     HStack {
                         Text("バージョン"); Spacer()
-                        Text("Cort:EX ver.02a f1")
+                        Text("Cort:EX ver.02a f2")
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
                     }

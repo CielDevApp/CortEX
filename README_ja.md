@@ -1,4 +1,4 @@
-# Cort:EX ver.02a f1
+# Cort:EX ver.02a f2
 
 **E-Hentai / EXhentai / nhentai 統合ビューア for iOS / iPadOS**
 
@@ -109,6 +109,11 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 - Metal / CoreML / Vision / WebKit / ActivityKit / TipKit
 
 ## 更新履歴
+
+### ver.02a f2 (2026-04-07)
+- **お気に入りトグル信頼性向上** — 429エラーページリトライ+バックオフ、disabledボタン検知、Cookie二重化修正
+- **Cookie管理改善** — サーバー設定属性（HttpOnly, Secure）を保持する補完注入方式に変更
+- **レートリミット強化** — `fetch()`に429リトライ（3秒/6秒指数バックオフ、最大3回）追加
 
 ### ver.02a f1 (2026-04-05)
 - **nhentai API v2移行** — v1からv2 APIへ全面移行、WKWebView経由のCloudflare TLSフィンガープリント突破

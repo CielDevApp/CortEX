@@ -1,4 +1,4 @@
-# Cort:EX ver.02a f1
+# Cort:EX ver.02a f2
 
 <img src="assets/preview.png" alt="CortEX Preview">
 
@@ -113,6 +113,11 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 - Metal / CoreML / Vision / WebKit / ActivityKit / TipKit
 
 ## Changelog
+
+### ver.02a f2 (2026-04-07)
+- **Favorites Toggle Reliability** — 429 error page retry with backoff, disabled button detection, cookie deduplication fix
+- **Cookie Management** — Complement-only injection preserving server-set cookie attributes (HttpOnly, Secure)
+- **Rate Limit Hardening** — `fetch()` now retries on 429 with 3s/6s exponential backoff (max 3 attempts)
 
 ### ver.02a f1 (2026-04-05)
 - **nhentai API v2 Migration** — Full migration from v1 to v2 API with Cloudflare TLS fingerprint bypass via WKWebView
