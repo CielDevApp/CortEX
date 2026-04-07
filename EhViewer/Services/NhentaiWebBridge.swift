@@ -47,30 +47,40 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
         ensureWebView()
         guard let wv = webView else { return }
 
-        // NhentaiCookieManagerからCookieをWKWebViewに注入 + access_token抽出
+        // Cookie: .default()ストアに既存Cookieがあればそのまま使う（サーバー設定の属性を保持）
+        // 存在しないCookieだけKeychainから補完注入
+        let store = wv.configuration.websiteDataStore.httpCookieStore
+        let existingCookies = await store.allCookies()
+        let nhExisting = existingCookies.filter { $0.domain.contains("nhentai") }
+        let existingNames = Set(nhExisting.map(\.name))
+
         if let cookieString = NhentaiCookieManager.cookieHeader() {
-            let store = wv.configuration.websiteDataStore.httpCookieStore
+            var injected = 0
             for part in cookieString.components(separatedBy: "; ") {
                 let kv = part.split(separator: "=", maxSplits: 1)
                 guard kv.count == 2 else { continue }
                 let name = String(kv[0])
-                let value = String(kv[1])
-                // access_tokenはWKWebView cookie storeから取得するのでここではスキップ
+                // 既にストアにある場合はスキップ（サーバー設定の属性を優先）
+                guard !existingNames.contains(name) else { continue }
                 if let cookie = HTTPCookie(properties: [
-                    .name: name, .value: value,
+                    .name: name, .value: String(kv[1]),
                     .domain: ".nhentai.net", .path: "/",
                     .secure: "TRUE"
                 ]) {
                     await store.setCookie(cookie)
+                    injected += 1
                 }
             }
-            LogManager.shared.log("nhBridge", "injected cookies from NhentaiCookieManager")
+            LogManager.shared.log("nhBridge", "cookies: \(nhExisting.count) existing, \(injected) injected from keychain")
+        } else if nhExisting.isEmpty {
+            LogManager.shared.log("nhBridge", "no cookies available")
+        } else {
+            LogManager.shared.log("nhBridge", "using \(nhExisting.count) existing cookies from store")
         }
 
-        // WKWebViewのCookieストアからもaccess_tokenを探す
-        let wvStore = wv.configuration.websiteDataStore.httpCookieStore
-        let allCookies = await wvStore.allCookies()
-        if let accessCookie = allCookies.first(where: { $0.name == "access_token" && $0.domain.contains("nhentai") }) {
+        // access_token抽出
+        let refreshedCookies = await store.allCookies()
+        if let accessCookie = refreshedCookies.first(where: { $0.name == "access_token" && $0.domain.contains("nhentai") }) {
             NhentaiCookieManager.saveToken(accessCookie.value)
             LogManager.shared.log("nhBridge", "access_token extracted from WKWebView cookie store")
         }
@@ -333,66 +343,52 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
 
     // MARK: - お気に入りトグル
 
-    /// v2 APIのfavoriteエンドポイントは機能フラグで無効化されてるため、
-    /// Webサイトのフロントエンド経由でのみ操作可能
+    /// 別WebViewでギャラリーページを開き、#favoriteボタンをクリック
+    /// 429リトライ付き、disabled検知あり
     func toggleFavoriteViaPage(galleryId: Int) async throws -> Bool {
-        // 別WebView（メインを壊さない）
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
         let favWV = WKWebView(frame: CGRect(x: 0, y: 0, width: 375, height: 812), configuration: config)
         favWV.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
 
-        let delegate = FavNavigationDelegate()
-        favWV.navigationDelegate = delegate
-
-        // .default() websiteDataStoreはアプリ全体で共有されるため、
-        // ログイン済みWebViewのCookieは自動的にfavWVでも利用可能
-
-        // ギャラリーページを読み込む
         let pageUrl = URL(string: "https://nhentai.net/g/\(galleryId)/")!
-        LogManager.shared.log("nhBridge", "toggleFav: loading /g/\(galleryId)/")
-        favWV.load(URLRequest(url: pageUrl))
 
-        // ナビゲーション完了を待つ（最大15秒）
-        await delegate.waitForLoad(timeout: 15)
+        // 429リトライ付きでページ読み込み（最大3回）
+        var pageLoaded = false
+        for attempt in 1...3 {
+            let delegate = FavNavigationDelegate()
+            favWV.navigationDelegate = delegate
+
+            LogManager.shared.log("nhBridge", "toggleFav: loading /g/\(galleryId)/ (attempt \(attempt))")
+            favWV.load(URLRequest(url: pageUrl))
+            await delegate.waitForLoad(timeout: 15)
+
+            let title = try? await favWV.evaluateJavaScript("document.title") as? String
+            if title?.contains("429") == true {
+                LogManager.shared.log("nhBridge", "toggleFav: 429, waiting \(attempt * 5)s...")
+                try? await Task.sleep(nanoseconds: UInt64(attempt * 5) * 1_000_000_000)
+                continue
+            }
+            pageLoaded = true
+            break
+        }
+
+        guard pageLoaded else {
+            LogManager.shared.log("nhBridge", "toggleFav: failed after 3 attempts (429)")
+            favWV.stopLoading()
+            return false
+        }
+
         LogManager.shared.log("nhBridge", "toggleFav: page loaded, waiting for SPA hydration...")
 
-        // fetch()をモンキーパッチしてボタンクリック時のAPIリクエストを捕捉
-        let patchJS = """
-        window.__favCapture = [];
-        const _origFetch = window.fetch;
-        window.fetch = function(...args) {
-            const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
-            const method = args[1]?.method || 'GET';
-            window.__favCapture.push({url, method, ts: Date.now()});
-            return _origFetch.apply(this, args);
-        };
-        const _origXHR = XMLHttpRequest.prototype.open;
-        XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-            window.__favCapture.push({url: String(url), method, ts: Date.now(), type: 'xhr'});
-            return _origXHR.call(this, method, url, ...rest);
-        };
-        'patched';
-        """
-        _ = try? await favWV.callAsyncJavaScript(patchJS, arguments: [:], contentWorld: .page)
-
-        // SPA hydrationをポーリング（#favoriteボタン出現まで最大12秒）
+        // ボタン出現をポーリング
         var buttonFound = false
         for attempt in 1...24 {
             try await Task.sleep(nanoseconds: 500_000_000)
-            let pollJS = """
-            const selectors = [
-                '#favorite',
-                'button[class*="favorite"]', 'button[class*="fav"]',
-                '.gallery-favorite', '.btn-fav',
-                'button:has(i.fa-heart)'
-            ];
-            for (const sel of selectors) {
-                try { if (document.querySelector(sel)) return true; } catch(e) {}
-            }
-            return false;
-            """
-            let found = (try? await favWV.callAsyncJavaScript(pollJS, arguments: [:], contentWorld: .page)) as? Bool ?? false
+            let found = (try? await favWV.callAsyncJavaScript(
+                "return !!document.querySelector('#favorite') || !!document.querySelector('button:has(i.fa-heart)');",
+                arguments: [:], contentWorld: .page
+            )) as? Bool ?? false
             if found {
                 buttonFound = true
                 LogManager.shared.log("nhBridge", "toggleFav: button found after \(attempt * 500)ms")
@@ -400,98 +396,42 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
             }
         }
 
-        if !buttonFound {
-            // デバッグ: DOM状態をダンプ
-            let debugJS = """
-            const els = Array.from(document.querySelectorAll('button, a[href], [role="button"], [onclick]'));
-            const info = els.slice(0, 20).map(e => ({
-                tag: e.tagName, cls: e.className?.substring?.(0, 60) || '',
-                text: e.textContent?.trim()?.substring(0, 40) || '',
-                href: e.href?.substring?.(0, 60) || ''
-            }));
-            return JSON.stringify({
-                url: location.href, title: document.title,
-                bodyLen: document.body?.innerHTML?.length || 0,
-                elements: info
-            });
-            """
-            let debugResult = try? await favWV.callAsyncJavaScript(debugJS, arguments: [:], contentWorld: .page)
-            LogManager.shared.log("nhBridge", "toggleFav: no button found, DOM dump=\(String(describing: debugResult))")
+        guard buttonFound else {
+            LogManager.shared.log("nhBridge", "toggleFav: no button found")
             favWV.stopLoading()
             return false
         }
 
-        // favoriteボタンを探してクリック
+        // ボタンクリック
         let clickJS = """
-        const selectors = [
-            '#favorite',
-            'button[class*="favorite"]', 'button[class*="fav"]',
-            '.gallery-favorite', '.btn-fav',
-            'button:has(i.fa-heart)'
-        ];
+        const btn = document.querySelector('#favorite') || document.querySelector('button:has(i.fa-heart)');
+        if (!btn) return JSON.stringify({success: false, method: 'none'});
 
-        let btn = null;
-        let matchedSel = '';
-        for (const sel of selectors) {
-            try { btn = document.querySelector(sel); } catch(e) {}
-            if (btn) { matchedSel = sel; break; }
-        }
+        const isDisabled = btn.classList.contains('btn-disabled') || btn.disabled;
+        const text = btn.textContent?.trim()?.substring(0, 60) || '';
 
-        // テキスト検索フォールバック
-        if (!btn) {
-            for (const el of document.querySelectorAll('button, a, span, div')) {
-                const t = el.textContent?.toLowerCase() || '';
-                if ((t.includes('favorite') || t === '♥' || t === '❤') && el.offsetParent !== null) {
-                    btn = el;
-                    matchedSel = 'text:' + t.substring(0, 20);
-                    break;
-                }
-            }
-        }
+        btn.click();
+        await new Promise(r => setTimeout(r, 2000));
 
-        if (btn) {
-            // クリック前のキャプチャ状態をリセット
-            window.__favCapture = [];
-            btn.click();
-
-            // クリック後に少し待ってからキャプチャを収集
-            await new Promise(r => setTimeout(r, 2000));
-            const captured = window.__favCapture || [];
-
-            return JSON.stringify({
-                success: true,
-                method: 'click',
-                selector: matchedSel,
-                buttonTag: btn.tagName,
-                buttonClass: (btn.className || '').substring(0, 80),
-                buttonText: btn.textContent?.trim()?.substring(0, 50) || '',
-                capturedRequests: captured.slice(0, 5)
-            });
-        }
-
-        return JSON.stringify({success: false, method: 'none'});
+        return JSON.stringify({
+            success: !isDisabled,
+            method: isDisabled ? 'disabled' : 'click',
+            buttonText: text
+        });
         """
 
         let result = try? await favWV.callAsyncJavaScript(clickJS, arguments: [:], contentWorld: .page)
-
-        // WebView破棄
         favWV.stopLoading()
 
         guard let jsonStr = result as? String,
               let jsonData = jsonStr.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
-            LogManager.shared.log("nhBridge", "toggleFav: JS failed, result=\(String(describing: result))")
+            LogManager.shared.log("nhBridge", "toggleFav: JS failed")
             return false
         }
 
         let success = json["success"] as? Bool ?? false
-        let method = json["method"] as? String ?? ""
-        let captured = json["capturedRequests"] as? [[String: Any]] ?? []
-        LogManager.shared.log("nhBridge", "toggleFav: success=\(success) method=\(method) selector=\(json["selector"] ?? "") btn=\(json["buttonClass"] ?? "") text=\(json["buttonText"] ?? "")")
-        if !captured.isEmpty {
-            LogManager.shared.log("nhBridge", "toggleFav: captured API calls=\(captured)")
-        }
-
+        LogManager.shared.log("nhBridge", "toggleFav: success=\(success) detail=\(json)")
         return success
     }
 
