@@ -696,6 +696,21 @@ struct SettingsView: View {
             if !needsApi.isEmpty {
                 LogManager.shared.log("Census", "fetching tags for \(needsApi.count) E-H galleries via API...")
                 let tagMap = await EhClient.shared.fetchGalleryTags(galleries: needsApi)
+
+                // タグをキャッシュに書き戻す（次回API不要）
+                var updated = ehFavs
+                var updateCount = 0
+                for i in updated.indices {
+                    if let tags = tagMap[updated[i].gid], !tags.isEmpty {
+                        updated[i].tags = tags
+                        updateCount += 1
+                    }
+                }
+                if updateCount > 0 {
+                    FavoritesCache.shared.save(updated)
+                    LogManager.shared.log("Census", "cache updated: \(updateCount) galleries with tags")
+                }
+
                 for (_, tags) in tagMap {
                     let charTags = tags.filter { $0.hasPrefix("character:") }
                     if !charTags.isEmpty { ehWithTags += 1 }
