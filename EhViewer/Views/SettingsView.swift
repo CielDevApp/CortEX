@@ -49,6 +49,9 @@ struct SettingsView: View {
     @State private var randomGalleryId: Int?
     @State private var isRolling = false
     @State private var rollingNumber = 0
+    @State private var characterStats: [(name: String, count: Int)] = []
+    @State private var showCharacterList = false
+    @State private var cortexSearchURL: URL?
 
     private var maxMB: Int { ImageCache.shared.maxDiskBytes / 1_048_576 }
     private var isOverLimit: Bool { readerCacheMB > maxMB }
@@ -468,6 +471,32 @@ struct SettingsView: View {
                         Text("E-Hentai全域からランダムにギャラリーを選出")
                             .font(.caption2.monospaced())
                             .foregroundStyle(.cyan.opacity(0.6))
+
+                        Divider()
+
+                        // Character Census
+                        Button {
+                            analyzeCharacters()
+                            showCharacterList = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "person.2.fill")
+                                    .foregroundStyle(.cyan)
+                                Text("CHARACTER CENSUS")
+                                    .font(.body.monospaced().bold())
+                                    .foregroundStyle(.cyan)
+                                Spacer()
+                                if !characterStats.isEmpty {
+                                    Text("\(characterStats.count)")
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(.cyan.opacity(0.6))
+                                }
+                            }
+                        }
+
+                        Text("お気に入りに登場するキャラクターを集計")
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.cyan.opacity(0.6))
                     } header: {
                         Label("CORTEX PROTOCOL", systemImage: "cpu")
                             .foregroundStyle(.cyan)
@@ -551,6 +580,61 @@ struct SettingsView: View {
             NhentaiCDNVerifyView()
         }
         #endif
+        .sheet(isPresented: $showCharacterList) {
+            NavigationStack {
+                List {
+                    if characterStats.isEmpty {
+                        Text("キャラクターが見つかりません")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Section {
+                            ForEach(Array(characterStats.enumerated()), id: \.element.name) { i, stat in
+                                HStack {
+                                    Text("\(i + 1).")
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 30, alignment: .trailing)
+                                    Text(stat.name)
+                                        .font(.body)
+                                    Spacer()
+                                    Text("\(stat.count)")
+                                        .font(.caption.monospaced().bold())
+                                        .foregroundStyle(.cyan)
+                                    // Age search button
+                                    Button {
+                                        let query = "\(stat.name) Animecharacter Age".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? stat.name
+                                        if let url = URL(string: "https://www.google.com/search?q=\(query)") {
+                                            cortexSearchURL = url
+                                        }
+                                    } label: {
+                                        Image(systemName: "magnifyingglass")
+                                            .font(.system(size: 10))
+                                            .padding(4)
+                                            .background(Color.cyan.opacity(0.15))
+                                            .foregroundStyle(.cyan)
+                                            .clipShape(Circle())
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        } header: {
+                            Text("\(characterStats.count) characters from \(FavoritesCache.shared.load().count + NhentaiFavoritesCache.shared.load().count) favorites")
+                                .font(.caption.monospaced())
+                        }
+                    }
+                }
+                .navigationTitle("CHARACTER CENSUS")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("閉じる") { showCharacterList = false }
+                    }
+                }
+            }
+            .sheet(item: $cortexSearchURL) { url in
+                InAppBrowserView(url: url)
+            }
+        }
         .alert("CORTEX PROTOCOL", isPresented: $showCortexActivation) {
             Button("ACKNOWLEDGE") {}
         } message: {
@@ -622,6 +706,32 @@ struct SettingsView: View {
             Button("CDN認証（画像DL用）") { showNhCDNVerify = true }
                 .foregroundColor(hasCf ? .secondary : .orange)
         }
+    }
+
+    private func analyzeCharacters() {
+        var counts: [String: Int] = [:]
+
+        // E-Hentai favorites
+        let ehFavs = FavoritesCache.shared.load()
+        for gallery in ehFavs {
+            for tag in gallery.tags {
+                if tag.hasPrefix("character:") {
+                    let name = String(tag.dropFirst("character:".count))
+                    counts[name, default: 0] += 1
+                }
+            }
+        }
+
+        // nhentai favorites
+        let nhFavs = NhentaiFavoritesCache.shared.load()
+        for gallery in nhFavs {
+            for tag in gallery.tags ?? [] where tag.type == "character" {
+                counts[tag.name, default: 0] += 1
+            }
+        }
+
+        characterStats = counts.map { (name: $0.key, count: $0.value) }
+            .sorted { $0.count > $1.count }
     }
 
     private func startGalleryRoulette() {
