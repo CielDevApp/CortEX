@@ -429,7 +429,8 @@ struct GalleryDetailView: View {
 
     // MARK: - Tags
 
-    @ViewBuilder
+    @AppStorage("cortexProtocolUnlocked") private var cortexUnlocked = false
+
     private func tagsSection(_ detail: GalleryDetail) -> some View {
         GroupBox("タグ") {
             VStack(alignment: .leading, spacing: 8) {
@@ -442,14 +443,36 @@ struct GalleryDetailView: View {
 
                         FlowLayout(spacing: 4) {
                             ForEach(detail.normalizedTags[namespace] ?? [], id: \.self) { tag in
-                                NavigationLink(value: TagSearch(namespace: namespace, tag: tag)) {
-                                    Text(tag)
-                                        .font(.caption2)
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(Color.blue.opacity(0.12))
-                                        .foregroundStyle(.blue)
-                                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                                HStack(spacing: 2) {
+                                    NavigationLink(value: TagSearch(namespace: namespace, tag: tag)) {
+                                        Text(tag)
+                                            .font(.caption2)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(Color.blue.opacity(0.12))
+                                            .foregroundStyle(.blue)
+                                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                                    }
+
+                                    // CORTEX PROTOCOL: character tag age search
+                                    if cortexUnlocked && namespace == "character" {
+                                        Button {
+                                            let query = "\(tag) Age".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tag
+                                            #if canImport(UIKit)
+                                            if let url = URL(string: "https://www.google.com/search?q=\(query)") {
+                                                UIApplication.shared.open(url)
+                                            }
+                                            #endif
+                                        } label: {
+                                            Image(systemName: "magnifyingglass")
+                                                .font(.system(size: 9))
+                                                .padding(3)
+                                                .background(Color.cyan.opacity(0.15))
+                                                .foregroundStyle(.cyan)
+                                                .clipShape(Circle())
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
                                 }
                             }
                         }

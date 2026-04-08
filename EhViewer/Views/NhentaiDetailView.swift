@@ -174,6 +174,8 @@ struct NhentaiDetailView: View {
 
     // MARK: - Tags
 
+    @AppStorage("cortexProtocolUnlocked") private var cortexUnlocked = false
+
     @ViewBuilder
     private func tagsSection(_ tags: [NhentaiClient.NhTag]) -> some View {
         let grouped = Dictionary(grouping: tags, by: \.type)
@@ -189,14 +191,35 @@ struct NhentaiDetailView: View {
 
                         FlowLayout(spacing: 4) {
                             ForEach(grouped[type] ?? [], id: \.id) { tag in
-                                NavigationLink(value: NhTagSearch(type: type, name: tag.name)) {
-                                    Text(tag.name)
-                                        .font(.caption2)
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(tagColor(for: type).opacity(0.12))
-                                        .foregroundStyle(tagColor(for: type))
-                                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                                HStack(spacing: 2) {
+                                    NavigationLink(value: NhTagSearch(type: type, name: tag.name)) {
+                                        Text(tag.name)
+                                            .font(.caption2)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(tagColor(for: type).opacity(0.12))
+                                            .foregroundStyle(tagColor(for: type))
+                                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                                    }
+
+                                    if cortexUnlocked && type == "character" {
+                                        Button {
+                                            let query = "\(tag.name) Age".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tag.name
+                                            #if canImport(UIKit)
+                                            if let url = URL(string: "https://www.google.com/search?q=\(query)") {
+                                                UIApplication.shared.open(url)
+                                            }
+                                            #endif
+                                        } label: {
+                                            Image(systemName: "magnifyingglass")
+                                                .font(.system(size: 9))
+                                                .padding(3)
+                                                .background(Color.cyan.opacity(0.15))
+                                                .foregroundStyle(.cyan)
+                                                .clipShape(Circle())
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
                                 }
                             }
                         }
