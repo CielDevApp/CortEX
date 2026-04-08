@@ -980,16 +980,22 @@ extension String: @retroactive Identifiable {
 private struct CharacterWorksView: View {
     let characterName: String
     @Environment(\.dismiss) private var dismiss
+    @State private var selectedEhGallery: Gallery?
+    @State private var selectedNhGallery: NhentaiClient.NhGallery?
 
     private var ehWorks: [Gallery] {
         FavoritesCache.shared.load().filter { gallery in
-            gallery.tags.contains("character:\(characterName)")
+            gallery.tags.contains(where: {
+                $0.hasPrefix("character:") && $0.dropFirst("character:".count).localizedCaseInsensitiveContains(characterName)
+            })
         }
     }
 
     private var nhWorks: [NhentaiClient.NhGallery] {
         NhentaiFavoritesCache.shared.load().filter { gallery in
-            (gallery.tags ?? []).contains { $0.type == "character" && $0.name == characterName }
+            (gallery.tags ?? []).contains {
+                $0.type == "character" && $0.name.localizedCaseInsensitiveContains(characterName)
+            }
         }
     }
 
@@ -999,13 +1005,18 @@ private struct CharacterWorksView: View {
                 if !ehWorks.isEmpty {
                     Section("E-Hentai (\(ehWorks.count))") {
                         ForEach(ehWorks) { gallery in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(gallery.title)
-                                    .font(.subheadline)
-                                    .lineLimit(2)
-                                Text("GID: \(gallery.gid)")
-                                    .font(.caption2.monospaced())
-                                    .foregroundStyle(.secondary)
+                            Button {
+                                selectedEhGallery = gallery
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(gallery.title)
+                                        .font(.subheadline)
+                                        .foregroundStyle(.primary)
+                                        .lineLimit(2)
+                                    Text("GID: \(gallery.gid)")
+                                        .font(.caption2.monospaced())
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
                     }
@@ -1014,13 +1025,18 @@ private struct CharacterWorksView: View {
                 if !nhWorks.isEmpty {
                     Section("nhentai (\(nhWorks.count))") {
                         ForEach(nhWorks) { gallery in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(gallery.displayTitle)
-                                    .font(.subheadline)
-                                    .lineLimit(2)
-                                Text("ID: \(gallery.id)")
-                                    .font(.caption2.monospaced())
-                                    .foregroundStyle(.secondary)
+                            Button {
+                                selectedNhGallery = gallery
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(gallery.displayTitle)
+                                        .font(.subheadline)
+                                        .foregroundStyle(.primary)
+                                        .lineLimit(2)
+                                    Text("ID: \(gallery.id)")
+                                        .font(.caption2.monospaced())
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
                     }
@@ -1038,6 +1054,21 @@ private struct CharacterWorksView: View {
                     Button("閉じる") { dismiss() }
                 }
             }
+            .sheet(item: $selectedEhGallery) { gallery in
+                NavigationStack {
+                    GalleryDetailView(gallery: gallery, host: KeychainService.load(key: "igneous") != nil ? .exhentai : .ehentai)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("閉じる") { selectedEhGallery = nil }
+                            }
+                        }
+                }
+            }
+            #if canImport(UIKit)
+            .fullScreenCover(item: $selectedNhGallery) { nh in
+                NhentaiDetailView(gallery: nh)
+            }
+            #endif
         }
     }
 }
