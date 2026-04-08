@@ -44,11 +44,6 @@ struct SettingsView: View {
     @State private var versionTapCount = 0
     @AppStorage("cortexProtocolUnlocked") private var cortexUnlocked = false
     @State private var showCortexActivation = false
-    @State private var cortexAnimText = ""
-    @State private var showRandomGallery = false
-    @State private var randomGalleryId: Int?
-    @State private var isRolling = false
-    @State private var rollingNumber = 0
     @State private var characterStats: [(name: String, count: Int)] = []
     @State private var showCharacterList = false
     @State private var cortexSearchURL: URL?
@@ -431,52 +426,6 @@ struct SettingsView: View {
                 // CORTEX PROTOCOL (hidden section)
                 if cortexUnlocked {
                     Section {
-                        // Gallery Roulette
-                        Button {
-                            startGalleryRoulette()
-                        } label: {
-                            HStack {
-                                Image(systemName: "dice.fill")
-                                    .foregroundStyle(.cyan)
-                                    .symbolEffect(.bounce, value: isRolling)
-                                if isRolling {
-                                    Text("G-\(String(format: "%06d", rollingNumber))")
-                                        .font(.body.monospaced().bold())
-                                        .foregroundStyle(.cyan)
-                                        .contentTransition(.numericText())
-                                } else if let gid = randomGalleryId {
-                                    Text("G-\(gid)")
-                                        .font(.body.monospaced().bold())
-                                        .foregroundStyle(.green)
-                                } else {
-                                    Text("GALLERY ROULETTE")
-                                        .font(.body.monospaced().bold())
-                                        .foregroundStyle(.cyan)
-                                }
-                                Spacer()
-                                if isRolling {
-                                    ProgressView().tint(.cyan)
-                                }
-                            }
-                        }
-                        .disabled(isRolling)
-
-                        if randomGalleryId != nil {
-                            Button {
-                                showRandomGallery = true
-                            } label: {
-                                Label("OPEN", systemImage: "arrow.right.circle.fill")
-                                    .font(.body.monospaced())
-                                    .foregroundStyle(.green)
-                            }
-                        }
-
-                        Text("E-Hentai全域からランダムにギャラリーを選出")
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.cyan.opacity(0.6))
-
-                        Divider()
-
                         // Character Census
                         Button {
                             analyzeCharacters()
@@ -597,20 +546,7 @@ struct SettingsView: View {
         .alert("CORTEX PROTOCOL", isPresented: $showCortexActivation) {
             Button("ACKNOWLEDGE") {}
         } message: {
-            Text(">> HIDDEN SUBSYSTEM UNLOCKED\n>> GALLERY ROULETTE: ONLINE\n>> ACCESS LEVEL: ELEVATED\n\n// This feature is exclusive to Cort:EX")
-        }
-        .sheet(isPresented: $showRandomGallery) {
-            if let gid = randomGalleryId {
-                NavigationStack {
-                    let dummy = Gallery(gid: gid, token: "", title: "G-\(gid)", category: nil, coverURL: nil, rating: 0, pageCount: 0, postedDate: "", uploader: nil, tags: [])
-                    GalleryDetailView(gallery: dummy, host: authVM.isLoggedIn ? .exhentai : .ehentai)
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("閉じる") { showRandomGallery = false }
-                            }
-                        }
-                }
-            }
+            Text(">> HIDDEN SUBSYSTEM UNLOCKED\n>> CHARACTER CENSUS: ONLINE\n>> ACCESS LEVEL: ELEVATED\n\n// This feature is exclusive to Cort:EX")
         }
         .fileImporter(
             isPresented: $showImportPicker,
@@ -737,49 +673,6 @@ struct SettingsView: View {
                 characterStats = counts.map { (name: $0.key, count: $0.value) }
                     .sorted { $0.count > $1.count }
                 isAnalyzing = false
-            }
-        }
-    }
-
-    private func startGalleryRoulette() {
-        isRolling = true
-        randomGalleryId = nil
-
-        Task {
-            // キャッシュからGID範囲を取得（お気に入り+ギャラリーリスト）
-            let ehFavs = FavoritesCache.shared.load()
-            let allGids = ehFavs.map(\.gid)
-            var maxGid = allGids.max() ?? 3_000_000
-            var minGid = max(allGids.min() ?? 1, 1)
-
-            // 最新のギャラリーリストからも取得を試みる
-            if let (galleries, _) = try? await EhClient.shared.fetchGalleryList(
-                host: KeychainService.load(key: "igneous") != nil ? .exhentai : .ehentai,
-                page: 0
-            ) {
-                if let latest = galleries.map(\.gid).max() { maxGid = max(maxGid, latest) }
-                if let oldest = galleries.map(\.gid).min() { minGid = min(minGid, oldest) }
-            }
-
-            let range = minGid...maxGid
-            let targetGid = Int.random(in: range)
-
-            // スロットマシン風アニメーション
-            for i in 0..<15 {
-                try? await Task.sleep(nanoseconds: UInt64(80_000_000 + i * 20_000_000))
-                await MainActor.run {
-                    withAnimation { rollingNumber = Int.random(in: range) }
-                }
-            }
-            await MainActor.run {
-                withAnimation {
-                    rollingNumber = targetGid
-                    randomGalleryId = targetGid
-                    isRolling = false
-                }
-                #if canImport(UIKit)
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
-                #endif
             }
         }
     }
