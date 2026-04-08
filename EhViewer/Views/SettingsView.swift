@@ -489,7 +489,9 @@ struct SettingsView: View {
                                     .font(.body.monospaced().bold())
                                     .foregroundStyle(.cyan)
                                 Spacer()
-                                if !characterStats.isEmpty {
+                                if isAnalyzing {
+                                    ProgressView().tint(.cyan)
+                                } else if !characterStats.isEmpty {
                                     Text("\(characterStats.count)")
                                         .font(.caption.monospaced())
                                         .foregroundStyle(.cyan.opacity(0.6))
@@ -664,36 +666,63 @@ struct SettingsView: View {
         }
     }
 
+    @State private var isAnalyzing = false
+
     private func analyzeCharacters() {
-        var counts: [String: Int] = [:]
-        var ehWithTags = 0
-        var nhWithTags = 0
+        guard !isAnalyzing else { return }
+        isAnalyzing = true
 
-        // E-Hentai favorites
-        let ehFavs = FavoritesCache.shared.load()
-        for gallery in ehFavs {
-            let charTags = gallery.tags.filter { $0.hasPrefix("character:") }
-            if !charTags.isEmpty { ehWithTags += 1 }
-            for tag in charTags {
-                let name = String(tag.dropFirst("character:".count))
-                counts[name, default: 0] += 1
+        Task {
+            var counts: [String: Int] = [:]
+            var ehWithTags = 0
+            var nhWithTags = 0
+
+            // E-Hentai: キャッシュのタグを使い、なければAPIでバルク取得
+            let ehFavs = FavoritesCache.shared.load()
+            let needsApi = ehFavs.filter { $0.tags.isEmpty || !$0.tags.contains(where: { $0.contains(":") }) }
+            let hasTagsAlready = ehFavs.filter { !$0.tags.isEmpty && $0.tags.contains(where: { $0.contains(":") }) }
+
+            // キャッシュにタグがある分を先に集計
+            for gallery in hasTagsAlready {
+                let charTags = gallery.tags.filter { $0.hasPrefix("character:") }
+                if !charTags.isEmpty { ehWithTags += 1 }
+                for tag in charTags {
+                    counts[String(tag.dropFirst("character:".count)), default: 0] += 1
+                }
+            }
+
+            // タグがないギャラリーはAPIでバルク取得
+            if !needsApi.isEmpty {
+                LogManager.shared.log("Census", "fetching tags for \(needsApi.count) E-H galleries via API...")
+                let tagMap = await EhClient.shared.fetchGalleryTags(galleries: needsApi)
+                for (_, tags) in tagMap {
+                    let charTags = tags.filter { $0.hasPrefix("character:") }
+                    if !charTags.isEmpty { ehWithTags += 1 }
+                    for tag in charTags {
+                        counts[String(tag.dropFirst("character:".count)), default: 0] += 1
+                    }
+                }
+                LogManager.shared.log("Census", "API done: \(tagMap.count) galleries tagged")
+            }
+
+            // nhentai favorites（キャッシュにタグあり）
+            let nhFavs = NhentaiFavoritesCache.shared.load()
+            for gallery in nhFavs {
+                let charTags = (gallery.tags ?? []).filter { $0.type == "character" }
+                if !charTags.isEmpty { nhWithTags += 1 }
+                for tag in charTags {
+                    counts[tag.name, default: 0] += 1
+                }
+            }
+
+            await MainActor.run {
+                ehTagCount = ehWithTags
+                nhTagCount = nhWithTags
+                characterStats = counts.map { (name: $0.key, count: $0.value) }
+                    .sorted { $0.count > $1.count }
+                isAnalyzing = false
             }
         }
-
-        // nhentai favorites
-        let nhFavs = NhentaiFavoritesCache.shared.load()
-        for gallery in nhFavs {
-            let charTags = (gallery.tags ?? []).filter { $0.type == "character" }
-            if !charTags.isEmpty { nhWithTags += 1 }
-            for tag in charTags {
-                counts[tag.name, default: 0] += 1
-            }
-        }
-
-        ehTagCount = ehWithTags
-        nhTagCount = nhWithTags
-        characterStats = counts.map { (name: $0.key, count: $0.value) }
-            .sorted { $0.count > $1.count }
     }
 
     private func startGalleryRoulette() {
