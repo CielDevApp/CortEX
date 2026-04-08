@@ -72,8 +72,6 @@ final class EhClient: Sendable {
         if page > 0 {
             queryItems.append("page=\(page)")
         }
-        // Extended mode強制（タグ取得のため）
-        queryItems.append("inline_set=dm_e")
         if !queryItems.isEmpty {
             urlString += "?" + queryItems.joined(separator: "&")
         }
@@ -90,6 +88,52 @@ final class EhClient: Sendable {
         let galleries = HTMLParser.parseGalleryList(html: html)
         let pageNumber = HTMLParser.parsePageNumber(html: html)
         return (galleries, pageNumber)
+    }
+
+    // MARK: - Bulk Tag Fetch (E-Hentai API)
+
+    /// E-Hentai JSON APIでギャラリーのタグをバルク取得（最大25件/リクエスト）
+    nonisolated func fetchGalleryTags(galleries: [Gallery]) async -> [Int: [String]] {
+        var result: [Int: [String]] = [:]
+        let chunks = stride(from: 0, to: galleries.count, by: 25).map {
+            Array(galleries[$0..<min($0 + 25, galleries.count)])
+        }
+
+        for chunk in chunks {
+            let gidlist = chunk.map { [$0.gid, $0.token] as [Any] }
+            let body: [String: Any] = [
+                "method": "gdata",
+                "gidlist": gidlist,
+                "namespace": 1
+            ]
+
+            guard let jsonData = try? JSONSerialization.data(withJSONObject: body),
+                  let url = URL(string: "https://api.e-hentai.org/api.php") else { continue }
+
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.httpBody = jsonData
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+            guard let (data, _) = try? await URLSession.shared.data(for: request),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let gmetadata = json["gmetadata"] as? [[String: Any]] else {
+                LogManager.shared.log("EhAPI", "gdata request failed for \(chunk.count) items")
+                continue
+            }
+
+            for meta in gmetadata {
+                guard let gid = meta["gid"] as? Int,
+                      let tags = meta["tags"] as? [String] else { continue }
+                result[gid] = tags
+            }
+
+            LogManager.shared.log("EhAPI", "gdata: \(gmetadata.count) galleries, tags fetched")
+            // レートリミット対策
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+
+        return result
     }
 
     // MARK: - Gallery Detail
