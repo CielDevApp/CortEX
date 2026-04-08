@@ -123,7 +123,10 @@ final class EhClient: Sendable {
             }
 
             var parsed = 0
+            var errors = 0
             for meta in gmetadata {
+                // 削除済みギャラリーはerrorフィールドを持つ
+                if meta["error"] != nil { errors += 1; continue }
                 // gid: Int or NSNumber
                 let gid: Int
                 if let n = meta["gid"] as? NSNumber { gid = n.intValue }
@@ -138,7 +141,7 @@ final class EhClient: Sendable {
                 parsed += 1
             }
 
-            LogManager.shared.log("EhAPI", "gdata: \(gmetadata.count) fetched, \(parsed) parsed")
+            LogManager.shared.log("EhAPI", "gdata: \(gmetadata.count) fetched, \(parsed) ok, \(errors) deleted")
             // レートリミット対策
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
