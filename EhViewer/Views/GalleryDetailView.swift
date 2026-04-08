@@ -464,7 +464,7 @@ struct GalleryDetailView: View {
                                     // CORTEX PROTOCOL: character tag age search
                                     if cortexUnlocked && namespace == "character" {
                                         Button {
-                                            let query = "\(tag) Age".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tag
+                                            let query = "\(tag) Age Animecharacter".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tag
                                             if let url = URL(string: "https://www.google.com/search?q=\(query)") {
                                                 cortexSearchURL = url
                                             }
