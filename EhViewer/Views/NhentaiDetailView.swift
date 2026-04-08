@@ -208,7 +208,7 @@ struct NhentaiDetailView: View {
 
                                     if cortexUnlocked && type == "character" {
                                         Button {
-                                            let query = "\(tag.name) Age Animecharacter".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tag.name
+                                            let query = "\(tag.name) Animecharacter Age".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tag.name
                                             if let url = URL(string: "https://www.google.com/search?q=\(query)") {
                                                 cortexSearchURL = url
                                             }
