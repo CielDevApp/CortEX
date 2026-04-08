@@ -95,8 +95,14 @@ final class EhClient: Sendable {
     /// E-Hentai JSON APIでギャラリーのタグをバルク取得（最大25件/リクエスト）
     nonisolated func fetchGalleryTags(galleries: [Gallery]) async -> [Int: [String]] {
         var result: [Int: [String]] = [:]
-        let chunks = stride(from: 0, to: galleries.count, by: 25).map {
-            Array(galleries[$0..<min($0 + 25, galleries.count)])
+
+        // GID重複排除（お気に入りキャッシュに重複がある場合）
+        var seen = Set<Int>()
+        let unique = galleries.filter { seen.insert($0.gid).inserted }
+        LogManager.shared.log("EhAPI", "fetchGalleryTags: \(galleries.count) input, \(unique.count) unique")
+
+        let chunks = stride(from: 0, to: unique.count, by: 25).map {
+            Array(unique[$0..<min($0 + 25, unique.count)])
         }
 
         for chunk in chunks {
@@ -141,7 +147,7 @@ final class EhClient: Sendable {
                 parsed += 1
             }
 
-            LogManager.shared.log("EhAPI", "gdata: \(gmetadata.count) fetched, \(parsed) ok, \(errors) deleted")
+            LogManager.shared.log("EhAPI", "gdata: \(gmetadata.count) fetched, \(parsed) ok, \(errors) deleted, total=\(result.count)")
             // レートリミット対策
             try? await Task.sleep(nanoseconds: 500_000_000)
         }

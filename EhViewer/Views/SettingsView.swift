@@ -606,7 +606,10 @@ struct SettingsView: View {
     @State private var isAnalyzing = false
 
     private func analyzeCharacters() {
-        guard !isAnalyzing else { return }
+        guard !isAnalyzing else {
+            LogManager.shared.log("Census", "already analyzing, skipped")
+            return
+        }
         isAnalyzing = true
 
         Task {
@@ -618,6 +621,7 @@ struct SettingsView: View {
             let ehFavs = FavoritesCache.shared.load()
             let needsApi = ehFavs.filter { $0.tags.isEmpty || !$0.tags.contains(where: { $0.contains(":") }) }
             let hasTagsAlready = ehFavs.filter { !$0.tags.isEmpty && $0.tags.contains(where: { $0.contains(":") }) }
+            LogManager.shared.log("Census", "E-H: \(ehFavs.count) total, \(hasTagsAlready.count) cached, \(needsApi.count) need API")
 
             // キャッシュにタグがある分を先に集計
             for gallery in hasTagsAlready {
@@ -666,6 +670,8 @@ struct SettingsView: View {
                     counts[tag.name, default: 0] += 1
                 }
             }
+
+            LogManager.shared.log("Census", "done: \(counts.count) unique chars, ehWithChars=\(ehWithTags), nhWithChars=\(nhWithTags)")
 
             await MainActor.run {
                 ehTagCount = ehWithTags
