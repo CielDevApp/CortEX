@@ -122,18 +122,23 @@ final class EhClient: Sendable {
                 continue
             }
 
+            var parsed = 0
             for meta in gmetadata {
+                // gid: Int or NSNumber
                 let gid: Int
-                if let intGid = meta["gid"] as? Int {
-                    gid = intGid
-                } else if let numGid = meta["gid"] as? NSNumber {
-                    gid = numGid.intValue
-                } else { continue }
-                guard let tags = meta["tags"] as? [String] else { continue }
+                if let n = meta["gid"] as? NSNumber { gid = n.intValue }
+                else if let i = meta["gid"] as? Int { gid = i }
+                else { continue }
+                // tags: [String] or [Any]
+                let tags: [String]
+                if let s = meta["tags"] as? [String] { tags = s }
+                else if let a = meta["tags"] as? [Any] { tags = a.compactMap { $0 as? String } }
+                else { continue }
                 result[gid] = tags
+                parsed += 1
             }
 
-            LogManager.shared.log("EhAPI", "gdata: \(gmetadata.count) galleries, tags fetched")
+            LogManager.shared.log("EhAPI", "gdata: \(gmetadata.count) fetched, \(parsed) parsed")
             // レートリミット対策
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
