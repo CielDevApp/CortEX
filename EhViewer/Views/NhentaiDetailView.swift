@@ -10,6 +10,7 @@ struct NhentaiDetailView: View {
     @State private var coverImage: PlatformImage?
     @State private var readerRequest: NhReaderRequest?
     @State private var isFavorited: Bool
+    @State private var cortexSearchURL: URL?
 
     private var gallery: NhentaiClient.NhGallery { detail.gallery ?? initialGallery }
 
@@ -48,6 +49,9 @@ struct NhentaiDetailView: View {
             NhTagSearchResultView(search: search)
         }
         .id(initialGallery.id)
+        .sheet(item: $cortexSearchURL) { url in
+            InAppBrowserView(url: url)
+        }
         .task {
             await loadFullDetail()
             await loadCover()
@@ -205,11 +209,9 @@ struct NhentaiDetailView: View {
                                     if cortexUnlocked && type == "character" {
                                         Button {
                                             let query = "\(tag.name) Age".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tag.name
-                                            #if canImport(UIKit)
                                             if let url = URL(string: "https://www.google.com/search?q=\(query)") {
-                                                UIApplication.shared.open(url)
+                                                cortexSearchURL = url
                                             }
-                                            #endif
                                         } label: {
                                             Image(systemName: "magnifyingglass")
                                                 .font(.system(size: 9))
