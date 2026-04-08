@@ -40,6 +40,15 @@ struct SettingsView: View {
     @State private var showNhCDNVerify = false
     @State private var nhLoggedIn = NhentaiCookieManager.isLoggedIn()
     @AppStorage("showAdvancedSettings") private var showAdvanced = false
+    // CORTEX PROTOCOL (hidden)
+    @State private var versionTapCount = 0
+    @AppStorage("cortexProtocolUnlocked") private var cortexUnlocked = false
+    @State private var showCortexActivation = false
+    @State private var cortexAnimText = ""
+    @State private var showRandomGallery = false
+    @State private var randomGalleryId: Int?
+    @State private var isRolling = false
+    @State private var rollingNumber = 0
 
     private var maxMB: Int { ImageCache.shared.maxDiskBytes / 1_048_576 }
     private var isOverLimit: Bool { readerCacheMB > maxMB }
@@ -53,7 +62,24 @@ struct SettingsView: View {
                         Text("バージョン"); Spacer()
                         Text("Cort:EX ver.02a f2")
                             .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(cortexUnlocked ? .cyan : .secondary)
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if cortexUnlocked { return }
+                        versionTapCount += 1
+                        if versionTapCount >= 7 {
+                            cortexUnlocked = true
+                            showCortexActivation = true
+                            #if canImport(UIKit)
+                            let g = UIImpactFeedbackGenerator(style: .heavy)
+                            g.impactOccurred()
+                            #endif
+                        } else if versionTapCount >= 4 {
+                            #if canImport(UIKit)
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            #endif
+                        }
                     }
                 }
 
@@ -395,6 +421,59 @@ struct SettingsView: View {
                 }
 
                 } // end advanced settings
+
+                // CORTEX PROTOCOL (hidden section)
+                if cortexUnlocked {
+                    Section {
+                        // Gallery Roulette
+                        Button {
+                            startGalleryRoulette()
+                        } label: {
+                            HStack {
+                                Image(systemName: "dice.fill")
+                                    .foregroundStyle(.cyan)
+                                    .symbolEffect(.bounce, value: isRolling)
+                                if isRolling {
+                                    Text("G-\(String(format: "%06d", rollingNumber))")
+                                        .font(.body.monospaced().bold())
+                                        .foregroundStyle(.cyan)
+                                        .contentTransition(.numericText())
+                                } else if let gid = randomGalleryId {
+                                    Text("G-\(gid)")
+                                        .font(.body.monospaced().bold())
+                                        .foregroundStyle(.green)
+                                } else {
+                                    Text("GALLERY ROULETTE")
+                                        .font(.body.monospaced().bold())
+                                        .foregroundStyle(.cyan)
+                                }
+                                Spacer()
+                                if isRolling {
+                                    ProgressView().tint(.cyan)
+                                }
+                            }
+                        }
+                        .disabled(isRolling)
+
+                        if randomGalleryId != nil {
+                            Button {
+                                showRandomGallery = true
+                            } label: {
+                                Label("OPEN", systemImage: "arrow.right.circle.fill")
+                                    .font(.body.monospaced())
+                                    .foregroundStyle(.green)
+                            }
+                        }
+
+                        Text("E-Hentai全域からランダムにギャラリーを選出")
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.cyan.opacity(0.6))
+                    } header: {
+                        Label("CORTEX PROTOCOL", systemImage: "cpu")
+                            .foregroundStyle(.cyan)
+                            .font(.caption.monospaced().bold())
+                    }
+                }
             }
             .navigationTitle("設定")
             .onAppear {
@@ -472,6 +551,24 @@ struct SettingsView: View {
             NhentaiCDNVerifyView()
         }
         #endif
+        .alert("CORTEX PROTOCOL", isPresented: $showCortexActivation) {
+            Button("ACKNOWLEDGE") {}
+        } message: {
+            Text(">> HIDDEN SUBSYSTEM UNLOCKED\n>> GALLERY ROULETTE: ONLINE\n>> ACCESS LEVEL: ELEVATED\n\n// This feature is exclusive to Cort:EX")
+        }
+        .sheet(isPresented: $showRandomGallery) {
+            if let gid = randomGalleryId {
+                NavigationStack {
+                    let dummy = Gallery(gid: gid, token: "", title: "G-\(gid)", category: nil, coverURL: nil, rating: 0, pageCount: 0, postedDate: "", uploader: nil, tags: [])
+                    GalleryDetailView(gallery: dummy, host: authVM.isLoggedIn ? .exhentai : .ehentai)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("閉じる") { showRandomGallery = false }
+                            }
+                        }
+                }
+            }
+        }
         .fileImporter(
             isPresented: $showImportPicker,
             allowedContentTypes: [.json],
@@ -524,6 +621,34 @@ struct SettingsView: View {
             }
             Button("CDN認証（画像DL用）") { showNhCDNVerify = true }
                 .foregroundColor(hasCf ? .secondary : .orange)
+        }
+    }
+
+    private func startGalleryRoulette() {
+        isRolling = true
+        randomGalleryId = nil
+        // ランダムなギャラリーIDを生成（E-Hentaiの範囲: ~3900000）
+        let maxGid = 3_900_000
+        let targetGid = Int.random(in: 100_000...maxGid)
+
+        // スロットマシン風の数字アニメーション
+        Task {
+            for i in 0..<15 {
+                try? await Task.sleep(nanoseconds: UInt64(80_000_000 + i * 20_000_000))
+                await MainActor.run {
+                    withAnimation { rollingNumber = Int.random(in: 100_000...maxGid) }
+                }
+            }
+            await MainActor.run {
+                withAnimation {
+                    rollingNumber = targetGid
+                    randomGalleryId = targetGid
+                    isRolling = false
+                }
+                #if canImport(UIKit)
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                #endif
+            }
         }
     }
 
