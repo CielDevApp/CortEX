@@ -52,6 +52,9 @@ struct SettingsView: View {
     @State private var characterStats: [(name: String, count: Int)] = []
     @State private var showCharacterList = false
     @State private var cortexSearchURL: URL?
+    @State private var characterAges: [String: Int] = [:]  // name -> age
+    @State private var ehTagCount = 0
+    @State private var nhTagCount = 0
 
     private var maxMB: Int { ImageCache.shared.maxDiskBytes / 1_048_576 }
     private var isOverLimit: Bool { readerCacheMB > maxMB }
@@ -581,59 +584,12 @@ struct SettingsView: View {
         }
         #endif
         .sheet(isPresented: $showCharacterList) {
-            NavigationStack {
-                List {
-                    if characterStats.isEmpty {
-                        Text("キャラクターが見つかりません")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Section {
-                            ForEach(Array(characterStats.enumerated()), id: \.element.name) { i, stat in
-                                HStack {
-                                    Text("\(i + 1).")
-                                        .font(.caption.monospaced())
-                                        .foregroundStyle(.secondary)
-                                        .frame(width: 30, alignment: .trailing)
-                                    Text(stat.name)
-                                        .font(.body)
-                                    Spacer()
-                                    Text("\(stat.count)")
-                                        .font(.caption.monospaced().bold())
-                                        .foregroundStyle(.cyan)
-                                    // Age search button
-                                    Button {
-                                        let query = "\(stat.name) Animecharacter Age".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? stat.name
-                                        if let url = URL(string: "https://www.google.com/search?q=\(query)") {
-                                            cortexSearchURL = url
-                                        }
-                                    } label: {
-                                        Image(systemName: "magnifyingglass")
-                                            .font(.system(size: 10))
-                                            .padding(4)
-                                            .background(Color.cyan.opacity(0.15))
-                                            .foregroundStyle(.cyan)
-                                            .clipShape(Circle())
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        } header: {
-                            Text("\(characterStats.count) characters from \(FavoritesCache.shared.load().count + NhentaiFavoritesCache.shared.load().count) favorites")
-                                .font(.caption.monospaced())
-                        }
-                    }
-                }
-                .navigationTitle("CHARACTER CENSUS")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("閉じる") { showCharacterList = false }
-                    }
-                }
-            }
-            .sheet(item: $cortexSearchURL) { url in
-                InAppBrowserView(url: url)
-            }
+            CharacterCensusView(
+                stats: characterStats,
+                ages: $characterAges,
+                ehTagCount: ehTagCount,
+                nhTagCount: nhTagCount
+            )
         }
         .alert("CORTEX PROTOCOL", isPresented: $showCortexActivation) {
             Button("ACKNOWLEDGE") {}
@@ -710,26 +666,32 @@ struct SettingsView: View {
 
     private func analyzeCharacters() {
         var counts: [String: Int] = [:]
+        var ehWithTags = 0
+        var nhWithTags = 0
 
         // E-Hentai favorites
         let ehFavs = FavoritesCache.shared.load()
         for gallery in ehFavs {
-            for tag in gallery.tags {
-                if tag.hasPrefix("character:") {
-                    let name = String(tag.dropFirst("character:".count))
-                    counts[name, default: 0] += 1
-                }
+            let charTags = gallery.tags.filter { $0.hasPrefix("character:") }
+            if !charTags.isEmpty { ehWithTags += 1 }
+            for tag in charTags {
+                let name = String(tag.dropFirst("character:".count))
+                counts[name, default: 0] += 1
             }
         }
 
         // nhentai favorites
         let nhFavs = NhentaiFavoritesCache.shared.load()
         for gallery in nhFavs {
-            for tag in gallery.tags ?? [] where tag.type == "character" {
+            let charTags = (gallery.tags ?? []).filter { $0.type == "character" }
+            if !charTags.isEmpty { nhWithTags += 1 }
+            for tag in charTags {
                 counts[tag.name, default: 0] += 1
             }
         }
 
+        ehTagCount = ehWithTags
+        nhTagCount = nhWithTags
         characterStats = counts.map { (name: $0.key, count: $0.value) }
             .sorted { $0.count > $1.count }
     }
@@ -784,5 +746,244 @@ struct SettingsView: View {
         default: tgtName = tgt
         }
         return "\(srcName) → \(tgtName)"
+    }
+}
+
+// MARK: - CHARACTER CENSUS View
+
+private struct CharacterCensusView: View {
+    let stats: [(name: String, count: Int)]
+    @Binding var ages: [String: Int]
+    let ehTagCount: Int
+    let nhTagCount: Int
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var searchText = ""
+    @State private var selectedCharacter: String?
+    @State private var cortexSearchURL: URL?
+    @State private var ageInput = ""
+
+    private var filteredStats: [(name: String, count: Int)] {
+        if searchText.isEmpty { return stats }
+        return stats.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+    }
+
+    private var averageAge: Double? {
+        let entered = ages.values.filter { $0 > 0 }
+        guard !entered.isEmpty else { return nil }
+        return Double(entered.reduce(0, +)) / Double(entered.count)
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                // Stats header
+                Section {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(stats.count)")
+                                .font(.title.monospaced().bold())
+                                .foregroundStyle(.cyan)
+                            Text("CHARACTERS")
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 2) {
+                            if let avg = averageAge {
+                                Text(String(format: "%.1f", avg))
+                                    .font(.title.monospaced().bold())
+                                    .foregroundStyle(.green)
+                                Text("AVG AGE (\(ages.count)/\(stats.count))")
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("---")
+                                    .font(.title.monospaced().bold())
+                                    .foregroundStyle(.secondary)
+                                Text("AVG AGE")
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    Text("E-H: \(ehTagCount)件にキャラタグ / nh: \(nhTagCount)件にキャラタグ")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+
+                // Character list
+                Section {
+                    ForEach(Array(filteredStats.enumerated()), id: \.element.name) { i, stat in
+                        VStack(spacing: 0) {
+                            HStack {
+                                Text("\(i + 1).")
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 30, alignment: .trailing)
+
+                                Button {
+                                    selectedCharacter = stat.name
+                                } label: {
+                                    Text(stat.name)
+                                        .font(.body)
+                                        .foregroundStyle(.primary)
+                                }
+
+                                Spacer()
+
+                                Text("x\(stat.count)")
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.cyan)
+
+                                // Age badge or input
+                                if let age = ages[stat.name] {
+                                    Text("\(age)")
+                                        .font(.caption.monospaced().bold())
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Color.green.opacity(0.2))
+                                        .foregroundStyle(.green)
+                                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                                        .onTapGesture {
+                                            ages.removeValue(forKey: stat.name)
+                                        }
+                                }
+
+                                // Age search
+                                Button {
+                                    let q = "\(stat.name) Animecharacter Age".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? stat.name
+                                    if let url = URL(string: "https://www.google.com/search?q=\(q)") {
+                                        cortexSearchURL = url
+                                    }
+                                } label: {
+                                    Image(systemName: "magnifyingglass")
+                                        .font(.system(size: 10))
+                                        .padding(4)
+                                        .background(Color.cyan.opacity(0.15))
+                                        .foregroundStyle(.cyan)
+                                        .clipShape(Circle())
+                                }
+                                .buttonStyle(.plain)
+                            }
+
+                            // Age input (inline)
+                            if ages[stat.name] == nil {
+                                HStack {
+                                    Spacer()
+                                    TextField("Age", text: Binding(
+                                        get: { "" },
+                                        set: { val in
+                                            if let age = Int(val), age > 0 {
+                                                ages[stat.name] = age
+                                            }
+                                        }
+                                    ))
+                                    .font(.caption.monospaced())
+                                    .keyboardType(.numberPad)
+                                    .frame(width: 50)
+                                    .textFieldStyle(.roundedBorder)
+                                }
+                                .padding(.top, 2)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("RANKING")
+                        .font(.caption.monospaced())
+                }
+            }
+            .searchable(text: $searchText, prompt: "キャラクター検索")
+            .navigationTitle("CHARACTER CENSUS")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("閉じる") { dismiss() }
+                }
+                if !ages.isEmpty {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("リセット") { ages.removeAll() }
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .sheet(item: $cortexSearchURL) { url in
+                InAppBrowserView(url: url)
+            }
+            .sheet(item: $selectedCharacter) { name in
+                CharacterWorksView(characterName: name)
+            }
+        }
+    }
+}
+
+extension String: @retroactive Identifiable {
+    public var id: String { self }
+}
+
+// MARK: - Character Works View
+
+private struct CharacterWorksView: View {
+    let characterName: String
+    @Environment(\.dismiss) private var dismiss
+
+    private var ehWorks: [Gallery] {
+        FavoritesCache.shared.load().filter { gallery in
+            gallery.tags.contains("character:\(characterName)")
+        }
+    }
+
+    private var nhWorks: [NhentaiClient.NhGallery] {
+        NhentaiFavoritesCache.shared.load().filter { gallery in
+            (gallery.tags ?? []).contains { $0.type == "character" && $0.name == characterName }
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if !ehWorks.isEmpty {
+                    Section("E-Hentai (\(ehWorks.count))") {
+                        ForEach(ehWorks) { gallery in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(gallery.title)
+                                    .font(.subheadline)
+                                    .lineLimit(2)
+                                Text("GID: \(gallery.gid)")
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+
+                if !nhWorks.isEmpty {
+                    Section("nhentai (\(nhWorks.count))") {
+                        ForEach(nhWorks) { gallery in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(gallery.displayTitle)
+                                    .font(.subheadline)
+                                    .lineLimit(2)
+                                Text("ID: \(gallery.id)")
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+
+                if ehWorks.isEmpty && nhWorks.isEmpty {
+                    Text("作品が見つかりません")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle(characterName)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("閉じる") { dismiss() }
+                }
+            }
+        }
     }
 }
