@@ -587,10 +587,11 @@ struct SettingsView: View {
         #endif
         .sheet(isPresented: $showCharacterList) {
             CharacterCensusView(
-                stats: characterStats,
+                stats: $characterStats,
                 ages: $characterAges,
-                ehTagCount: ehTagCount,
-                nhTagCount: nhTagCount
+                ehTagCount: $ehTagCount,
+                nhTagCount: $nhTagCount,
+                isAnalyzing: $isAnalyzing
             )
         }
         .alert("CORTEX PROTOCOL", isPresented: $showCortexActivation) {
@@ -781,10 +782,11 @@ struct SettingsView: View {
 // MARK: - CHARACTER CENSUS View
 
 private struct CharacterCensusView: View {
-    let stats: [(name: String, count: Int)]
+    @Binding var stats: [(name: String, count: Int)]
     @Binding var ages: [String: Int]
-    let ehTagCount: Int
-    let nhTagCount: Int
+    @Binding var ehTagCount: Int
+    @Binding var nhTagCount: Int
+    @Binding var isAnalyzing: Bool
 
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
@@ -834,6 +836,14 @@ private struct CharacterCensusView: View {
                                     .font(.caption2.monospaced())
                                     .foregroundStyle(.secondary)
                             }
+                        }
+                    }
+                    if isAnalyzing {
+                        HStack {
+                            ProgressView().tint(.cyan)
+                            Text("E-Hentai APIからタグ取得中...")
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.cyan)
                         }
                     }
                     Text("E-H: \(ehTagCount)件にキャラタグ / nh: \(nhTagCount)件にキャラタグ")
