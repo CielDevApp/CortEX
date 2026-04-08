@@ -123,8 +123,13 @@ final class EhClient: Sendable {
             }
 
             for meta in gmetadata {
-                guard let gid = meta["gid"] as? Int,
-                      let tags = meta["tags"] as? [String] else { continue }
+                let gid: Int
+                if let intGid = meta["gid"] as? Int {
+                    gid = intGid
+                } else if let numGid = meta["gid"] as? NSNumber {
+                    gid = numGid.intValue
+                } else { continue }
+                guard let tags = meta["tags"] as? [String] else { continue }
                 result[gid] = tags
             }
 
