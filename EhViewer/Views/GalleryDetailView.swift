@@ -1,5 +1,8 @@
 import SwiftUI
 import TipKit
+#if canImport(UIKit)
+import WebKit
+#endif
 
 // MARK: - スプライト画像キャッシュ（メモリ + ImageCacheのディスクキャッシュ）
 
@@ -304,6 +307,9 @@ struct GalleryDetailView: View {
                 title: search.displayTitle
             )
         }
+        .sheet(item: $cortexSearchURL) { url in
+            InAppBrowserView(url: url)
+        }
         .toolbar {
             if let detail {
                 ToolbarItem(placement: .automatic) {
@@ -430,6 +436,7 @@ struct GalleryDetailView: View {
     // MARK: - Tags
 
     @AppStorage("cortexProtocolUnlocked") private var cortexUnlocked = false
+    @State private var cortexSearchURL: URL?
 
     private func tagsSection(_ detail: GalleryDetail) -> some View {
         GroupBox("タグ") {
@@ -458,11 +465,9 @@ struct GalleryDetailView: View {
                                     if cortexUnlocked && namespace == "character" {
                                         Button {
                                             let query = "\(tag) Age".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tag
-                                            #if canImport(UIKit)
                                             if let url = URL(string: "https://www.google.com/search?q=\(query)") {
-                                                UIApplication.shared.open(url)
+                                                cortexSearchURL = url
                                             }
-                                            #endif
                                         } label: {
                                             Image(systemName: "magnifyingglass")
                                                 .font(.system(size: 9))
@@ -960,3 +965,51 @@ struct FlowLayout: Layout {
         return (CGSize(width: maxWidth, height: totalHeight), positions)
     }
 }
+
+// MARK: - URL Identifiable (CORTEX PROTOCOL)
+
+extension URL: @retroactive Identifiable {
+    public var id: String { absoluteString }
+}
+
+// MARK: - In-App Browser (CORTEX PROTOCOL)
+
+#if canImport(UIKit)
+struct InAppBrowserView: View {
+    let url: URL
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            InAppWebView(url: url)
+                .ignoresSafeArea(edges: .bottom)
+                .navigationTitle(url.host ?? "")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("閉じる") { dismiss() }
+                    }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            UIApplication.shared.open(url)
+                        } label: {
+                            Image(systemName: "safari")
+                        }
+                    }
+                }
+        }
+    }
+}
+
+struct InAppWebView: UIViewRepresentable {
+    let url: URL
+
+    func makeUIView(context: Context) -> WKWebView {
+        let wv = WKWebView()
+        wv.load(URLRequest(url: url))
+        return wv
+    }
+
+    func updateUIView(_ webView: WKWebView, context: Context) {}
+}
+#endif
