@@ -744,16 +744,31 @@ struct SettingsView: View {
     private func startGalleryRoulette() {
         isRolling = true
         randomGalleryId = nil
-        // ランダムなギャラリーIDを生成（E-Hentaiの範囲: ~3900000）
-        let maxGid = 3_900_000
-        let targetGid = Int.random(in: 100_000...maxGid)
 
-        // スロットマシン風の数字アニメーション
         Task {
+            // キャッシュからGID範囲を取得（お気に入り+ギャラリーリスト）
+            let ehFavs = FavoritesCache.shared.load()
+            let allGids = ehFavs.map(\.gid)
+            var maxGid = allGids.max() ?? 3_000_000
+            var minGid = max(allGids.min() ?? 1, 1)
+
+            // 最新のギャラリーリストからも取得を試みる
+            if let (galleries, _) = try? await EhClient.shared.fetchGalleryList(
+                host: KeychainService.load(key: "igneous") != nil ? .exhentai : .ehentai,
+                page: 0
+            ) {
+                if let latest = galleries.map(\.gid).max() { maxGid = max(maxGid, latest) }
+                if let oldest = galleries.map(\.gid).min() { minGid = min(minGid, oldest) }
+            }
+
+            let range = minGid...maxGid
+            let targetGid = Int.random(in: range)
+
+            // スロットマシン風アニメーション
             for i in 0..<15 {
                 try? await Task.sleep(nanoseconds: UInt64(80_000_000 + i * 20_000_000))
                 await MainActor.run {
-                    withAnimation { rollingNumber = Int.random(in: 100_000...maxGid) }
+                    withAnimation { rollingNumber = Int.random(in: range) }
                 }
             }
             await MainActor.run {
