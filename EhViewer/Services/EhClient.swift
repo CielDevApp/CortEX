@@ -72,6 +72,8 @@ final class EhClient: Sendable {
         if page > 0 {
             queryItems.append("page=\(page)")
         }
+        // Extended mode強制（タグ取得のため）
+        queryItems.append("inline_set=dm_e")
         if !queryItems.isEmpty {
             urlString += "?" + queryItems.joined(separator: "&")
         }
