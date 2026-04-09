@@ -438,6 +438,18 @@ struct GalleryDetailView: View {
     @AppStorage("cortexProtocolUnlocked") private var cortexUnlocked = false
     @State private var cortexSearchURL: URL?
 
+    private func cortexAge(for characterName: String) -> Int? {
+        guard let ages = UserDefaults.standard.dictionary(forKey: "cortex_character_ages") as? [String: Int] else { return nil }
+        // 完全一致
+        if let age = ages[characterName] { return age }
+        // 部分一致（CENSUSで登録した名前と詳細タグの名前が微妙に違う場合）
+        for (name, age) in ages {
+            if name.localizedCaseInsensitiveCompare(characterName) == .orderedSame { return age }
+            if characterName.localizedCaseInsensitiveContains(name) || name.localizedCaseInsensitiveContains(characterName) { return age }
+        }
+        return nil
+    }
+
     private func tagsSection(_ detail: GalleryDetail) -> some View {
         GroupBox("タグ") {
             VStack(alignment: .leading, spacing: 8) {
@@ -461,8 +473,17 @@ struct GalleryDetailView: View {
                                             .clipShape(RoundedRectangle(cornerRadius: 4))
                                     }
 
-                                    // CORTEX PROTOCOL: character tag age search
+                                    // CORTEX PROTOCOL: character tag age + search
                                     if cortexUnlocked && namespace == "character" {
+                                        if let age = cortexAge(for: tag) {
+                                            Text("\(age)")
+                                                .font(.system(size: 9).monospaced().bold())
+                                                .padding(.horizontal, 4)
+                                                .padding(.vertical, 1)
+                                                .background(Color.green.opacity(0.2))
+                                                .foregroundStyle(.green)
+                                                .clipShape(RoundedRectangle(cornerRadius: 3))
+                                        }
                                         Button {
                                             let query = "\(tag) Animecharacter Age".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tag
                                             if let url = URL(string: "https://www.google.com/search?q=\(query)") {

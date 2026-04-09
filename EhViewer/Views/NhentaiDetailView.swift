@@ -180,6 +180,16 @@ struct NhentaiDetailView: View {
 
     @AppStorage("cortexProtocolUnlocked") private var cortexUnlocked = false
 
+    private func cortexAge(for characterName: String) -> Int? {
+        guard let ages = UserDefaults.standard.dictionary(forKey: "cortex_character_ages") as? [String: Int] else { return nil }
+        if let age = ages[characterName] { return age }
+        for (name, age) in ages {
+            if name.localizedCaseInsensitiveCompare(characterName) == .orderedSame { return age }
+            if characterName.localizedCaseInsensitiveContains(name) || name.localizedCaseInsensitiveContains(characterName) { return age }
+        }
+        return nil
+    }
+
     @ViewBuilder
     private func tagsSection(_ tags: [NhentaiClient.NhTag]) -> some View {
         let grouped = Dictionary(grouping: tags, by: \.type)
@@ -207,6 +217,15 @@ struct NhentaiDetailView: View {
                                     }
 
                                     if cortexUnlocked && type == "character" {
+                                        if let age = cortexAge(for: tag.name) {
+                                            Text("\(age)")
+                                                .font(.system(size: 9).monospaced().bold())
+                                                .padding(.horizontal, 4)
+                                                .padding(.vertical, 1)
+                                                .background(Color.green.opacity(0.2))
+                                                .foregroundStyle(.green)
+                                                .clipShape(RoundedRectangle(cornerRadius: 3))
+                                        }
                                         Button {
                                             let query = "\(tag.name) Animecharacter Age".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? tag.name
                                             if let url = URL(string: "https://www.google.com/search?q=\(query)") {
