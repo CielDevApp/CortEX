@@ -44,15 +44,7 @@ struct SettingsView: View {
     @State private var versionTapCount = 0
     @AppStorage("cortexProtocolUnlocked") private var cortexUnlocked = false
     @State private var showCortexActivation = false
-    @State private var characterStats: [(name: String, count: Int)] = []
-    @State private var showCharacterList = false
     @State private var cortexSearchURL: URL?
-    @State private var characterAges: [String: Int] = {
-        // UserDefaultsから復元
-        (UserDefaults.standard.dictionary(forKey: "cortex_character_ages") as? [String: Int]) ?? [:]
-    }()
-    @State private var ehTagCount = 0
-    @State private var nhTagCount = 0
 
     private var maxMB: Int { ImageCache.shared.maxDiskBytes / 1_048_576 }
     private var isOverLimit: Bool { readerCacheMB > maxMB }
@@ -160,33 +152,6 @@ struct SettingsView: View {
                     HStack { Text("キャッシュ件数"); Spacer(); Text("\(favCount)件").foregroundStyle(.secondary) }
                     Button("お気に入り全件再取得") { showFullRefresh = true }
                     Text("全ページをサーバーから取得します。時間がかかり、BANされる可能性があります。")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
-
-                // キャラクター管理（設定トップレベル）
-                Section("キャラクター") {
-                    Button {
-                        analyzeCharacters()
-                        showCharacterList = true
-                    } label: {
-                        HStack {
-                            Image(systemName: "person.2.fill")
-                                .foregroundStyle(.secondary)
-                            Text("キャラクター管理")
-                            Spacer()
-                            if isAnalyzing {
-                                ProgressView()
-                            } else if !characterStats.isEmpty {
-                                Text("\(characterStats.count)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Image(systemName: "chevron.right")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    Text("お気に入りに登場するキャラクターを集計・管理します。")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
 
@@ -529,18 +494,6 @@ struct SettingsView: View {
             NhentaiCDNVerifyView()
         }
         #endif
-        .sheet(isPresented: $showCharacterList) {
-            CharacterCensusView(
-                stats: $characterStats,
-                ages: $characterAges,
-                ehTagCount: $ehTagCount,
-                nhTagCount: $nhTagCount,
-                isAnalyzing: $isAnalyzing
-            )
-        }
-        .onChange(of: characterAges) { _, newAges in
-            UserDefaults.standard.set(newAges, forKey: "cortex_character_ages")
-        }
         .alert("CORTEX PROTOCOL", isPresented: $showCortexActivation) {
             Button("ACKNOWLEDGE") {}
         } message: {
@@ -601,98 +554,6 @@ struct SettingsView: View {
         }
     }
 
-    @State private var isAnalyzing = false
-
-    private func analyzeCharacters() {
-        guard !isAnalyzing else {
-            LogManager.shared.log("Census", "already analyzing, skipped")
-            return
-        }
-        isAnalyzing = true
-
-        Task {
-            var counts: [String: Int] = [:]
-            var ehWithTags = 0
-            var nhWithTags = 0
-
-            // E-Hentai: キャッシュのタグがAPI由来（namespace:付き）か判定
-            // HTMLパーサー由来のタグは不正確なことがあるため、API未取得なら再取得
-            let ehFavs = FavoritesCache.shared.load()
-            let apiTagged = UserDefaults.standard.bool(forKey: "cortex_eh_tags_fetched")
-            let needsApi = apiTagged
-                ? ehFavs.filter { $0.tags.isEmpty }  // API取得済みならタグ空のみ
-                : ehFavs  // 未取得なら全件API
-            let hasTagsAlready = apiTagged
-                ? ehFavs.filter { !$0.tags.isEmpty }
-                : []
-            LogManager.shared.log("Census", "E-H: \(ehFavs.count) total, \(hasTagsAlready.count) cached, \(needsApi.count) need API, apiTagged=\(apiTagged)")
-
-            // キャッシュにAPI由来タグがある分を先に集計
-            for gallery in hasTagsAlready {
-                let charTags = gallery.tags.filter { $0.hasPrefix("character:") }
-                if !charTags.isEmpty { ehWithTags += 1 }
-                for tag in charTags {
-                    counts[String(tag.dropFirst("character:".count)), default: 0] += 1
-                }
-            }
-
-            // APIでバルク取得
-            if !needsApi.isEmpty {
-                LogManager.shared.log("Census", "fetching tags for \(needsApi.count) E-H galleries via API...")
-                let tagMap = await EhClient.shared.fetchGalleryTags(galleries: needsApi)
-
-                // タグをキャッシュに書き戻す
-                var updated = ehFavs
-                var updateCount = 0
-                for i in updated.indices {
-                    if let tags = tagMap[updated[i].gid], !tags.isEmpty {
-                        updated[i].tags = tags
-                        updateCount += 1
-                    }
-                }
-                if updateCount > 0 {
-                    FavoritesCache.shared.save(updated)
-                    UserDefaults.standard.set(true, forKey: "cortex_eh_tags_fetched")
-                    LogManager.shared.log("Census", "cache updated: \(updateCount) galleries with API tags")
-                }
-
-                for (_, tags) in tagMap {
-                    let charTags = tags.filter { $0.hasPrefix("character:") }
-                    if !charTags.isEmpty { ehWithTags += 1 }
-                    for tag in charTags {
-                        counts[String(tag.dropFirst("character:".count)), default: 0] += 1
-                    }
-                }
-                LogManager.shared.log("Census", "API done: \(tagMap.count) galleries tagged")
-            }
-
-            // nhentai favorites（キャッシュにタグあり）
-            let nhFavs = NhentaiFavoritesCache.shared.load()
-            for gallery in nhFavs {
-                let charTags = (gallery.tags ?? []).filter { $0.type == "character" }
-                if !charTags.isEmpty { nhWithTags += 1 }
-                for tag in charTags {
-                    counts[tag.name, default: 0] += 1
-                }
-            }
-
-            LogManager.shared.log("Census", "done: \(counts.count) unique chars, ehWithChars=\(ehWithTags), nhWithChars=\(nhWithTags)")
-
-            // 男性主人公キャラを除外
-            let maleProtags: Set<String> = ["sensei", "teitoku", "gudao", "producer", "shikikan",
-                                            "admiral", "master", "commander", "protagonist"]
-            let filtered = counts.filter { !maleProtags.contains($0.key.lowercased()) }
-
-            await MainActor.run {
-                ehTagCount = ehWithTags
-                nhTagCount = nhWithTags
-                characterStats = filtered.map { (name: $0.key, count: $0.value) }
-                    .sorted { $0.count > $1.count }
-                isAnalyzing = false
-            }
-        }
-    }
-
     private func languagePackStatus() -> String {
         let src = translationSourceLang
         let tgt = translationLang
@@ -720,7 +581,7 @@ struct SettingsView: View {
 
 // MARK: - CHARACTER CENSUS View
 
-private struct CharacterCensusView: View {
+struct CharacterCensusView: View {
     @Binding var stats: [(name: String, count: Int)]
     @Binding var ages: [String: Int]
     @Binding var ehTagCount: Int
@@ -948,7 +809,7 @@ extension String: @retroactive Identifiable {
 
 // MARK: - Character Works View
 
-private struct CharacterWorksView: View {
+struct CharacterWorksView: View {
     let characterName: String
     @Environment(\.dismiss) private var dismiss
     @State private var selectedEhGallery: Gallery?
