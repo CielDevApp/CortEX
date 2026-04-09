@@ -937,15 +937,9 @@ private struct CharacterWorksView: View {
                                 selectedEhGallery = gallery
                             } label: {
                                 HStack(spacing: 10) {
-                                    if let coverURL = gallery.coverURL {
-                                        AsyncImage(url: coverURL) { image in
-                                            image.resizable().aspectRatio(contentMode: .fill)
-                                        } placeholder: {
-                                            Color.gray.opacity(0.2)
-                                        }
+                                    CachedImageView(url: gallery.coverURL, host: KeychainService.load(key: "igneous") != nil ? .exhentai : .ehentai)
                                         .frame(width: 45, height: 64)
                                         .clipShape(RoundedRectangle(cornerRadius: 4))
-                                    }
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(gallery.title)
                                             .font(.subheadline)
