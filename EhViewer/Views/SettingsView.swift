@@ -47,7 +47,10 @@ struct SettingsView: View {
     @State private var characterStats: [(name: String, count: Int)] = []
     @State private var showCharacterList = false
     @State private var cortexSearchURL: URL?
-    @State private var characterAges: [String: Int] = [:]  // name -> age
+    @State private var characterAges: [String: Int] = {
+        // UserDefaultsから復元
+        (UserDefaults.standard.dictionary(forKey: "cortex_character_ages") as? [String: Int]) ?? [:]
+    }()
     @State private var ehTagCount = 0
     @State private var nhTagCount = 0
 
@@ -543,6 +546,9 @@ struct SettingsView: View {
                 isAnalyzing: $isAnalyzing
             )
         }
+        .onChange(of: characterAges) { _, newAges in
+            UserDefaults.standard.set(newAges, forKey: "cortex_character_ages")
+        }
         .alert("CORTEX PROTOCOL", isPresented: $showCortexActivation) {
             Button("ACKNOWLEDGE") {}
         } message: {
@@ -723,9 +729,25 @@ private struct CharacterCensusView: View {
     @State private var cortexSearchURL: URL?
     @State private var ageInputs: [String: String] = [:]  // name -> 入力中テキスト
 
+    // キャッシュ: キャラ名 → 代表coverURL（初回アクセス時に構築）
+    @State private var coverURLCache: [String: URL] = [:]
+
     private var filteredStats: [(name: String, count: Int)] {
         if searchText.isEmpty { return stats }
         return stats.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+    }
+
+    private func coverURL(for characterName: String) -> URL? {
+        if let cached = coverURLCache[characterName] { return cached }
+        // E-Hentaiキャッシュから探す
+        let ehFavs = FavoritesCache.shared.load()
+        if let gallery = ehFavs.first(where: {
+            $0.tags.contains(where: { $0.hasPrefix("character:") && $0.dropFirst("character:".count).localizedCaseInsensitiveContains(characterName) })
+        }), let url = gallery.coverURL {
+            DispatchQueue.main.async { coverURLCache[characterName] = url }
+            return url
+        }
+        return nil
     }
 
     private var averageAge: Double? {
@@ -788,7 +810,12 @@ private struct CharacterCensusView: View {
                                 Text("\(i + 1).")
                                     .font(.caption.monospaced())
                                     .foregroundStyle(.secondary)
-                                    .frame(width: 30, alignment: .trailing)
+                                    .frame(width: 24, alignment: .trailing)
+
+                                // 代表作サムネ
+                                CachedImageView(url: coverURL(for: stat.name), host: KeychainService.load(key: "igneous") != nil ? .exhentai : .ehentai)
+                                    .frame(width: 32, height: 45)
+                                    .clipShape(RoundedRectangle(cornerRadius: 3))
 
                                 Button {
                                     selectedCharacter = stat.name
