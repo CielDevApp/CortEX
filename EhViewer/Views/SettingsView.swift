@@ -623,13 +623,19 @@ struct SettingsView: View {
             var ehWithTags = 0
             var nhWithTags = 0
 
-            // E-Hentai: キャッシュのタグを使い、なければAPIでバルク取得
+            // E-Hentai: キャッシュのタグがAPI由来（namespace:付き）か判定
+            // HTMLパーサー由来のタグは不正確なことがあるため、API未取得なら再取得
             let ehFavs = FavoritesCache.shared.load()
-            let needsApi = ehFavs.filter { $0.tags.isEmpty || !$0.tags.contains(where: { $0.contains(":") }) }
-            let hasTagsAlready = ehFavs.filter { !$0.tags.isEmpty && $0.tags.contains(where: { $0.contains(":") }) }
-            LogManager.shared.log("Census", "E-H: \(ehFavs.count) total, \(hasTagsAlready.count) cached, \(needsApi.count) need API")
+            let apiTagged = UserDefaults.standard.bool(forKey: "cortex_eh_tags_fetched")
+            let needsApi = apiTagged
+                ? ehFavs.filter { $0.tags.isEmpty }  // API取得済みならタグ空のみ
+                : ehFavs  // 未取得なら全件API
+            let hasTagsAlready = apiTagged
+                ? ehFavs.filter { !$0.tags.isEmpty }
+                : []
+            LogManager.shared.log("Census", "E-H: \(ehFavs.count) total, \(hasTagsAlready.count) cached, \(needsApi.count) need API, apiTagged=\(apiTagged)")
 
-            // キャッシュにタグがある分を先に集計
+            // キャッシュにAPI由来タグがある分を先に集計
             for gallery in hasTagsAlready {
                 let charTags = gallery.tags.filter { $0.hasPrefix("character:") }
                 if !charTags.isEmpty { ehWithTags += 1 }
@@ -638,12 +644,12 @@ struct SettingsView: View {
                 }
             }
 
-            // タグがないギャラリーはAPIでバルク取得
+            // APIでバルク取得
             if !needsApi.isEmpty {
                 LogManager.shared.log("Census", "fetching tags for \(needsApi.count) E-H galleries via API...")
                 let tagMap = await EhClient.shared.fetchGalleryTags(galleries: needsApi)
 
-                // タグをキャッシュに書き戻す（次回API不要）
+                // タグをキャッシュに書き戻す
                 var updated = ehFavs
                 var updateCount = 0
                 for i in updated.indices {
@@ -654,7 +660,8 @@ struct SettingsView: View {
                 }
                 if updateCount > 0 {
                     FavoritesCache.shared.save(updated)
-                    LogManager.shared.log("Census", "cache updated: \(updateCount) galleries with tags")
+                    UserDefaults.standard.set(true, forKey: "cortex_eh_tags_fetched")
+                    LogManager.shared.log("Census", "cache updated: \(updateCount) galleries with API tags")
                 }
 
                 for (_, tags) in tagMap {
