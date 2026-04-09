@@ -777,9 +777,6 @@ struct CharacterCensusView: View {
             .navigationTitle("CHARACTER CENSUS")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("閉じる") { dismiss() }
-                }
                 if cortexUnlocked && !ages.isEmpty {
                     ToolbarItem(placement: .primaryAction) {
                         Button("リセット") { showResetConfirm = true }
