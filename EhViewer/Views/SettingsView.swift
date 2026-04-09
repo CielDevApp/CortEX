@@ -686,10 +686,15 @@ struct SettingsView: View {
 
             LogManager.shared.log("Census", "done: \(counts.count) unique chars, ehWithChars=\(ehWithTags), nhWithChars=\(nhWithTags)")
 
+            // 男性主人公キャラを除外
+            let maleProtags: Set<String> = ["sensei", "teitoku", "gudao", "producer", "shikikan",
+                                            "admiral", "master", "commander", "protagonist"]
+            let filtered = counts.filter { !maleProtags.contains($0.key.lowercased()) }
+
             await MainActor.run {
                 ehTagCount = ehWithTags
                 nhTagCount = nhWithTags
-                characterStats = counts.map { (name: $0.key, count: $0.value) }
+                characterStats = filtered.map { (name: $0.key, count: $0.value) }
                     .sorted { $0.count > $1.count }
                 isAnalyzing = false
             }
@@ -734,7 +739,8 @@ private struct CharacterCensusView: View {
     @State private var searchText = ""
     @State private var selectedCharacter: String?
     @State private var cortexSearchURL: URL?
-    @State private var ageInputs: [String: String] = [:]  // name -> 入力中テキスト
+    @State private var ageInputs: [String: String] = [:]
+    @State private var showResetConfirm = false
 
     // キャッシュ: キャラ名 → 代表coverURL（初回アクセス時に構築）
     @State private var coverURLCache: [String: URL] = [:]
@@ -918,10 +924,16 @@ private struct CharacterCensusView: View {
                 }
                 if !ages.isEmpty {
                     ToolbarItem(placement: .primaryAction) {
-                        Button("リセット") { ages.removeAll() }
+                        Button("リセット") { showResetConfirm = true }
                             .foregroundStyle(.red)
                     }
                 }
+            }
+            .alert("年齢データをリセット", isPresented: $showResetConfirm) {
+                Button("全削除", role: .destructive) { ages.removeAll() }
+                Button("キャンセル", role: .cancel) {}
+            } message: {
+                Text("登録済みの年齢データ(\(ages.count)件)を全て削除しますか？")
             }
             .sheet(item: $cortexSearchURL) { url in
                 InAppBrowserView(url: url)
