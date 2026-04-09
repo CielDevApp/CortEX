@@ -424,42 +424,31 @@ struct SettingsView: View {
                     } else { Text("EXTREME") }
                 }
 
-                } // end advanced settings
-
-                // CORTEX PROTOCOL (hidden section)
-                if cortexUnlocked {
-                    Section {
-                        // Character Census
-                        Button {
-                            analyzeCharacters()
-                            showCharacterList = true
-                        } label: {
-                            HStack {
-                                Image(systemName: "person.2.fill")
-                                    .foregroundStyle(.cyan)
-                                Text("CHARACTER CENSUS")
-                                    .font(.body.monospaced().bold())
-                                    .foregroundStyle(.cyan)
-                                Spacer()
-                                if isAnalyzing {
-                                    ProgressView().tint(.cyan)
-                                } else if !characterStats.isEmpty {
-                                    Text("\(characterStats.count)")
-                                        .font(.caption.monospaced())
-                                        .foregroundStyle(.cyan.opacity(0.6))
-                                }
+                // キャラクター管理
+                Section("キャラクター") {
+                    Button {
+                        analyzeCharacters()
+                        showCharacterList = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "person.2.fill")
+                                .foregroundStyle(.secondary)
+                            Text("キャラクター管理")
+                            Spacer()
+                            if isAnalyzing {
+                                ProgressView()
+                            } else if !characterStats.isEmpty {
+                                Text("\(characterStats.count)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
                         }
-
-                        Text("お気に入りに登場するキャラクターを集計")
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.cyan.opacity(0.6))
-                    } header: {
-                        Label("CORTEX PROTOCOL", systemImage: "cpu")
-                            .foregroundStyle(.cyan)
-                            .font(.caption.monospaced().bold())
                     }
+                    Text("お気に入りに登場するキャラクターを集計・管理します。")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
+
+                } // end advanced settings
             }
             .navigationTitle("設定")
             .onAppear {
@@ -552,7 +541,7 @@ struct SettingsView: View {
         .alert("CORTEX PROTOCOL", isPresented: $showCortexActivation) {
             Button("ACKNOWLEDGE") {}
         } message: {
-            Text(">> HIDDEN SUBSYSTEM UNLOCKED\n>> CHARACTER CENSUS: ONLINE\n>> ACCESS LEVEL: ELEVATED\n\n// This feature is exclusive to Cort:EX")
+            Text(">> HIDDEN SUBSYSTEM UNLOCKED\n>> AGE VERIFICATION: ONLINE\n>> ACCESS LEVEL: ELEVATED\n\n// キャラクター管理に年齢機能が追加されました")
         }
         .fileImporter(
             isPresented: $showImportPicker,
@@ -735,6 +724,7 @@ private struct CharacterCensusView: View {
     @Binding var nhTagCount: Int
     @Binding var isAnalyzing: Bool
 
+    @AppStorage("cortexProtocolUnlocked") private var cortexUnlocked = false
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
     @State private var selectedCharacter: String?
@@ -784,21 +774,23 @@ private struct CharacterCensusView: View {
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
-                        VStack(alignment: .trailing, spacing: 2) {
-                            if let avg = averageAge {
-                                Text(String(format: "%.1f", avg))
-                                    .font(.title.monospaced().bold())
-                                    .foregroundStyle(.green)
-                                Text("AVG AGE (\(ages.count)/\(stats.count))")
-                                    .font(.caption2.monospaced())
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                Text("---")
-                                    .font(.title.monospaced().bold())
-                                    .foregroundStyle(.secondary)
-                                Text("AVG AGE")
-                                    .font(.caption2.monospaced())
-                                    .foregroundStyle(.secondary)
+                        if cortexUnlocked {
+                            VStack(alignment: .trailing, spacing: 2) {
+                                if let avg = averageAge {
+                                    Text(String(format: "%.1f", avg))
+                                        .font(.title.monospaced().bold())
+                                        .foregroundStyle(.green)
+                                    Text("AVG AGE (\(ages.count)/\(stats.count))")
+                                        .font(.caption2.monospaced())
+                                        .foregroundStyle(.secondary)
+                                } else {
+                                    Text("---")
+                                        .font(.title.monospaced().bold())
+                                        .foregroundStyle(.secondary)
+                                    Text("AVG AGE")
+                                        .font(.caption2.monospaced())
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
                     }
@@ -844,8 +836,8 @@ private struct CharacterCensusView: View {
                                     .font(.caption.monospaced())
                                     .foregroundStyle(.cyan)
 
-                                // Age badge or input
-                                if let age = ages[stat.name] {
+                                // Age badge (CORTEX PROTOCOL only)
+                                if cortexUnlocked, let age = ages[stat.name] {
                                     Text("\(age)")
                                         .font(.caption.monospaced().bold())
                                         .padding(.horizontal, 6)
@@ -858,25 +850,27 @@ private struct CharacterCensusView: View {
                                         }
                                 }
 
-                                // Age search
-                                Button {
-                                    let q = "\(stat.name) Animecharacter Age".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? stat.name
-                                    if let url = URL(string: "https://www.google.com/search?q=\(q)") {
-                                        cortexSearchURL = url
+                                // Age search (CORTEX PROTOCOL only)
+                                if cortexUnlocked {
+                                    Button {
+                                        let q = "\(stat.name) Animecharacter Age".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? stat.name
+                                        if let url = URL(string: "https://www.google.com/search?q=\(q)") {
+                                            cortexSearchURL = url
+                                        }
+                                    } label: {
+                                        Image(systemName: "magnifyingglass")
+                                            .font(.system(size: 10))
+                                            .padding(4)
+                                            .background(Color.cyan.opacity(0.15))
+                                            .foregroundStyle(.cyan)
+                                            .clipShape(Circle())
                                     }
-                                } label: {
-                                    Image(systemName: "magnifyingglass")
-                                        .font(.system(size: 10))
-                                        .padding(4)
-                                        .background(Color.cyan.opacity(0.15))
-                                        .foregroundStyle(.cyan)
-                                        .clipShape(Circle())
+                                    .buttonStyle(.plain)
                                 }
-                                .buttonStyle(.plain)
                             }
 
-                            // Age input (inline)
-                            if ages[stat.name] == nil {
+                            // Age input (CORTEX PROTOCOL only)
+                            if cortexUnlocked && ages[stat.name] == nil {
                                 HStack {
                                     Spacer()
                                     TextField("Age", text: Binding(
@@ -922,7 +916,7 @@ private struct CharacterCensusView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("閉じる") { dismiss() }
                 }
-                if !ages.isEmpty {
+                if cortexUnlocked && !ages.isEmpty {
                     ToolbarItem(placement: .primaryAction) {
                         Button("リセット") { showResetConfirm = true }
                             .foregroundStyle(.red)
