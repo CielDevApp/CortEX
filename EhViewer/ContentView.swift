@@ -240,7 +240,7 @@ struct ContentView: View {
                 .tabItem { Label("履歴", systemImage: "clock.arrow.circlepath") }
                 .tag(4)
             CharacterManagementTab()
-                .tabItem { Label("キャラクター", systemImage: "person.2.fill") }
+                .tabItem { Label("お気に入りキャラクター管理", systemImage: "person.2.fill") }
                 .tag(5)
             SettingsView(authVM: authVM)
                 .tabItem { Label("設定", systemImage: "gearshape.fill") }
