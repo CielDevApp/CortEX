@@ -163,6 +163,33 @@ struct SettingsView: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 }
 
+                // キャラクター管理（設定トップレベル）
+                Section("キャラクター") {
+                    Button {
+                        analyzeCharacters()
+                        showCharacterList = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "person.2.fill")
+                                .foregroundStyle(.secondary)
+                            Text("キャラクター管理")
+                            Spacer()
+                            if isAnalyzing {
+                                ProgressView()
+                            } else if !characterStats.isEmpty {
+                                Text("\(characterStats.count)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    Text("お気に入りに登場するキャラクターを集計・管理します。")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+
                 // 6. 画質設定（統合）
                 Section("画質設定") {
                     Picker("オンライン画質", selection: $onlineQualityMode) {
@@ -422,30 +449,6 @@ struct SettingsView: View {
                     if extremeMode.isEnabled {
                         Label("EXTREME MODE", systemImage: "bolt.fill").foregroundStyle(.red)
                     } else { Text("EXTREME") }
-                }
-
-                // キャラクター管理
-                Section("キャラクター") {
-                    Button {
-                        analyzeCharacters()
-                        showCharacterList = true
-                    } label: {
-                        HStack {
-                            Image(systemName: "person.2.fill")
-                                .foregroundStyle(.secondary)
-                            Text("キャラクター管理")
-                            Spacer()
-                            if isAnalyzing {
-                                ProgressView()
-                            } else if !characterStats.isEmpty {
-                                Text("\(characterStats.count)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    Text("お気に入りに登場するキャラクターを集計・管理します。")
-                        .font(.caption2).foregroundStyle(.secondary)
                 }
 
                 } // end advanced settings
