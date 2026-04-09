@@ -721,7 +721,7 @@ private struct CharacterCensusView: View {
     @State private var searchText = ""
     @State private var selectedCharacter: String?
     @State private var cortexSearchURL: URL?
-    @State private var ageInput = ""
+    @State private var ageInputs: [String: String] = [:]  // name -> 入力中テキスト
 
     private var filteredStats: [(name: String, count: Int)] {
         if searchText.isEmpty { return stats }
@@ -840,17 +840,31 @@ private struct CharacterCensusView: View {
                                 HStack {
                                     Spacer()
                                     TextField("Age", text: Binding(
-                                        get: { "" },
-                                        set: { val in
-                                            if let age = Int(val), age > 0 {
-                                                ages[stat.name] = age
-                                            }
-                                        }
+                                        get: { ageInputs[stat.name] ?? "" },
+                                        set: { ageInputs[stat.name] = $0 }
                                     ))
                                     .font(.caption.monospaced())
                                     .keyboardType(.numberPad)
-                                    .frame(width: 50)
+                                    .frame(width: 70)
                                     .textFieldStyle(.roundedBorder)
+                                    .onSubmit {
+                                        if let val = ageInputs[stat.name], let age = Int(val), age > 0 {
+                                            ages[stat.name] = age
+                                            ageInputs.removeValue(forKey: stat.name)
+                                        }
+                                    }
+
+                                    Button {
+                                        if let val = ageInputs[stat.name], let age = Int(val), age > 0 {
+                                            ages[stat.name] = age
+                                            ageInputs.removeValue(forKey: stat.name)
+                                        }
+                                    } label: {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.green)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .disabled(Int(ageInputs[stat.name] ?? "") == nil)
                                 }
                                 .padding(.top, 2)
                             }
@@ -922,14 +936,25 @@ private struct CharacterWorksView: View {
                             Button {
                                 selectedEhGallery = gallery
                             } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(gallery.title)
-                                        .font(.subheadline)
-                                        .foregroundStyle(.primary)
-                                        .lineLimit(2)
-                                    Text("GID: \(gallery.gid)")
-                                        .font(.caption2.monospaced())
-                                        .foregroundStyle(.secondary)
+                                HStack(spacing: 10) {
+                                    if let coverURL = gallery.coverURL {
+                                        AsyncImage(url: coverURL) { image in
+                                            image.resizable().aspectRatio(contentMode: .fill)
+                                        } placeholder: {
+                                            Color.gray.opacity(0.2)
+                                        }
+                                        .frame(width: 45, height: 64)
+                                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                                    }
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(gallery.title)
+                                            .font(.subheadline)
+                                            .foregroundStyle(.primary)
+                                            .lineLimit(2)
+                                        Text("GID: \(gallery.gid)")
+                                            .font(.caption2.monospaced())
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
                             }
                         }
@@ -942,14 +967,25 @@ private struct CharacterWorksView: View {
                             Button {
                                 selectedNhGallery = gallery
                             } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(gallery.displayTitle)
-                                        .font(.subheadline)
-                                        .foregroundStyle(.primary)
-                                        .lineLimit(2)
-                                    Text("ID: \(gallery.id)")
-                                        .font(.caption2.monospaced())
-                                        .foregroundStyle(.secondary)
+                                HStack(spacing: 10) {
+                                    if let cover = gallery.images?.cover {
+                                        AsyncImage(url: NhentaiClient.coverURL(mediaId: gallery.media_id, ext: cover.ext, path: cover.path)) { image in
+                                            image.resizable().aspectRatio(contentMode: .fill)
+                                        } placeholder: {
+                                            Color.gray.opacity(0.2)
+                                        }
+                                        .frame(width: 45, height: 64)
+                                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                                    }
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(gallery.displayTitle)
+                                            .font(.subheadline)
+                                            .foregroundStyle(.primary)
+                                            .lineLimit(2)
+                                        Text("ID: \(gallery.id)")
+                                            .font(.caption2.monospaced())
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
                             }
                         }
