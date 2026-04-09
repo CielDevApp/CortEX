@@ -239,9 +239,12 @@ struct ContentView: View {
             HistoryView()
                 .tabItem { Label("履歴", systemImage: "clock.arrow.circlepath") }
                 .tag(4)
+            CharacterManagementTab()
+                .tabItem { Label("キャラクター", systemImage: "person.2.fill") }
+                .tag(5)
             SettingsView(authVM: authVM)
                 .tabItem { Label("設定", systemImage: "gearshape.fill") }
-                .tag(5)
+                .tag(6)
         }
         .sheet(isPresented: $authVM.showingLogin) {
             LoginView(authVM: authVM)
@@ -571,6 +574,85 @@ struct ContentView: View {
 
             Text("\(pinManager.lockoutRemaining)秒後に再試行できます")
                 .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+// MARK: - キャラクター管理タブ
+
+struct CharacterManagementTab: View {
+    @State private var characterStats: [(name: String, count: Int)] = []
+    @State private var isAnalyzing = false
+    @State private var characterAges: [String: Int] = {
+        (UserDefaults.standard.dictionary(forKey: "cortex_character_ages") as? [String: Int]) ?? [:]
+    }()
+    @State private var ehTagCount = 0
+    @State private var nhTagCount = 0
+
+    var body: some View {
+        CharacterCensusView(
+            stats: $characterStats,
+            ages: $characterAges,
+            ehTagCount: $ehTagCount,
+            nhTagCount: $nhTagCount,
+            isAnalyzing: $isAnalyzing
+        )
+        .onAppear {
+            if characterStats.isEmpty { analyzeCharacters() }
+        }
+        .onChange(of: characterAges) { _, newAges in
+            UserDefaults.standard.set(newAges, forKey: "cortex_character_ages")
+        }
+    }
+
+    private func analyzeCharacters() {
+        guard !isAnalyzing else { return }
+        isAnalyzing = true
+        Task {
+            var counts: [String: Int] = [:]
+            var ehWith = 0, nhWith = 0
+
+            let ehFavs = FavoritesCache.shared.load()
+            let apiTagged = UserDefaults.standard.bool(forKey: "cortex_eh_tags_fetched")
+            let needsApi = apiTagged ? ehFavs.filter { $0.tags.isEmpty } : ehFavs
+            let cached = apiTagged ? ehFavs.filter { !$0.tags.isEmpty } : []
+
+            for g in cached {
+                let chars = g.tags.filter { $0.hasPrefix("character:") }
+                if !chars.isEmpty { ehWith += 1 }
+                for t in chars { counts[String(t.dropFirst("character:".count)), default: 0] += 1 }
+            }
+            if !needsApi.isEmpty {
+                let tagMap = await EhClient.shared.fetchGalleryTags(galleries: needsApi)
+                var updated = ehFavs
+                for i in updated.indices {
+                    if let tags = tagMap[updated[i].gid], !tags.isEmpty { updated[i].tags = tags }
+                }
+                FavoritesCache.shared.save(updated)
+                UserDefaults.standard.set(true, forKey: "cortex_eh_tags_fetched")
+                for (_, tags) in tagMap {
+                    let chars = tags.filter { $0.hasPrefix("character:") }
+                    if !chars.isEmpty { ehWith += 1 }
+                    for t in chars { counts[String(t.dropFirst("character:".count)), default: 0] += 1 }
+                }
+            }
+
+            let nhFavs = NhentaiFavoritesCache.shared.load()
+            for g in nhFavs {
+                let chars = (g.tags ?? []).filter { $0.type == "character" }
+                if !chars.isEmpty { nhWith += 1 }
+                for t in chars { counts[t.name, default: 0] += 1 }
+            }
+
+            let maleProtags: Set<String> = ["sensei", "teitoku", "gudao", "producer", "shikikan",
+                                            "admiral", "master", "commander", "protagonist"]
+            let filtered = counts.filter { !maleProtags.contains($0.key.lowercased()) }
+
+            await MainActor.run {
+                ehTagCount = ehWith; nhTagCount = nhWith
+                characterStats = filtered.map { (name: $0.key, count: $0.value) }.sorted { $0.count > $1.count }
+                isAnalyzing = false
+            }
         }
     }
 }
