@@ -76,13 +76,14 @@ struct SettingsView: View {
                             #endif
                         }
                     }
-                    .onLongPressGesture {
+                    .contextMenu {
                         if cortexUnlocked {
-                            cortexUnlocked = false
-                            versionTapCount = 0
-                            #if canImport(UIKit)
-                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                            #endif
+                            Button(role: .destructive) {
+                                cortexUnlocked = false
+                                versionTapCount = 0
+                            } label: {
+                                Label("CORTEX PROTOCOL 無効化", systemImage: "lock.fill")
+                            }
                         }
                     }
                 }
