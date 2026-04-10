@@ -68,12 +68,20 @@ struct SettingsView: View {
                             cortexUnlocked = true
                             showCortexActivation = true
                             #if canImport(UIKit)
-                            let g = UIImpactFeedbackGenerator(style: .heavy)
-                            g.impactOccurred()
+                            UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
                             #endif
                         } else if versionTapCount >= 4 {
                             #if canImport(UIKit)
                             UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            #endif
+                        }
+                    }
+                    .onLongPressGesture {
+                        if cortexUnlocked {
+                            cortexUnlocked = false
+                            versionTapCount = 0
+                            #if canImport(UIKit)
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                             #endif
                         }
                     }
