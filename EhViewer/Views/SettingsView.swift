@@ -58,7 +58,7 @@ struct SettingsView: View {
                         Text("バージョン"); Spacer()
                         Text("Cort:EX ver.02a f2")
                             .font(.caption.monospaced())
-                            .foregroundStyle(cortexUnlocked ? .cyan : .secondary)
+                            .foregroundStyle(cortexUnlocked ? Color(red: 0.85, green: 0.1, blue: 0.15) : .secondary)
                     }
                     .contentShape(Rectangle())
                     .onTapGesture {
