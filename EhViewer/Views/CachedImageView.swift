@@ -4,8 +4,6 @@ import SwiftUI
 struct CachedImageView: View {
     let url: URL?
     let host: GalleryHost
-    /// ダウンロード済みギャラリーのカバー流用（gid指定時はローカルを先にチェック）
-    var gid: Int? = nil
 
     @State private var uiImage: PlatformImage?
     @State private var failed = false
@@ -30,13 +28,6 @@ struct CachedImageView: View {
     private func loadImage() async {
         guard let url else { failed = true; return }
         let t0 = CFAbsoluteTimeGetCurrent()
-
-        // ダウンロード済みカバー → API不要で即表示
-        if let gid, let localCover = DownloadManager.shared.loadCoverImage(gid: gid) {
-            LogManager.shared.log("Thumb", "local cover hit gid=\(gid)")
-            uiImage = localCover
-            return
-        }
 
         // キャッシュヒット → 即表示
         if let cached = ImageCache.shared.image(for: url) {
