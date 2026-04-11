@@ -60,16 +60,20 @@ struct PagedReaderView: UIViewControllerRepresentable {
         let coord = context.coordinator
         coord.parent = self
 
+        // viewDidAppearからの同期更新時は再トリガーしない
+        guard !coord.isSyncingPage else { return }
+
         if let currentVC = pvc.viewControllers?.first as? ReaderPageVC,
            currentVC.pageIndex != currentPage {
             let direction: UIPageViewController.NavigationDirection =
                 currentPage > currentVC.pageIndex ? .forward : .reverse
             let newVC = coord.makePageVC(for: currentPage)
             pvc.setViewControllers([newVC], direction: direction, animated: false)
-            // normalizeIndexでページが正規化された場合、currentPageを実際の表示ページに同期
             if newVC.pageIndex != currentPage {
+                coord.isSyncingPage = true
                 DispatchQueue.main.async {
                     self.currentPage = newVC.pageIndex
+                    coord.isSyncingPage = false
                 }
             }
         }
@@ -136,6 +140,8 @@ struct PagedReaderView: UIViewControllerRepresentable {
     class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate, UIGestureRecognizerDelegate {
         var parent: PagedReaderView
         weak var pageViewController: UIPageViewController?
+        /// updateUIViewController再トリガー防止フラグ
+        var isSyncingPage = false
 
         init(_ parent: PagedReaderView) {
             self.parent = parent
@@ -239,6 +245,16 @@ struct PagedReaderView: UIViewControllerRepresentable {
                 vc.setupImageView()
                 vc.onDidAppear = { [weak self] in
                     self?.parent.onPageAppear(norm)
+                }
+            }
+
+            // currentPage同期（フラグでupdateUIViewController再トリガー防止）
+            vc.onPageChange = { [weak self] pageIdx in
+                guard let self, self.parent.currentPage != pageIdx else { return }
+                self.isSyncingPage = true
+                DispatchQueue.main.async {
+                    self.parent.currentPage = pageIdx
+                    self.isSyncingPage = false
                 }
             }
 
@@ -580,10 +596,15 @@ class ReaderPageVC: UIViewController {
         onZoomImage?(img)
     }
 
+    /// ページ表示通知（currentPage同期用）
+    var onPageChange: ((Int) -> Void)?
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         onDidAppear?()
         onDidAppear = nil
+        // currentPageを確実に同期（didFinishAnimatingが発火しないケース対策）
+        onPageChange?(pageIndex)
         // 表示時に合成+ポーリング開始（プリフェッチ時は実行しない）
         if isSpreadLayout {
             updateSpreadImage()
