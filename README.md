@@ -1,4 +1,4 @@
-# Cort:EX ver.02a f2
+# Cort:EX ver.02a f3
 
 <img src="assets/preview.png" alt="CortEX Preview">
 
@@ -113,6 +113,12 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 - Metal / CoreML / Vision / WebKit / ActivityKit / TipKit
 
 ## Changelog
+
+### ver.02a f3 (2026-04-12)
+- **GPU Sprite Pipeline** — Sprite decode, crop, and resize via Metal CIContext (single-pass GPU rendering)
+- **Dedicated Image Queue** — All sprite processing moved to isolated DispatchQueue, eliminating cooperative thread pool starvation
+- **Disk Cache Elimination** — Removed JPEG re-encoding for sprites and cropped thumbnails (memory-only cache, re-fetchable)
+- **Startup Prefetch Optimization** — Reduced thumbnail prefetch from all favorites (2400+) to visible 30 items
 
 ### ver.02a f2 (2026-04-07)
 - **Favorites Toggle Reliability** — 429 error page retry with backoff, disabled button detection, cookie deduplication fix

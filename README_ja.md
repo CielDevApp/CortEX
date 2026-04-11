@@ -1,4 +1,4 @@
-# Cort:EX ver.02a f2
+# Cort:EX ver.02a f3
 
 **E-Hentai / EXhentai / nhentai 統合ビューア for iOS / iPadOS**
 
@@ -109,6 +109,12 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 - Metal / CoreML / Vision / WebKit / ActivityKit / TipKit
 
 ## 更新履歴
+
+### ver.02a f3 (2026-04-12)
+- **GPUスプライトパイプライン** — スプライトのデコード・クロップ・リサイズをMetal CIContextで1パスGPU処理
+- **専用画像処理キュー** — 全スプライト処理を専用DispatchQueueに隔離、協調スレッドプール飢餓を解消
+- **ディスクキャッシュ廃止** — スプライト/クロップ済みサムネのJPEG再エンコードを完全削除（メモリキャッシュのみ）
+- **起動時プリフェッチ最適化** — お気に入り全件（2400+）→ 表示分30件に制限
 
 ### ver.02a f2 (2026-04-07)
 - **お気に入りトグル信頼性向上** — 429エラーページリトライ+バックオフ、disabledボタン検知、Cookie二重化修正
