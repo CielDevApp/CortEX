@@ -805,18 +805,20 @@ struct CharacterCensusView: View {
             .navigationTitle("CHARACTER CENSUS")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if cortexUnlocked && !ages.isEmpty {
-                    ToolbarItemGroup(placement: .primaryAction) {
+                if cortexUnlocked {
+                    ToolbarItemGroup(placement: .topBarTrailing) {
                         // エクスポート
-                        if let url = ageExportURL {
-                            ShareLink(item: url) {
-                                Image(systemName: "square.and.arrow.up")
-                            }
-                        } else {
-                            Button {
-                                ageExportURL = exportAges()
-                            } label: {
-                                Image(systemName: "square.and.arrow.up")
+                        if !ages.isEmpty {
+                            if let url = ageExportURL {
+                                ShareLink(item: url) {
+                                    Image(systemName: "square.and.arrow.up")
+                                }
+                            } else {
+                                Button {
+                                    ageExportURL = exportAges()
+                                } label: {
+                                    Image(systemName: "square.and.arrow.up")
+                                }
                             }
                         }
                         // インポート
@@ -826,8 +828,10 @@ struct CharacterCensusView: View {
                             Image(systemName: "square.and.arrow.down")
                         }
                         // リセット
-                        Button("リセット") { showResetConfirm = true }
-                            .foregroundStyle(.red)
+                        if !ages.isEmpty {
+                            Button("リセット") { showResetConfirm = true }
+                                .foregroundStyle(.red)
+                        }
                     }
                 }
             }
