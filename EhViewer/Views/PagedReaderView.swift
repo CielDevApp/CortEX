@@ -159,14 +159,18 @@ struct PagedReaderView: UIViewControllerRepresentable {
             syncTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
                 guard let self,
                       let pvc = self.pageViewController,
-                      let vc = pvc.viewControllers?.first as? ReaderPageVC else { return }
-                let pageIdx = vc.pageIndex
-                // viewModelを直接更新（@Published → SwiftUI自動再描画）
-                if let vm = self.parent.viewModel, vm.currentIndex != pageIdx {
-                    vm.currentIndex = pageIdx
+                      let vc = pvc.viewControllers?.first as? ReaderPageVC else {
+                    LogManager.shared.log("Spread", "syncTimer: guard failed (self=\(self != nil) pvc=\(self?.pageViewController != nil))")
+                    return
                 }
-                // バインディング経由の同期
-                if self.parent.currentPage != pageIdx {
+                let pageIdx = vc.pageIndex
+                let vmIdx = self.parent.viewModel?.currentIndex ?? -1
+                let cpIdx = self.parent.currentPage
+                if vmIdx != pageIdx || cpIdx != pageIdx {
+                    LogManager.shared.log("Spread", "sync: vc=\(pageIdx) vm=\(vmIdx) cp=\(cpIdx) → updating")
+                    // viewModelを直接更新（@Published → SwiftUI自動再描画）
+                    self.parent.viewModel?.currentIndex = pageIdx
+                    // バインディング経由の同期
                     self.isSyncingPage = true
                     self.parent.currentPage = pageIdx
                     self.isSyncingPage = false
