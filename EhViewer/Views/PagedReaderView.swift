@@ -509,16 +509,19 @@ class ReaderPageVC: UIViewController {
             let rightImg = provider(ri)
             guard let l = leftImg else { return }
             guard let r = rightImg else {
-                // 右がまだ未ロード → 左だけ表示
                 imageView?.image = l
                 return
             }
-            let composed = Self.composeTwoPages(left: l, right: r)
-            if imageView?.image !== composed {
-                imageView?.image = composed
+            // 専用キューで合成（メインスレッドブロック防止）
+            SpriteCache.imageQueue.async { [weak self] in
+                let composed = Self.composeTwoPages(left: l, right: r)
+                DispatchQueue.main.async {
+                    if self?.imageView?.image !== composed {
+                        self?.imageView?.image = composed
+                    }
+                }
             }
         } else {
-            // 単独表示
             if let img = leftImg, imageView?.image !== img {
                 imageView?.image = img
             }
