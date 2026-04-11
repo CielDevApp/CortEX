@@ -265,7 +265,15 @@ struct GalleryReaderView: View {
             imageForPage: { index in viewModel.holder(for: index).image },
             onPageAppear: { index in viewModel.onAppear(index: index) },
             onDismiss: { handleDismiss() },
-            onZoomImage: { img in zoomImage = img }
+            onZoomImage: { img in zoomImage = img },
+            onPageChanged: { page in
+                // バインディング不安定対策: 直接viewModelとsliderを更新
+                if !isSliding {
+                    viewModel.currentIndex = page
+                    sliderValue = Double(page)
+                    horizontalPage = page
+                }
+            }
         )
         .ignoresSafeArea()
         .onLongPressGesture(minimumDuration: 0.3) {
@@ -572,7 +580,7 @@ struct GalleryReaderView: View {
 
     /// 見開き対応ページラベル
     private var spreadPageLabelText: String {
-        let page = isSliding ? Int(sliderValue) : (readerDirection == 1 ? horizontalPage : viewModel.currentIndex)
+        let page = isSliding ? Int(sliderValue) : viewModel.currentIndex
         if readerDirection == 1 { // 横モード
             return PagedReaderView.spreadPageLabel(
                 currentPage: page,
