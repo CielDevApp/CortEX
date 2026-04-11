@@ -18,7 +18,7 @@ struct PagedReaderView: UIViewControllerRepresentable {
     /// ページ変更通知（viewModelのcurrentIndex更新用）
     var onPageChanged: ((Int) -> Void)? = nil
     /// viewModelへの直接参照（ポーリング同期用）
-    weak var viewModel: ReaderViewModel? = nil
+    var viewModel: ReaderViewModel? = nil
 
     func makeUIViewController(context: Context) -> UIPageViewController {
         let pvc = UIPageViewController(
