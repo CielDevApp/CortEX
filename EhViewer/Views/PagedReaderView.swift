@@ -15,6 +15,8 @@ struct PagedReaderView: UIViewControllerRepresentable {
     var onDismiss: (() -> Void)? = nil
     /// ダブルタップでズーム表示（現在表示中の画像を渡す）
     var onZoomImage: ((PlatformImage) -> Void)? = nil
+    /// ページ変更通知（viewModelのcurrentIndex更新用）
+    var onPageChanged: ((Int) -> Void)? = nil
 
     func makeUIViewController(context: Context) -> UIPageViewController {
         let pvc = UIPageViewController(
@@ -156,11 +158,15 @@ struct PagedReaderView: UIViewControllerRepresentable {
                 guard let self,
                       let pvc = self.pageViewController,
                       let vc = pvc.viewControllers?.first as? ReaderPageVC else { return }
-                if self.parent.currentPage != vc.pageIndex {
+                let pageIdx = vc.pageIndex
+                // バインディング経由の同期
+                if self.parent.currentPage != pageIdx {
                     self.isSyncingPage = true
-                    self.parent.currentPage = vc.pageIndex
+                    self.parent.currentPage = pageIdx
                     self.isSyncingPage = false
                 }
+                // コールバック経由の直接同期（バインディング不安定対策）
+                self.parent.onPageChanged?(pageIdx)
             }
         }
 
