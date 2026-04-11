@@ -265,7 +265,8 @@ struct GalleryReaderView: View {
             imageForPage: { index in viewModel.holder(for: index).image },
             onPageAppear: { index in viewModel.onAppear(index: index) },
             onDismiss: { handleDismiss() },
-            onZoomImage: { img in zoomImage = img }
+            onZoomImage: { img in zoomImage = img },
+            viewModel: viewModel
         )
         .ignoresSafeArea()
         .onLongPressGesture(minimumDuration: 0.3) {
@@ -278,7 +279,8 @@ struct GalleryReaderView: View {
             #if canImport(UIKit)
             if isSliding {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                horizontalPage = Int(sliderValue)
+                // horizontalPageは更新しない（setViewControllers連射防止）
+                // ページラベルはsliderValueから直接表示
             }
             #endif
         }
@@ -327,6 +329,7 @@ struct GalleryReaderView: View {
             .onChange(of: viewModel.currentIndex) { _, newIndex in
                 if !isSliding {
                     sliderValue = Double(newIndex)
+                    if readerDirection == 1 { horizontalPage = newIndex }
                 }
                 HistoryManager.shared.updateLastPage(gid: gallery.gid, page: newIndex)
             }
@@ -571,7 +574,7 @@ struct GalleryReaderView: View {
 
     /// 見開き対応ページラベル
     private var spreadPageLabelText: String {
-        let page = isSliding ? Int(sliderValue) : viewModel.currentIndex
+        let page = isSliding ? Int(sliderValue) : (readerDirection == 1 ? horizontalPage : viewModel.currentIndex)
         if readerDirection == 1 { // 横モード
             return PagedReaderView.spreadPageLabel(
                 currentPage: page,
@@ -655,9 +658,7 @@ struct GalleryReaderView: View {
                             let target = Int(sliderValue)
                             if readerDirection == 1 {
                                 horizontalPage = target
-                                viewModel.onAppear(index: target)
-                                viewModel.requestLoad(target)
-                                viewModel.requestLoad(target + 1)
+                                viewModel.currentIndex = target
                             } else {
                                 viewModel.jumpTo(page: target)
                             }

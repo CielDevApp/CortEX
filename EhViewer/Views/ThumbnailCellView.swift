@@ -8,6 +8,8 @@ struct ThumbnailCellView: View {
     let info: ThumbnailInfo?
     let cellHeight: CGFloat
     let onTap: () -> Void
+    /// ダウンロード済み画像流用（gid指定時はローカルを先にチェック）
+    var gid: Int? = nil
 
     @State private var image: PlatformImage?
 
@@ -44,14 +46,41 @@ struct ThumbnailCellView: View {
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .contentShape(Rectangle())
         .onTapGesture { onTap() }
-        .task(id: info?.spriteURL) {
+        .task(id: info?.spriteURL ?? URL(string: "local://\(index)")) {
             await loadThumb()
         }
     }
 
     private func loadThumb() async {
-        guard let info else { return }
         if image != nil { return }
+
+        // ダウンロード済み画像を縮小してサムネに転用（API不要）
+        if let gid, let localImg = DownloadManager.shared.loadLocalImage(gid: gid, page: index) {
+            let thumb: PlatformImage? = await withCheckedContinuation { cont in
+                SpriteCache.imageQueue.async {
+                    let maxW: CGFloat = 360
+                    let scale = min(maxW / CGFloat(localImg.pixelWidth), 1.0)
+                    if scale < 1.0 {
+                        let newW = Int(CGFloat(localImg.pixelWidth) * scale)
+                        let newH = Int(CGFloat(localImg.pixelHeight) * scale)
+                        #if canImport(UIKit)
+                        let renderer = UIGraphicsImageRenderer(size: CGSize(width: newW, height: newH))
+                        let resized = renderer.image { _ in
+                            localImg.draw(in: CGRect(x: 0, y: 0, width: newW, height: newH))
+                        }
+                        cont.resume(returning: resized)
+                        #else
+                        cont.resume(returning: localImg)
+                        #endif
+                    } else {
+                        cont.resume(returning: localImg)
+                    }
+                }
+            }
+            if let thumb { image = thumb; return }
+        }
+
+        guard let info else { return }
 
         let cache = SpriteCache.shared
         let croppedKey = cache.croppedKey(url: info.spriteURL, offsetX: info.offsetX)

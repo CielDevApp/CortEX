@@ -15,6 +15,10 @@ struct PagedReaderView: UIViewControllerRepresentable {
     var onDismiss: (() -> Void)? = nil
     /// ダブルタップでズーム表示（現在表示中の画像を渡す）
     var onZoomImage: ((PlatformImage) -> Void)? = nil
+    /// ページ変更通知（viewModelのcurrentIndex更新用）
+    var onPageChanged: ((Int) -> Void)? = nil
+    /// viewModelへの直接参照（ポーリング同期用）
+    var viewModel: ReaderViewModel? = nil
 
     func makeUIViewController(context: Context) -> UIPageViewController {
         let pvc = UIPageViewController(
@@ -44,6 +48,7 @@ struct PagedReaderView: UIViewControllerRepresentable {
         pvc.view.addGestureRecognizer(edgeTap)
 
         context.coordinator.pageViewController = pvc
+        context.coordinator.startPageSyncTimer()
 
         // 画面回転監視
         NotificationCenter.default.addObserver(
@@ -60,12 +65,22 @@ struct PagedReaderView: UIViewControllerRepresentable {
         let coord = context.coordinator
         coord.parent = self
 
+        // viewDidAppearからの同期更新時は再トリガーしない
+        guard !coord.isSyncingPage else { return }
+
         if let currentVC = pvc.viewControllers?.first as? ReaderPageVC,
            currentVC.pageIndex != currentPage {
             let direction: UIPageViewController.NavigationDirection =
                 currentPage > currentVC.pageIndex ? .forward : .reverse
             let newVC = coord.makePageVC(for: currentPage)
             pvc.setViewControllers([newVC], direction: direction, animated: false)
+            if newVC.pageIndex != currentPage {
+                coord.isSyncingPage = true
+                DispatchQueue.main.async {
+                    self.currentPage = newVC.pageIndex
+                    coord.isSyncingPage = false
+                }
+            }
         }
     }
 
@@ -92,17 +107,31 @@ struct PagedReaderView: UIViewControllerRepresentable {
         }
 
         // 横長チェック
-        if let provider = imageForPage, let img = provider(currentPage) {
-            if img.size.width > img.size.height {
-                return "\(currentPage + 1) / \(totalPages)"
+        let isWide: (Int) -> Bool = { idx in
+            guard let provider = imageForPage, let img = provider(idx) else { return false }
+            return img.size.width > img.size.height
+        }
+
+        if isWide(currentPage) {
+            return "\(currentPage + 1) / \(totalPages)"
+        }
+
+        // normalizeIndexと同じロジックでペア先頭を計算
+        var pairStart = 1
+        var i = 1
+        while i <= currentPage {
+            if isWide(i) { i += 1; pairStart = i; continue }
+            if i == currentPage { break }
+            let next = i + 1
+            if next <= currentPage && !isWide(next) {
+                i = next + 1; pairStart = i
+            } else {
+                i += 1; pairStart = i
             }
         }
 
-        // ペア計算
-        let pairStart = currentPage % 2 == 1 ? currentPage : currentPage - 1
         let pairEnd = pairStart + 1
-
-        if pairEnd >= totalPages {
+        if pairEnd >= totalPages || isWide(pairEnd) {
             return "\(pairStart + 1) / \(totalPages)"
         }
 
@@ -116,10 +145,47 @@ struct PagedReaderView: UIViewControllerRepresentable {
     class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate, UIGestureRecognizerDelegate {
         var parent: PagedReaderView
         weak var pageViewController: UIPageViewController?
+        /// updateUIViewController再トリガー防止フラグ
+        var isSyncingPage = false
+        private var syncTimer: Timer?
 
         init(_ parent: PagedReaderView) {
             self.parent = parent
         }
+
+        /// currentPage同期タイマー開始（0.3秒ごとに表示中VCのpageIndexと同期）
+        func startPageSyncTimer() {
+            syncTimer?.invalidate()
+            let timer = Timer(timeInterval: 0.3, repeats: true) { [weak self] _ in
+                guard let self,
+                      let pvc = self.pageViewController,
+                      let vc = pvc.viewControllers?.first as? ReaderPageVC else {
+                    LogManager.shared.log("Spread", "syncTimer: guard failed (self=\(self != nil) pvc=\(self?.pageViewController != nil))")
+                    return
+                }
+                let pageIdx = vc.pageIndex
+                let vmIdx = self.parent.viewModel?.currentIndex ?? -1
+                let cpIdx = self.parent.currentPage
+                if vmIdx != pageIdx || cpIdx != pageIdx {
+                    LogManager.shared.log("Spread", "sync: vc=\(pageIdx) vm=\(vmIdx) cp=\(cpIdx) → updating")
+                    // viewModelを直接更新（@Published → SwiftUI自動再描画）
+                    self.parent.viewModel?.currentIndex = pageIdx
+                    // バインディング経由の同期
+                    self.isSyncingPage = true
+                    self.parent.currentPage = pageIdx
+                    self.isSyncingPage = false
+                }
+            }
+            // .commonモードで登録（スワイプ中の.trackingモードでも動作する）
+            RunLoop.main.add(timer, forMode: .common)
+            syncTimer = timer
+        }
+
+        func stopPageSyncTimer() {
+            syncTimer?.invalidate()
+            syncTimer = nil
+        }
+
 
         /// 見開きモードかどうか
         var isSpread: Bool { PagedReaderView.isSpreadMode }
@@ -130,57 +196,59 @@ struct PagedReaderView: UIViewControllerRepresentable {
             return img.size.width > img.size.height
         }
 
-        /// 見開きペアを計算（表紙=単独、横長=単独、それ以外=2ページ組）
-        func spreadPages(for index: Int) -> (left: Int, right: Int?) {
-            guard isSpread else { return (index, nil) }
-
-            // 表紙は常に単独
-            if index == 0 { return (0, nil) }
-
-            // 横長ページは単独
-            if isWideImage(at: index) { return (index, nil) }
-
-            // 奇数ページ起点でペア
-            let pairStart: Int
-            if index % 2 == 1 {
-                pairStart = index
-            } else {
-                pairStart = index - 1
-            }
-
-            let left = pairStart
-            let right = pairStart + 1
-
-            // 右ページが範囲外 or 横長なら左のみ
-            if right >= parent.totalPages || isWideImage(at: right) {
-                return (left, nil)
-            }
-
-            // 右綴じ: 右=小さいページ番号, 左=大きいページ番号
-            if parent.readingOrder == 1 {
-                return (right, left) // left表示位置=right(偶数), right表示位置=left(奇数)
-            } else {
-                return (left, right)
-            }
-        }
-
-        /// 代表ページインデックス（見開き時は奇数側）
+        /// 代表ページインデックス（横長画像でペアリングがリセットされる）
         func normalizeIndex(_ index: Int) -> Int {
             guard isSpread, index > 0 else { return index }
             if isWideImage(at: index) { return index }
-            return index % 2 == 0 ? index - 1 : index
+
+            // index 0(表紙)は単独。1から順にペアリングを計算
+            var pairStart = 1
+            var i = 1
+            while i <= index {
+                if isWideImage(at: i) {
+                    i += 1
+                    pairStart = i
+                    continue
+                }
+                if i == index { return pairStart }
+                // ペアの2ページ目を消費
+                let next = i + 1
+                if next <= index && !isWideImage(at: next) {
+                    i = next + 1
+                    pairStart = i
+                } else {
+                    i += 1
+                    pairStart = i
+                }
+            }
+            return index
+        }
+
+        /// 見開きペアを計算（表紙=単独、横長=単独、それ以外=2ページ組）
+        func spreadPages(for index: Int) -> (left: Int, right: Int?) {
+            guard isSpread else { return (index, nil) }
+            if index == 0 { return (0, nil) }
+            if isWideImage(at: index) { return (index, nil) }
+
+            let norm = normalizeIndex(index)
+            let right = norm + 1
+
+            if right >= parent.totalPages || isWideImage(at: right) {
+                return (norm, nil)
+            }
+
+            if parent.readingOrder == 1 {
+                return (right, norm)
+            } else {
+                return (norm, right)
+            }
         }
 
         /// 次の見開きグループの代表ページ
         func nextSpreadIndex(from index: Int) -> Int? {
             let norm = normalizeIndex(index)
             let pair = spreadPages(for: norm)
-            let advance: Int
-            if let _ = pair.right {
-                advance = norm + 2
-            } else {
-                advance = norm + 1
-            }
+            let advance = pair.right != nil ? norm + 2 : norm + 1
             return advance < parent.totalPages ? advance : nil
         }
 
@@ -188,7 +256,6 @@ struct PagedReaderView: UIViewControllerRepresentable {
         func prevSpreadIndex(from index: Int) -> Int? {
             let norm = normalizeIndex(index)
             if norm <= 0 { return nil }
-            // 1つ前のページ
             let prev = norm - 1
             let prevNorm = normalizeIndex(prev)
             return prevNorm >= 0 ? prevNorm : nil
@@ -208,12 +275,27 @@ struct PagedReaderView: UIViewControllerRepresentable {
                     rightIndex: pair.right,
                     imageProvider: parent.imageForPage
                 )
-                parent.onPageAppear(pair.left)
-                if let r = pair.right { parent.onPageAppear(r) }
+                // onPageAppearはviewDidAppearで呼ぶ（プリフェッチ時の無駄な呼び出し防止）
+                vc.onDidAppear = { [weak self] in
+                    self?.parent.onPageAppear(pair.left)
+                    if let r = pair.right { self?.parent.onPageAppear(r) }
+                }
             } else {
                 vc.image = parent.imageForPage(norm)
                 vc.setupImageView()
-                parent.onPageAppear(norm)
+                vc.onDidAppear = { [weak self] in
+                    self?.parent.onPageAppear(norm)
+                }
+            }
+
+            // currentPage同期（フラグでupdateUIViewController再トリガー防止）
+            vc.onPageChange = { [weak self] pageIdx in
+                guard let self, self.parent.currentPage != pageIdx else { return }
+                self.isSyncingPage = true
+                DispatchQueue.main.async {
+                    self.parent.currentPage = pageIdx
+                    self.isSyncingPage = false
+                }
             }
 
             vc.view.backgroundColor = .black
@@ -249,12 +331,19 @@ struct PagedReaderView: UIViewControllerRepresentable {
         // MARK: - Delegate
 
         func pageViewController(_ pvc: UIPageViewController, didFinishAnimating finished: Bool, previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
-            guard completed,
-                  let vc = pvc.viewControllers?.first as? ReaderPageVC else { return }
             self.pageViewController = pvc
-            DispatchQueue.main.async {
-                self.parent.currentPage = vc.pageIndex
+            // completed=falseでもcurrentVCから現在ページを取得（タップ送り対策）
+            guard let vc = pvc.viewControllers?.first as? ReaderPageVC else { return }
+            if completed || vc.pageIndex != parent.currentPage {
+                DispatchQueue.main.async {
+                    self.parent.currentPage = vc.pageIndex
+                }
             }
+        }
+
+        func pageViewController(_ pvc: UIPageViewController, willTransitionTo pendingViewControllers: [UIViewController]) {
+            // 遷移開始時にpvcを保持
+            self.pageViewController = pvc
         }
 
         // MARK: - 画面回転
@@ -368,6 +457,7 @@ struct PagedReaderView: UIViewControllerRepresentable {
         }
 
         deinit {
+            syncTimer?.invalidate()
             NotificationCenter.default.removeObserver(self)
         }
     }
@@ -390,6 +480,8 @@ class ReaderPageVC: UIViewController {
     private var isSpreadLayout = false
     /// ダブルタップでズーム
     var onZoomImage: ((PlatformImage) -> Void)?
+    /// 表示時コールバック（onPageAppear遅延実行用）
+    var onDidAppear: (() -> Void)?
 
     /// 単一ページ表示
     func setupImageView() {
@@ -409,9 +501,7 @@ class ReaderPageVC: UIViewController {
         iv.image = image
         imageView = iv
 
-        if image == nil { addSpinner() }
         addDoubleTapZoom()
-        startImagePolling()
     }
 
     /// 見開き表示（左右2ページ）
@@ -438,15 +528,8 @@ class ReaderPageVC: UIViewController {
         ])
         imageView = iv
 
-        // 合成画像を生成して表示
-        updateSpreadImage()
-
-        let hasBlank = imageProvider(leftIndex) == nil || (rightIndex != nil && imageProvider(rightIndex!) == nil)
-        if hasBlank { addSpinner() }
-
-        if imageProvider(leftIndex) == nil { addSpinner() }
+        // 合成は表示時に実行（プリフェッチ時の無駄な合成を防止）
         addDoubleTapZoom()
-        startImagePolling()
     }
 
     private func addSpinner() {
@@ -502,16 +585,19 @@ class ReaderPageVC: UIViewController {
             let rightImg = provider(ri)
             guard let l = leftImg else { return }
             guard let r = rightImg else {
-                // 右がまだ未ロード → 左だけ表示
                 imageView?.image = l
                 return
             }
-            let composed = Self.composeTwoPages(left: l, right: r)
-            if imageView?.image !== composed {
-                imageView?.image = composed
+            // 専用キューで合成（メインスレッドブロック防止）
+            SpriteCache.imageQueue.async { [weak self] in
+                let composed = Self.composeTwoPages(left: l, right: r)
+                DispatchQueue.main.async {
+                    if self?.imageView?.image !== composed {
+                        self?.imageView?.image = composed
+                    }
+                }
             }
         } else {
-            // 単独表示
             if let img = leftImg, imageView?.image !== img {
                 imageView?.image = img
             }
@@ -533,10 +619,8 @@ class ReaderPageVC: UIViewController {
 
         let renderer = UIGraphicsImageRenderer(size: size)
         return renderer.image { ctx in
-            // 白背景（漫画の紙色）
             UIColor.white.setFill()
             ctx.fill(CGRect(origin: .zero, size: size))
-
             left.draw(in: CGRect(x: 0, y: 0, width: leftW, height: targetH))
             right.draw(in: CGRect(x: leftW, y: 0, width: rightW, height: targetH))
         }
@@ -551,6 +635,37 @@ class ReaderPageVC: UIViewController {
     @objc private func handleDoubleTap() {
         guard let img = imageView?.image else { return }
         onZoomImage?(img)
+    }
+
+    /// ページ表示通知（currentPage同期用）
+    var onPageChange: ((Int) -> Void)?
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        onDidAppear?()
+        onDidAppear = nil
+        // currentPageを確実に同期（didFinishAnimatingが発火しないケース対策）
+        onPageChange?(pageIndex)
+        // 表示時に合成+ポーリング開始（プリフェッチ時は実行しない）
+        if isSpreadLayout {
+            updateSpreadImage()
+            let hasBlank = (leftIndex.flatMap { imageProvider?($0) } == nil) ||
+                           (rightIndex != nil && rightIndex.flatMap { imageProvider?($0) } == nil)
+            if hasBlank { addSpinner() }
+        } else {
+            if let img = imageProvider?(pageIndex) {
+                imageView?.image = img
+            } else {
+                addSpinner()
+            }
+        }
+        if updateTimer == nil { startImagePolling() }
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        updateTimer?.invalidate()
+        updateTimer = nil
     }
 
     deinit {
