@@ -865,13 +865,14 @@ struct GalleryDetailView: View {
             }
         }
 
-        // 最大6並列でスプライトシートをダウンロード
+        // スプライトDL並列数: DL中は1、通常2（GPU/ネットワーク競合防止）
+        let maxConcurrent = DownloadManager.shared.activeDownloadCount > 0 ? 1 : 2
         await withTaskGroup(of: Void.self) { group in
             var running = 0
             for url in urls {
                 if SpriteCache.shared.sprite(for: url) != nil { continue }
 
-                if running >= 6 {
+                if running >= maxConcurrent {
                     await group.next()
                     running -= 1
                 }
