@@ -65,6 +65,7 @@ class GalleryListViewModel: ObservableObject {
 
             let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1000
             LogManager.shared.log("Reader", "gallery list: \(result.galleries.count) items in \(String(format: "%.0f", elapsed))ms")
+            LogManager.shared.log("Perf", "loadGalleries: \(Int(elapsed))ms count=\(result.galleries.count) page=\(currentPage) reset=\(reset)")
 
             if reset {
                 galleries = result.galleries

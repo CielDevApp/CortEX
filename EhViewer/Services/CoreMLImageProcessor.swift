@@ -99,6 +99,7 @@ final class CoreMLImageProcessor: @unchecked Sendable, ImageProcessor {
     /// 超解像処理（全エラーをキャッチ、クラッシュしない）
     nonisolated func process(_ image: PlatformImage) async -> PlatformImage? {
         #if canImport(UIKit)
+        let t0 = CFAbsoluteTimeGetCurrent()
         // クラッシュガード: アプリ非アクティブ時はスキップ
         guard isAppActive else {
             LogManager.shared.log("CoreML", "process: skipped — app not active")
@@ -193,7 +194,9 @@ final class CoreMLImageProcessor: @unchecked Sendable, ImageProcessor {
 
         // タイリング処理（全体をdo-catchで囲む）
         do {
-            return try processWithTiling(model: model, cgImage: cgImage, srcW: srcW, srcH: srcH, outW: outW, outH: outH, image: image)
+            let result = try processWithTiling(model: model, cgImage: cgImage, srcW: srcW, srcH: srcH, outW: outW, outH: outH, image: image)
+            LogManager.shared.log("Perf", "CoreMLProcess: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms \(srcW)x\(srcH) → \(result.cgImage.map { "\($0.width)x\($0.height)" } ?? "same")")
+            return result
         } catch {
             LogManager.shared.log("CoreML", "process: fatal error: \(error)")
             Self.autoDisableAI()
