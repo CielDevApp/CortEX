@@ -44,8 +44,6 @@ struct PagedReaderView: UIViewControllerRepresentable {
         pvc.view.addGestureRecognizer(edgeTap)
 
         context.coordinator.pageViewController = pvc
-        context.coordinator.startPageSyncTimer()
-
         // 画面回転監視
         NotificationCenter.default.addObserver(
             context.coordinator,
@@ -134,39 +132,9 @@ struct PagedReaderView: UIViewControllerRepresentable {
     class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate, UIGestureRecognizerDelegate {
         var parent: PagedReaderView
         weak var pageViewController: UIPageViewController?
-        private var syncTimer: Timer?
 
         init(_ parent: PagedReaderView) {
             self.parent = parent
-        }
-
-        /// ページ同期タイマー開始（NotificationCenterでページ変更を通知）
-        func startPageSyncTimer() {
-            syncTimer?.invalidate()
-            LogManager.shared.log("Spread", "startPageSyncTimer called")
-            let timer = Timer(timeInterval: 0.3, repeats: true) { [weak self] _ in
-                let hasSelf = self != nil
-                let hasPvc = self?.pageViewController != nil
-                let hasVC = (self?.pageViewController?.viewControllers?.first as? ReaderPageVC) != nil
-                if !hasSelf || !hasPvc || !hasVC {
-                    LogManager.shared.log("Spread", "timer guard fail: self=\(hasSelf) pvc=\(hasPvc) vc=\(hasVC)")
-                }
-                guard let self,
-                      let pvc = self.pageViewController,
-                      let vc = pvc.viewControllers?.first as? ReaderPageVC else { return }
-                NotificationCenter.default.post(
-                    name: PagedReaderView.pageChangedNotification,
-                    object: nil,
-                    userInfo: ["page": vc.pageIndex]
-                )
-            }
-            RunLoop.main.add(timer, forMode: .common)
-            syncTimer = timer
-        }
-
-        func stopPageSyncTimer() {
-            syncTimer?.invalidate()
-            syncTimer = nil
         }
 
 
@@ -305,12 +273,9 @@ struct PagedReaderView: UIViewControllerRepresentable {
 
         func pageViewController(_ pvc: UIPageViewController, didFinishAnimating finished: Bool, previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
             self.pageViewController = pvc
-            // completed=falseでもcurrentVCから現在ページを取得（タップ送り対策）
             guard let vc = pvc.viewControllers?.first as? ReaderPageVC else { return }
             if completed || vc.pageIndex != parent.currentPage {
-                DispatchQueue.main.async {
-                    self.parent.currentPage = vc.pageIndex
-                }
+                postPageChange(vc.pageIndex)
             }
         }
 
@@ -366,6 +331,14 @@ struct PagedReaderView: UIViewControllerRepresentable {
             }
         }
 
+        private func postPageChange(_ page: Int) {
+            NotificationCenter.default.post(
+                name: PagedReaderView.pageChangedNotification,
+                object: nil,
+                userInfo: ["page": page]
+            )
+        }
+
         private func goForward(pvc: UIPageViewController) {
             guard let currentVC = pvc.viewControllers?.first as? ReaderPageVC else { return }
             let next: Int?
@@ -377,9 +350,7 @@ struct PagedReaderView: UIViewControllerRepresentable {
             guard let n = next else { return }
             let newVC = makePageVC(for: n)
             pvc.setViewControllers([newVC], direction: .forward, animated: false)
-            DispatchQueue.main.async {
-                self.parent.currentPage = n
-            }
+            postPageChange(newVC.pageIndex)
         }
 
         private func goBackward(pvc: UIPageViewController) {
@@ -393,9 +364,7 @@ struct PagedReaderView: UIViewControllerRepresentable {
             guard let p = prev else { return }
             let newVC = makePageVC(for: p)
             pvc.setViewControllers([newVC], direction: .reverse, animated: false)
-            DispatchQueue.main.async {
-                self.parent.currentPage = p
-            }
+            postPageChange(newVC.pageIndex)
         }
 
         @objc func handleVerticalPan(_ gesture: UIPanGestureRecognizer) {
@@ -430,7 +399,6 @@ struct PagedReaderView: UIViewControllerRepresentable {
         }
 
         deinit {
-            syncTimer?.invalidate()
             NotificationCenter.default.removeObserver(self)
         }
     }
