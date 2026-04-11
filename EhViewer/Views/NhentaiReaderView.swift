@@ -1,6 +1,5 @@
 import SwiftUI
 import TipKit
-import CoreImage
 
 /// nhentaiギャラリーリーダー
 struct NhentaiReaderView: View {
@@ -356,18 +355,7 @@ struct NhentaiReaderView: View {
 
                 pageDataCache[index] = data
 
-                // 専用キュー+GPU(CIContext)でデコード
-                let img: PlatformImage? = await withCheckedContinuation { (cont: CheckedContinuation<PlatformImage?, Never>) in
-                    SpriteCache.imageQueue.async {
-                        if let ciImage = CIImage(data: data),
-                           let cgImage = SpriteCache.ciContext.createCGImage(ciImage, from: ciImage.extent) {
-                            cont.resume(returning: PlatformImage(cgImage: cgImage))
-                        } else {
-                            cont.resume(returning: nil)
-                        }
-                    }
-                }
-                if let img {
+                if let img = PlatformImage(data: data) {
                     rawImages[index] = img
                     let filtered = applyFilters(img)
                     images[index] = filtered
