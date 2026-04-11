@@ -848,8 +848,8 @@ struct GalleryDetailView: View {
                 )
             }
             allInfos.append(contentsOf: reindexed)
-            let batch = reindexed
-            Task { await preloadSprites(for: batch) }
+            // page 1+のスプライトprefetchは行わない（オンデマンドロード）
+            // ネットワーク帯域競合によるフレームドロップ防止
         }
         thumbnails = allInfos
         LogManager.shared.log("Perf", "loadThumbnails total: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms \(allInfos.count) infos")
