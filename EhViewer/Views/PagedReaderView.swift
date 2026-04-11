@@ -275,12 +275,19 @@ struct PagedReaderView: UIViewControllerRepresentable {
         // MARK: - Delegate
 
         func pageViewController(_ pvc: UIPageViewController, didFinishAnimating finished: Bool, previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
-            guard completed,
-                  let vc = pvc.viewControllers?.first as? ReaderPageVC else { return }
             self.pageViewController = pvc
-            DispatchQueue.main.async {
-                self.parent.currentPage = vc.pageIndex
+            // completed=falseでもcurrentVCから現在ページを取得（タップ送り対策）
+            guard let vc = pvc.viewControllers?.first as? ReaderPageVC else { return }
+            if completed || vc.pageIndex != parent.currentPage {
+                DispatchQueue.main.async {
+                    self.parent.currentPage = vc.pageIndex
+                }
             }
+        }
+
+        func pageViewController(_ pvc: UIPageViewController, willTransitionTo pendingViewControllers: [UIViewController]) {
+            // 遷移開始時にpvcを保持
+            self.pageViewController = pvc
         }
 
         // MARK: - 画面回転
