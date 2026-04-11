@@ -278,7 +278,8 @@ struct GalleryReaderView: View {
             #if canImport(UIKit)
             if isSliding {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                horizontalPage = Int(sliderValue)
+                // horizontalPageは更新しない（setViewControllers連射防止）
+                // ページラベルはsliderValueから直接表示
             }
             #endif
         }
@@ -655,9 +656,7 @@ struct GalleryReaderView: View {
                             let target = Int(sliderValue)
                             if readerDirection == 1 {
                                 horizontalPage = target
-                                viewModel.onAppear(index: target)
-                                viewModel.requestLoad(target)
-                                viewModel.requestLoad(target + 1)
+                                viewModel.currentIndex = target
                             } else {
                                 viewModel.jumpTo(page: target)
                             }

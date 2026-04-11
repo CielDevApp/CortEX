@@ -612,6 +612,10 @@ struct GalleryDetailView: View {
                 ForEach(0..<detail.gallery.pageCount, id: \.self) { index in
                     thumbnailCell(index: index)
                         .onAppear {
+                            // ダウンロード済み画像があればAPI不要でサムネ生成
+                            if croppedThumbs[index] == nil {
+                                Task { await loadCroppedThumb(index: index) }
+                            }
                             // サムネ情報が未取得ならオンデマンドでページ取得
                             if index >= thumbnails.count {
                                 let neededPage = index / thumbsPerPage
@@ -679,7 +683,8 @@ struct GalleryDetailView: View {
             host: host,
             info: index < thumbnails.count ? thumbnails[index] : nil,
             cellHeight: thumbCellHeight,
-            onTap: { readerRequest = ReaderRequest(page: index) }
+            onTap: { readerRequest = ReaderRequest(page: index) },
+            gid: gallery.gid
         )
     }
 
@@ -831,7 +836,26 @@ struct GalleryDetailView: View {
                 Task { await preloadSprites(for: batch) }
             }
         } catch {
-            // ページ0取得失敗時は終了
+            // API失敗 → ダウンロード済みページからサムネを生成
+            let dm = DownloadManager.shared
+            var localInfos: [ThumbnailInfo] = []
+            for i in 0..<pageCount {
+                if dm.loadLocalImage(gid: gallery.gid, page: i) != nil {
+                    localInfos.append(ThumbnailInfo(
+                        index: i, spriteURL: URL(string: "local://\(i)")!,
+                        offsetX: 0, width: 200, height: 300
+                    ))
+                }
+            }
+            if !localInfos.isEmpty {
+                thumbnails = localInfos
+                // loadCroppedThumbがローカル画像を検出してサムネを生成する
+                for info in localInfos {
+                    Task { await loadCroppedThumb(index: info.index) }
+                }
+                LogManager.shared.log("Perf", "loadThumbnails: \(localInfos.count) local pages (offline)")
+                return
+            }
             return
         }
 
@@ -892,8 +916,36 @@ struct GalleryDetailView: View {
 
     /// スプライトシートから1枚分を切り出す（バックグラウンドで実行）
     private func loadCroppedThumb(index: Int) async {
-        guard index < thumbnails.count else { return }
         if croppedThumbs[index] != nil { return }
+
+        // ダウンロード済み画像を縮小してサムネに転用（API不要、thumbnails配列不要）
+        if let localImg = DownloadManager.shared.loadLocalImage(gid: gallery.gid, page: index) {
+            let thumb: PlatformImage? = await withCheckedContinuation { cont in
+                SpriteCache.imageQueue.async {
+                    let maxW: CGFloat = 360
+                    let scale = min(maxW / CGFloat(localImg.pixelWidth), 1.0)
+                    if scale < 1.0 {
+                        let newW = Int(CGFloat(localImg.pixelWidth) * scale)
+                        let newH = Int(CGFloat(localImg.pixelHeight) * scale)
+                        #if canImport(UIKit)
+                        let renderer = UIGraphicsImageRenderer(size: CGSize(width: newW, height: newH))
+                        let resized = renderer.image { _ in
+                            localImg.draw(in: CGRect(x: 0, y: 0, width: newW, height: newH))
+                        }
+                        cont.resume(returning: resized)
+                        #else
+                        cont.resume(returning: localImg)
+                        #endif
+                    } else {
+                        cont.resume(returning: localImg)
+                    }
+                }
+            }
+            if let thumb {
+                croppedThumbs[index] = thumb
+                return
+            }
+        }
 
         let info = thumbnails[index]
         let cache = SpriteCache.shared

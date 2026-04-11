@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import CoreImage
 
 #if canImport(UIKit)
 import UIKit
@@ -188,9 +189,16 @@ struct PagedReaderView: UIViewControllerRepresentable {
         func prevSpreadIndex(from index: Int) -> Int? {
             let norm = normalizeIndex(index)
             if norm <= 0 { return nil }
-            // 1つ前のページ
-            let prev = norm - 1
+            var prev = norm - 1
+            // 横長画像はそのまま返す
+            if isWideImage(at: prev) { return prev }
+            // 通常ページ: normalizeで見開きペアの先頭を取得
             let prevNorm = normalizeIndex(prev)
+            // 無限ループ防止: prevNormが元と同じか進まない場合はもう1つ戻る
+            if prevNorm >= norm && prev > 0 {
+                prev = prev - 1
+                return max(normalizeIndex(prev), 0)
+            }
             return prevNorm >= 0 ? prevNorm : nil
         }
 
@@ -518,7 +526,7 @@ class ReaderPageVC: UIViewController {
         }
     }
 
-    /// 2枚の画像を横に合成（高さを揃える）
+    /// 2枚の画像を横に合成（高さを揃える）— GPU(CIContext)で実行
     static func composeTwoPages(left: UIImage, right: UIImage) -> UIImage {
         let targetH = max(left.size.height, right.size.height)
 
@@ -528,18 +536,37 @@ class ReaderPageVC: UIViewController {
         let rightScale = targetH / right.size.height
         let rightW = right.size.width * rightScale
 
-        let totalW = leftW + rightW
-        let size = CGSize(width: totalW, height: targetH)
-
-        let renderer = UIGraphicsImageRenderer(size: size)
-        return renderer.image { ctx in
-            // 白背景（漫画の紙色）
-            UIColor.white.setFill()
-            ctx.fill(CGRect(origin: .zero, size: size))
-
-            left.draw(in: CGRect(x: 0, y: 0, width: leftW, height: targetH))
-            right.draw(in: CGRect(x: leftW, y: 0, width: rightW, height: targetH))
+        // CIImageで合成（GPU 1パス）
+        guard let leftCG = left.cgImage, let rightCG = right.cgImage else {
+            // フォールバック: CGImageが取れない場合はCPU合成
+            let totalW = leftW + rightW
+            let renderer = UIGraphicsImageRenderer(size: CGSize(width: totalW, height: targetH))
+            return renderer.image { ctx in
+                UIColor.white.setFill()
+                ctx.fill(CGRect(origin: .zero, size: CGSize(width: totalW, height: targetH)))
+                left.draw(in: CGRect(x: 0, y: 0, width: leftW, height: targetH))
+                right.draw(in: CGRect(x: leftW, y: 0, width: rightW, height: targetH))
+            }
         }
+
+        var leftCI = CIImage(cgImage: leftCG)
+        var rightCI = CIImage(cgImage: rightCG)
+
+        // 高さを揃えるスケール
+        leftCI = leftCI.transformed(by: CGAffineTransform(scaleX: leftScale, y: leftScale))
+        rightCI = rightCI.transformed(by: CGAffineTransform(scaleX: rightScale, y: rightScale))
+
+        // 右画像を左画像の右に配置
+        rightCI = rightCI.transformed(by: CGAffineTransform(translationX: leftW, y: 0))
+
+        // 合成
+        let composed = leftCI.composited(over: rightCI)
+
+        // GPU レンダリング
+        guard let outputCG = SpriteCache.ciContext.createCGImage(composed, from: CGRect(x: 0, y: 0, width: leftW + rightW, height: targetH)) else {
+            return left // フォールバック
+        }
+        return UIImage(cgImage: outputCG)
     }
 
     private func addDoubleTapZoom() {
