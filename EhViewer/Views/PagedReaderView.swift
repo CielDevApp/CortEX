@@ -60,9 +60,9 @@ struct PagedReaderView: UIViewControllerRepresentable {
         coord.parent = self
 
         if let currentVC = pvc.viewControllers?.first as? ReaderPageVC {
-            // normalizeIndexで正規化した値で比較（ずれによる無限ループ防止）
             let normalizedTarget = coord.normalizeIndex(currentPage)
             if currentVC.pageIndex != normalizedTarget {
+                LogManager.shared.log("Spread", "updateUI: vc=\(currentVC.pageIndex) cp=\(currentPage) norm=\(normalizedTarget) → setViewControllers")
                 let direction: UIPageViewController.NavigationDirection =
                     currentPage > currentVC.pageIndex ? .forward : .reverse
                 let newVC = coord.makePageVC(for: currentPage)
@@ -313,7 +313,10 @@ struct PagedReaderView: UIViewControllerRepresentable {
         }
 
         @objc func handleEdgeTap(_ gesture: UITapGestureRecognizer) {
-            guard let pvc = pageViewController, let view = gesture.view else { return }
+            guard let pvc = pageViewController, let view = gesture.view else {
+                LogManager.shared.log("Spread", "handleEdgeTap: guard failed pvc=\(pageViewController != nil)")
+                return
+            }
             let location = gesture.location(in: view)
             let width = view.bounds.width
             let quarter = width / 4
@@ -343,7 +346,11 @@ struct PagedReaderView: UIViewControllerRepresentable {
         }
 
         private func goForward(pvc: UIPageViewController) {
-            guard let currentVC = pvc.viewControllers?.first as? ReaderPageVC else { return }
+            guard let currentVC = pvc.viewControllers?.first as? ReaderPageVC else {
+                LogManager.shared.log("Spread", "goForward: no currentVC")
+                return
+            }
+            LogManager.shared.log("Spread", "goForward: from page \(currentVC.pageIndex)")
             let next: Int?
             if parent.readingOrder == 1 {
                 next = prevSpreadIndex(from: currentVC.pageIndex)
