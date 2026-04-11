@@ -1052,7 +1052,7 @@
         }
       }
     },
-    ">> HIDDEN SUBSYSTEM UNLOCKED\n>> CHARACTER CENSUS: ONLINE\n>> ACCESS LEVEL: ELEVATED\n\n// This feature is exclusive to Cort:EX" : {
+    ">> HIDDEN SUBSYSTEM UNLOCKED\n>> AGE VERIFICATION: ONLINE\n>> ACCESS LEVEL: ELEVATED\n\n// キャラクター管理に年齢機能が追加されました" : {
 
     },
     "⚠️ エクストリームモード" : {
@@ -2000,6 +2000,9 @@
       }
     },
     "CORTEX PROTOCOL" : {
+
+    },
+    "CORTEX PROTOCOL 無効化" : {
 
     },
     "Debug Log" : {
@@ -4738,7 +4741,7 @@
         }
       }
     },
-    "お気に入りに登場するキャラクターを集計" : {
+    "お気に入りキャラクター管理" : {
 
     },
     "お気に入りに追加してから\nお試しください" : {
@@ -10458,6 +10461,9 @@
         }
       }
     },
+    "全削除" : {
+
+    },
     "全履歴を削除" : {
       "localizations" : {
         "de" : {
@@ -11343,6 +11349,9 @@
           }
         }
       }
+    },
+    "年齢データをリセット" : {
+
     },
     "情報" : {
       "localizations" : {
@@ -13127,6 +13136,9 @@
           }
         }
       }
+    },
+    "登録済みの年齢データ(%lld件)を全て削除しますか？" : {
+
     },
     "確認のため再入力" : {
       "localizations" : {
