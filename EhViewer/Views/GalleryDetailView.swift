@@ -764,49 +764,95 @@ struct GalleryDetailView: View {
         // エクストリームモード: フル画像先読み開始
         prefetchFullImages()
         let pageCount = detail.gallery.pageCount
+
+        // ページ0を先に取得（即時表示に必要）
         var allInfos: [ThumbnailInfo] = []
-        var page = 0
-        var hasMore = true
+        do {
+            let tp = CFAbsoluteTimeGetCurrent()
+            let infos = try await EhClient.shared.fetchThumbnailInfos(
+                host: host, gallery: detail.gallery, page: 0
+            )
+            LogManager.shared.log("Perf", "thumbPage 0: \(Int((CFAbsoluteTimeGetCurrent() - tp) * 1000))ms \(infos.count) infos")
+            if !infos.isEmpty {
+                let reindexed = infos.enumerated().map { (i, info) in
+                    ThumbnailInfo(
+                        index: i,
+                        spriteURL: info.spriteURL,
+                        offsetX: info.offsetX,
+                        width: info.width,
+                        height: info.height
+                    )
+                }
+                allInfos.append(contentsOf: reindexed)
+                thumbnails = allInfos
+                let batch = reindexed
+                Task { await preloadSprites(for: batch) }
+            }
+        } catch {
+            // ページ0取得失敗時は終了
+            return
+        }
 
-        while hasMore {
-            do {
-                let tp = CFAbsoluteTimeGetCurrent()
-                let infos = try await EhClient.shared.fetchThumbnailInfos(
-                    host: host, gallery: detail.gallery, page: page
-                )
-                LogManager.shared.log("Perf", "thumbPage \(page): \(Int((CFAbsoluteTimeGetCurrent() - tp) * 1000))ms \(infos.count) infos")
-                if infos.isEmpty {
-                    hasMore = false
-                } else {
-                    let offset = allInfos.count
-                    let reindexed = infos.enumerated().map { (i, info) in
-                        ThumbnailInfo(
-                            index: offset + i,
-                            spriteURL: info.spriteURL,
-                            offsetX: info.offsetX,
-                            width: info.width,
-                            height: info.height
+        // 残ページが存在しない場合はここで終了
+        guard allInfos.count < pageCount, allInfos.count > 0 else { return }
+
+        // 残りのページ数を算出（ページ0の件数から推定）
+        let infosPerPage = allInfos.count
+        let estimatedPages = min(51, (pageCount + infosPerPage - 1) / infosPerPage)
+        guard estimatedPages > 1 else { return }
+
+        // 残りページ（1〜）を並列フェッチ
+        let capturedGallery = detail.gallery
+        let capturedHost = host
+        let capturedPageCount = pageCount
+        var pageResults: [(page: Int, infos: [ThumbnailInfo])] = []
+
+        await withTaskGroup(of: (Int, [ThumbnailInfo])?.self) { group in
+            for page in 1..<estimatedPages {
+                // ノーマルモード時は500msディレイをページ間に挿入
+                if !ExtremeMode.shared.isEnabled {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                }
+                group.addTask {
+                    let tp = CFAbsoluteTimeGetCurrent()
+                    do {
+                        let infos = try await EhClient.shared.fetchThumbnailInfos(
+                            host: capturedHost, gallery: capturedGallery, page: page
                         )
-                    }
-                    allInfos.append(contentsOf: reindexed)
-                    thumbnails = allInfos
-
-                    // 全ページのスプライトを先行ダウンロード（バックグラウンド）
-                    let batch = reindexed
-                    Task { await preloadSprites(for: batch) }
-
-                    page += 1
-                    if allInfos.count >= pageCount || page > 50 {
-                        hasMore = false
-                    }
-                    if hasMore {
-                        await ExtremeMode.shared.delay(nanoseconds: 2_000_000_000)
+                        LogManager.shared.log("Perf", "thumbPage \(page): \(Int((CFAbsoluteTimeGetCurrent() - tp) * 1000))ms \(infos.count) infos")
+                        return infos.isEmpty ? nil : (page, infos)
+                    } catch {
+                        return nil
                     }
                 }
-            } catch {
-                hasMore = false
+            }
+
+            for await result in group {
+                guard let (page, infos) = result else { continue }
+                pageResults.append((page: page, infos: infos))
             }
         }
+
+        // ページ順にソートしてallInfosに追加・表示更新
+        pageResults.sort { $0.page < $1.page }
+        for (_, infos) in pageResults {
+            guard allInfos.count < capturedPageCount else { break }
+            let offset = allInfos.count
+            let reindexed = infos.enumerated().map { (i, info) in
+                ThumbnailInfo(
+                    index: offset + i,
+                    spriteURL: info.spriteURL,
+                    offsetX: info.offsetX,
+                    width: info.width,
+                    height: info.height
+                )
+            }
+            allInfos.append(contentsOf: reindexed)
+            let batch = reindexed
+            Task { await preloadSprites(for: batch) }
+        }
+        thumbnails = allInfos
+        LogManager.shared.log("Perf", "loadThumbnails total: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms \(allInfos.count) infos")
     }
 
     /// スプライトシート画像を並列ダウンロード（画像サーバーへのリクエストはディレイ不要）
