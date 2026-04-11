@@ -19,7 +19,7 @@ struct GalleryCardView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            CachedImageView(url: gallery.coverURL, host: .exhentai)
+            CachedImageView(url: gallery.coverURL, host: .exhentai, gid: gallery.gid)
                 .frame(width: 80, height: 110)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .background(
