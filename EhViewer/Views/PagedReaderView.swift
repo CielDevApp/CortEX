@@ -156,7 +156,7 @@ struct PagedReaderView: UIViewControllerRepresentable {
         /// currentPage同期タイマー開始（0.3秒ごとに表示中VCのpageIndexと同期）
         func startPageSyncTimer() {
             syncTimer?.invalidate()
-            syncTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
+            let timer = Timer(timeInterval: 0.3, repeats: true) { [weak self] _ in
                 guard let self,
                       let pvc = self.pageViewController,
                       let vc = pvc.viewControllers?.first as? ReaderPageVC else {
@@ -176,6 +176,9 @@ struct PagedReaderView: UIViewControllerRepresentable {
                     self.isSyncingPage = false
                 }
             }
+            // .commonモードで登録（スワイプ中の.trackingモードでも動作する）
+            RunLoop.main.add(timer, forMode: .common)
+            syncTimer = timer
         }
 
         func stopPageSyncTimer() {
