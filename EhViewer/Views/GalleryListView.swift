@@ -301,7 +301,7 @@ struct GalleryScrollList: View {
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                ForEach(viewModel.galleries) { gallery in
+                ForEach(Array(viewModel.galleries.enumerated()), id: \.element.gid) { index, gallery in
                     NavigationLink(value: gallery) {
                         GalleryCardView(gallery: gallery)
                             .padding(.horizontal)
@@ -309,6 +309,41 @@ struct GalleryScrollList: View {
                     }
                     .buttonStyle(.plain)
                     .id(gallery.gid)
+                    .onAppear {
+                        // 次の3〜5件のカバー画像をバックグラウンドでプリフェッチ
+                        let prefetchRange = (index + 1)...(index + 4)
+                        let galleries = viewModel.galleries
+                        Task.detached(priority: .utility) {
+                            for i in prefetchRange {
+                                guard i < galleries.count else { break }
+                                if let url = galleries[i].coverURL,
+                                   ImageCache.shared.image(for: url) == nil,
+                                   !ImageCache.shared.isLoading(url) {
+                                    ImageCache.shared.setLoading(url)
+                                    do {
+                                        let data = try await EhClient.shared.fetchThumbData(url: url, host: .exhentai)
+                                        #if canImport(UIKit)
+                                        let ciCtx = CIContext(options: [.useSoftwareRenderer: false])
+                                        if let ciImage = CIImage(data: data),
+                                           let cgImage = ciCtx.createCGImage(ciImage, from: ciImage.extent) {
+                                            let img = UIImage(cgImage: cgImage)
+                                            ImageCache.shared.setThumb(img, for: url)
+                                        } else if let img = PlatformImage(data: data) {
+                                            ImageCache.shared.setThumb(img, for: url)
+                                        }
+                                        #else
+                                        if let img = PlatformImage(data: data) {
+                                            ImageCache.shared.setThumb(img, for: url)
+                                        }
+                                        #endif
+                                    } catch {
+                                        // プリフェッチ失敗は無視（CachedImageViewが再試行する）
+                                    }
+                                    ImageCache.shared.removeLoading(url)
+                                }
+                            }
+                        }
+                    }
 
                     Divider().padding(.leading)
                 }

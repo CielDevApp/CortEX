@@ -171,7 +171,9 @@ struct EhViewerApp: App {
             ContentView()
                 .task {
                     FavoritesViewModel.prefetchCachedFavorites()
-                    ImageCache.shared.prewarmRecentThumbs()
+                    Task.detached(priority: .utility) {
+                        ImageCache.shared.prewarmRecentThumbs()
+                    }
                 }
                 .onAppear {
                     #if canImport(UIKit)
