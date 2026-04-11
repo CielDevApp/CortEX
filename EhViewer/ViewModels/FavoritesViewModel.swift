@@ -225,12 +225,14 @@ class FavoritesViewModel: ObservableObject {
         LogManager.shared.log("Download", "done")
     }
 
-    /// 起動時にFavoritesCacheの未キャッシュサムネをプリフェッチ
+    /// 起動時にFavoritesCacheの未キャッシュサムネをプリフェッチ（最初の画面分のみ）
     static func prefetchCachedFavorites() {
         let cached = FavoritesCache.shared.load()
         guard !cached.isEmpty else { return }
+        // 最初の画面に表示される分だけ（全件ダウンロードしない）
+        let visible = Array(cached.prefix(30))
         Task(priority: .background) {
-            await prefetchThumbnails(cached)
+            await prefetchThumbnails(visible)
         }
     }
 

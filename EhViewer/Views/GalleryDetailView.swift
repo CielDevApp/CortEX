@@ -1,5 +1,6 @@
 import SwiftUI
 import TipKit
+import CoreImage
 #if canImport(UIKit)
 import WebKit
 #endif
@@ -11,52 +12,39 @@ final class SpriteCache {
     private let sprites = NSCache<NSURL, PlatformImage>()
     private let croppedCache = NSCache<NSString, PlatformImage>()
 
+    /// Metal GPU-backed CIContext（デコード・クロップ・リサイズ全てGPU実行）
+    static let ciContext: CIContext = {
+        CIContext(options: [.useSoftwareRenderer: false, .cacheIntermediates: false])
+    }()
+
+    /// 専用スレッド: 画像処理を協調プールから完全分離（UIスレッド飢餓防止）
+    static let imageQueue = DispatchQueue(label: "sprite-processing", qos: .utility)
+
     init() {
         sprites.countLimit = 30
         croppedCache.countLimit = 200
     }
 
     func sprite(for url: URL) -> PlatformImage? {
-        if let mem = sprites.object(forKey: url as NSURL) { return mem }
-        if let disk = ImageCache.shared.image(for: url) {
-            sprites.setObject(disk, forKey: url as NSURL)
-            return disk
-        }
-        return nil
+        sprites.object(forKey: url as NSURL)
     }
 
     func setSprite(_ image: PlatformImage, for url: URL) {
         sprites.setObject(image, forKey: url as NSURL)
-        ImageCache.shared.set(image, for: url)
+        // ディスク保存しない（再DL可能 + JPEGエンコードがCPU重い）
     }
 
     func croppedKey(url: URL, offsetX: CGFloat) -> String {
         "\(url.absoluteString)_\(Int(offsetX))"
     }
 
-    private func croppedURL(key: String) -> URL {
-        let stableHash = key.utf8.reduce(into: UInt64(5381)) { h, c in
-            h = h &* 33 &+ UInt64(c)
-        }
-        return URL(string: "ehviewer-crop://\(stableHash)")!
-    }
-
     func croppedImage(key: String) -> PlatformImage? {
-        let nsKey = key as NSString
-        if let mem = croppedCache.object(forKey: nsKey) { return mem }
-        let url = croppedURL(key: key)
-        if let disk = ImageCache.shared.image(for: url) {
-            croppedCache.setObject(disk, forKey: nsKey)
-            return disk
-        }
-        return nil
+        croppedCache.object(forKey: key as NSString)
     }
 
     func setCropped(_ image: PlatformImage, key: String) {
         croppedCache.setObject(image, forKey: key as NSString)
-        Task.detached(priority: .utility) {
-            ImageCache.shared.set(image, for: self.croppedURL(key: key))
-        }
+        // ディスク保存しない（スプライトから再生成可能 + JPEGエンコードがCPU重い）
     }
 }
 
@@ -878,9 +866,16 @@ struct GalleryDetailView: View {
                 group.addTask {
                     do {
                         let data = try await EhClient.shared.fetchImageData(url: url, host: self.host)
-                        // デコードとキャッシュ保存をバックグラウンドで完結（MainActor不要）
-                        if let image = PlatformImage(data: data) {
-                            SpriteCache.shared.setSprite(image, for: url)
+                        // 専用キューでデコード（協調プール完全不使用 → UIスレッド影響ゼロ）
+                        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                            SpriteCache.imageQueue.async {
+                                if let ciImage = CIImage(data: data),
+                                   let cgImage = SpriteCache.ciContext.createCGImage(ciImage, from: ciImage.extent) {
+                                    let image = PlatformImage(cgImage: cgImage)
+                                    SpriteCache.shared.setSprite(image, for: url)
+                                }
+                                cont.resume()
+                            }
                         }
                     } catch {
                         // silent fail
@@ -914,9 +909,18 @@ struct GalleryDetailView: View {
         if sprite == nil {
             do {
                 let data = try await EhClient.shared.fetchImageData(url: info.spriteURL, host: host)
-                if let downloaded = PlatformImage(data: data) {
-                    cache.setSprite(downloaded, for: info.spriteURL)
-                    sprite = downloaded
+                // 専用キューでデコード
+                sprite = await withCheckedContinuation { (cont: CheckedContinuation<PlatformImage?, Never>) in
+                    SpriteCache.imageQueue.async {
+                        if let ciImage = CIImage(data: data),
+                           let cgImage = SpriteCache.ciContext.createCGImage(ciImage, from: ciImage.extent) {
+                            let img = PlatformImage(cgImage: cgImage)
+                            cache.setSprite(img, for: info.spriteURL)
+                            cont.resume(returning: img)
+                        } else {
+                            cont.resume(returning: nil)
+                        }
+                    }
                 }
             } catch {
                 return
@@ -931,28 +935,32 @@ struct GalleryDetailView: View {
         let clampedX = min(x, sprite.pixelWidth - 1)
         let clampedW = min(w, sprite.pixelWidth - clampedX)
         let clampedH = min(h, sprite.pixelHeight)
-        let cropRect = CGRect(x: clampedX, y: 0, width: clampedW, height: clampedH)
 
-        // バックグラウンドで切り出し+リサイズ
-        let result: PlatformImage? = await Task.detached(priority: .utility) {
-            guard let cropped = sprite.croppedImage(rect: cropRect) else { return nil }
-            // 表示サイズ（3列グリッドで約120pt = @3xで360px）に縮小
-            let maxPixel: CGFloat = 360
-            let scale = min(maxPixel / CGFloat(clampedW), maxPixel / CGFloat(clampedH), 1.0)
-            if scale < 1.0 {
-                let newW = Int(CGFloat(clampedW) * scale)
-                let newH = Int(CGFloat(clampedH) * scale)
-                #if canImport(UIKit)
-                let renderer = UIGraphicsImageRenderer(size: CGSize(width: newW, height: newH))
-                return renderer.image { _ in
-                    cropped.draw(in: CGRect(x: 0, y: 0, width: newW, height: newH))
+        // 専用キューで切り出し+リサイズ（協調プール完全不使用）
+        let result: PlatformImage? = await withCheckedContinuation { (cont: CheckedContinuation<PlatformImage?, Never>) in
+            SpriteCache.imageQueue.async {
+                guard let cgImage = sprite.cgImage else { cont.resume(returning: nil); return }
+                let ciImage = CIImage(cgImage: cgImage)
+                let ciCropRect = CGRect(
+                    x: CGFloat(clampedX),
+                    y: ciImage.extent.height - CGFloat(clampedH),
+                    width: CGFloat(clampedW),
+                    height: CGFloat(clampedH)
+                )
+                var output = ciImage.cropped(to: ciCropRect)
+
+                let maxPixel: CGFloat = 360
+                let scale = min(maxPixel / CGFloat(clampedW), maxPixel / CGFloat(clampedH), 1.0)
+                if scale < 1.0 {
+                    output = output.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
                 }
-                #else
-                return cropped
-                #endif
+
+                guard let rendered = SpriteCache.ciContext.createCGImage(output, from: output.extent) else {
+                    cont.resume(returning: nil); return
+                }
+                cont.resume(returning: PlatformImage(cgImage: rendered))
             }
-            return cropped
-        }.value
+        }
 
         if let result {
             cache.setCropped(result, key: croppedKey)
