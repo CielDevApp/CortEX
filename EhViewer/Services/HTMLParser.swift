@@ -88,6 +88,7 @@ enum HTMLParser: Sendable {
     // MARK: - Gallery Detail Parsing
 
     nonisolated static func parseGalleryDetail(html: String, gallery: Gallery) -> GalleryDetail {
+        let t0 = CFAbsoluteTimeGetCurrent()
         let enTitle = firstMatch(html, pattern: #"<h1 id="gn">([^<]+)</h1>"#)
             .flatMap { $0.count >= 2 ? decodeHTMLEntities($0[1]) : nil }
 
@@ -185,6 +186,7 @@ enum HTMLParser: Sendable {
         updatedGallery.uploader = uploader
 
         let comments = parseComments(html: html)
+        LogManager.shared.log("Perf", "parseGalleryDetail: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms html=\(html.count) tags=\(normalizedTags.count) comments=\(comments.count)")
 
         return GalleryDetail(
             gallery: updatedGallery,

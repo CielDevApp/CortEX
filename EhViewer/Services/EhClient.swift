@@ -312,6 +312,7 @@ final class EhClient: Sendable {
     // MARK: - Networking
 
     nonisolated func fetchHTML(urlString: String, host: GalleryHost) async throws -> String {
+        let t0 = CFAbsoluteTimeGetCurrent()
         guard let url = URL(string: urlString) else {
             throw EhError.invalidURL
         }
@@ -320,6 +321,7 @@ final class EhClient: Sendable {
         request.setValue(Self.buildCookieHeader(for: host), forHTTPHeaderField: "Cookie")
 
         let (data, response) = try await session.data(for: request)
+        LogManager.shared.log("Perf", "fetchHTML: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms \(data.count)B \(urlString.suffix(60))")
         let httpResponse = response as? HTTPURLResponse
         let statusCode = httpResponse?.statusCode ?? 0
 
