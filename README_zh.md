@@ -1,4 +1,4 @@
-# Cort:EX ver.02a f2
+# Cort:EX ver.02a f3
 
 **E-Hentai / EXhentai / nhentai 统一浏览器 for iOS / iPadOS**
 
@@ -109,6 +109,12 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 - Metal / CoreML / Vision / WebKit / ActivityKit / TipKit
 
 ## 更新日志
+
+### ver.02a f3 (2026-04-12)
+- **GPU精灵图管线** — 精灵图解码、裁剪、缩放通过Metal CIContext单通道GPU渲染
+- **专用图像处理队列** — 所有精灵图处理移至独立DispatchQueue，消除协作线程池饥饿
+- **磁盘缓存废除** — 移除精灵图和裁剪缩略图的JPEG重编码（仅内存缓存，可重新获取）
+- **启动预取优化** — 缩略图预取从全部收藏（2400+）缩减至可见的30项
 
 ### ver.02a f2 (2026-04-07)
 - **收藏切换可靠性** — 429错误页面重试+退避、禁用按钮检测、Cookie去重修复

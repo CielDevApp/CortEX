@@ -56,7 +56,7 @@ struct SettingsView: View {
                 Section("情報") {
                     HStack {
                         Text("バージョン"); Spacer()
-                        Text("Cort:EX ver.02a f2")
+                        Text("Cort:EX ver.02a f3")
                             .font(.caption.monospaced())
                             .foregroundStyle(cortexUnlocked ? Color(red: 0.85, green: 0.1, blue: 0.15) : .secondary)
                     }
