@@ -1,6 +1,5 @@
 import SwiftUI
 import Combine
-import CoreImage
 
 #if canImport(UIKit)
 import UIKit
@@ -526,7 +525,7 @@ class ReaderPageVC: UIViewController {
         }
     }
 
-    /// 2枚の画像を横に合成（高さを揃える）— GPU(CIContext)で実行
+    /// 2枚の画像を横に合成（高さを揃える）
     static func composeTwoPages(left: UIImage, right: UIImage) -> UIImage {
         let targetH = max(left.size.height, right.size.height)
 
@@ -536,37 +535,16 @@ class ReaderPageVC: UIViewController {
         let rightScale = targetH / right.size.height
         let rightW = right.size.width * rightScale
 
-        // CIImageで合成（GPU 1パス）
-        guard let leftCG = left.cgImage, let rightCG = right.cgImage else {
-            // フォールバック: CGImageが取れない場合はCPU合成
-            let totalW = leftW + rightW
-            let renderer = UIGraphicsImageRenderer(size: CGSize(width: totalW, height: targetH))
-            return renderer.image { ctx in
-                UIColor.white.setFill()
-                ctx.fill(CGRect(origin: .zero, size: CGSize(width: totalW, height: targetH)))
-                left.draw(in: CGRect(x: 0, y: 0, width: leftW, height: targetH))
-                right.draw(in: CGRect(x: leftW, y: 0, width: rightW, height: targetH))
-            }
+        let totalW = leftW + rightW
+        let size = CGSize(width: totalW, height: targetH)
+
+        let renderer = UIGraphicsImageRenderer(size: size)
+        return renderer.image { ctx in
+            UIColor.white.setFill()
+            ctx.fill(CGRect(origin: .zero, size: size))
+            left.draw(in: CGRect(x: 0, y: 0, width: leftW, height: targetH))
+            right.draw(in: CGRect(x: leftW, y: 0, width: rightW, height: targetH))
         }
-
-        var leftCI = CIImage(cgImage: leftCG)
-        var rightCI = CIImage(cgImage: rightCG)
-
-        // 高さを揃えるスケール
-        leftCI = leftCI.transformed(by: CGAffineTransform(scaleX: leftScale, y: leftScale))
-        rightCI = rightCI.transformed(by: CGAffineTransform(scaleX: rightScale, y: rightScale))
-
-        // 右画像を左画像の右に配置
-        rightCI = rightCI.transformed(by: CGAffineTransform(translationX: leftW, y: 0))
-
-        // 合成
-        let composed = leftCI.composited(over: rightCI)
-
-        // GPU レンダリング
-        guard let outputCG = SpriteCache.ciContext.createCGImage(composed, from: CGRect(x: 0, y: 0, width: leftW + rightW, height: targetH)) else {
-            return left // フォールバック
-        }
-        return UIImage(cgImage: outputCG)
     }
 
     private func addDoubleTapZoom() {
