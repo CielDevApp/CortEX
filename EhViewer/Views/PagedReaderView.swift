@@ -130,57 +130,59 @@ struct PagedReaderView: UIViewControllerRepresentable {
             return img.size.width > img.size.height
         }
 
-        /// 見開きペアを計算（表紙=単独、横長=単独、それ以外=2ページ組）
-        func spreadPages(for index: Int) -> (left: Int, right: Int?) {
-            guard isSpread else { return (index, nil) }
-
-            // 表紙は常に単独
-            if index == 0 { return (0, nil) }
-
-            // 横長ページは単独
-            if isWideImage(at: index) { return (index, nil) }
-
-            // 奇数ページ起点でペア
-            let pairStart: Int
-            if index % 2 == 1 {
-                pairStart = index
-            } else {
-                pairStart = index - 1
-            }
-
-            let left = pairStart
-            let right = pairStart + 1
-
-            // 右ページが範囲外 or 横長なら左のみ
-            if right >= parent.totalPages || isWideImage(at: right) {
-                return (left, nil)
-            }
-
-            // 右綴じ: 右=小さいページ番号, 左=大きいページ番号
-            if parent.readingOrder == 1 {
-                return (right, left) // left表示位置=right(偶数), right表示位置=left(奇数)
-            } else {
-                return (left, right)
-            }
-        }
-
-        /// 代表ページインデックス（見開き時は奇数側）
+        /// 代表ページインデックス（横長画像でペアリングがリセットされる）
         func normalizeIndex(_ index: Int) -> Int {
             guard isSpread, index > 0 else { return index }
             if isWideImage(at: index) { return index }
-            return index % 2 == 0 ? index - 1 : index
+
+            // index 0(表紙)は単独。1から順にペアリングを計算
+            var pairStart = 1
+            var i = 1
+            while i <= index {
+                if isWideImage(at: i) {
+                    i += 1
+                    pairStart = i
+                    continue
+                }
+                if i == index { return pairStart }
+                // ペアの2ページ目を消費
+                let next = i + 1
+                if next <= index && !isWideImage(at: next) {
+                    i = next + 1
+                    pairStart = i
+                } else {
+                    i += 1
+                    pairStart = i
+                }
+            }
+            return index
+        }
+
+        /// 見開きペアを計算（表紙=単独、横長=単独、それ以外=2ページ組）
+        func spreadPages(for index: Int) -> (left: Int, right: Int?) {
+            guard isSpread else { return (index, nil) }
+            if index == 0 { return (0, nil) }
+            if isWideImage(at: index) { return (index, nil) }
+
+            let norm = normalizeIndex(index)
+            let right = norm + 1
+
+            if right >= parent.totalPages || isWideImage(at: right) {
+                return (norm, nil)
+            }
+
+            if parent.readingOrder == 1 {
+                return (right, norm)
+            } else {
+                return (norm, right)
+            }
         }
 
         /// 次の見開きグループの代表ページ
         func nextSpreadIndex(from index: Int) -> Int? {
             let norm = normalizeIndex(index)
             let pair = spreadPages(for: norm)
-            let advance: Int
-            if let _ = pair.right {
-                advance = norm + 2
-            } else {
-                advance = norm + 1
-            }
+            let advance = pair.right != nil ? norm + 2 : norm + 1
             return advance < parent.totalPages ? advance : nil
         }
 
@@ -188,16 +190,8 @@ struct PagedReaderView: UIViewControllerRepresentable {
         func prevSpreadIndex(from index: Int) -> Int? {
             let norm = normalizeIndex(index)
             if norm <= 0 { return nil }
-            var prev = norm - 1
-            // 横長画像はそのまま返す
-            if isWideImage(at: prev) { return prev }
-            // 通常ページ: normalizeで見開きペアの先頭を取得
+            let prev = norm - 1
             let prevNorm = normalizeIndex(prev)
-            // 無限ループ防止: prevNormが元と同じか進まない場合はもう1つ戻る
-            if prevNorm >= norm && prev > 0 {
-                prev = prev - 1
-                return max(normalizeIndex(prev), 0)
-            }
             return prevNorm >= 0 ? prevNorm : nil
         }
 
