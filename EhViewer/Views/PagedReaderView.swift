@@ -215,12 +215,17 @@ struct PagedReaderView: UIViewControllerRepresentable {
                     rightIndex: pair.right,
                     imageProvider: parent.imageForPage
                 )
-                parent.onPageAppear(pair.left)
-                if let r = pair.right { parent.onPageAppear(r) }
+                // onPageAppearはviewDidAppearで呼ぶ（プリフェッチ時の無駄な呼び出し防止）
+                vc.onDidAppear = { [weak self] in
+                    self?.parent.onPageAppear(pair.left)
+                    if let r = pair.right { self?.parent.onPageAppear(r) }
+                }
             } else {
                 vc.image = parent.imageForPage(norm)
                 vc.setupImageView()
-                parent.onPageAppear(norm)
+                vc.onDidAppear = { [weak self] in
+                    self?.parent.onPageAppear(norm)
+                }
             }
 
             vc.view.backgroundColor = .black
@@ -397,6 +402,8 @@ class ReaderPageVC: UIViewController {
     private var isSpreadLayout = false
     /// ダブルタップでズーム
     var onZoomImage: ((PlatformImage) -> Void)?
+    /// 表示時コールバック（onPageAppear遅延実行用）
+    var onDidAppear: (() -> Void)?
 
     /// 単一ページ表示
     func setupImageView() {
@@ -416,9 +423,7 @@ class ReaderPageVC: UIViewController {
         iv.image = image
         imageView = iv
 
-        if image == nil { addSpinner() }
         addDoubleTapZoom()
-        startImagePolling()
     }
 
     /// 見開き表示（左右2ページ）
@@ -445,15 +450,8 @@ class ReaderPageVC: UIViewController {
         ])
         imageView = iv
 
-        // 合成画像を生成して表示
-        updateSpreadImage()
-
-        let hasBlank = imageProvider(leftIndex) == nil || (rightIndex != nil && imageProvider(rightIndex!) == nil)
-        if hasBlank { addSpinner() }
-
-        if imageProvider(leftIndex) == nil { addSpinner() }
+        // 合成は表示時に実行（プリフェッチ時の無駄な合成を防止）
         addDoubleTapZoom()
-        startImagePolling()
     }
 
     private func addSpinner() {
@@ -559,6 +557,32 @@ class ReaderPageVC: UIViewController {
     @objc private func handleDoubleTap() {
         guard let img = imageView?.image else { return }
         onZoomImage?(img)
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        onDidAppear?()
+        onDidAppear = nil // 1回だけ
+        // 表示時に合成+ポーリング開始（プリフェッチ時は実行しない）
+        if isSpreadLayout {
+            updateSpreadImage()
+            let hasBlank = (leftIndex.flatMap { imageProvider?($0) } == nil) ||
+                           (rightIndex != nil && rightIndex.flatMap { imageProvider?($0) } == nil)
+            if hasBlank { addSpinner() }
+        } else {
+            if let img = imageProvider?(pageIndex) {
+                imageView?.image = img
+            } else {
+                addSpinner()
+            }
+        }
+        if updateTimer == nil { startImagePolling() }
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        updateTimer?.invalidate()
+        updateTimer = nil
     }
 
     deinit {
