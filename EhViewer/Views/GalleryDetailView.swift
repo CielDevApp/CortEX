@@ -878,13 +878,12 @@ struct GalleryDetailView: View {
                 group.addTask {
                     do {
                         let data = try await EhClient.shared.fetchImageData(url: url, host: self.host)
+                        // デコードとキャッシュ保存をバックグラウンドで完結（MainActor不要）
                         if let image = PlatformImage(data: data) {
-                            await MainActor.run {
-                                SpriteCache.shared.setSprite(image, for: url)
-                            }
+                            SpriteCache.shared.setSprite(image, for: url)
                         }
                     } catch {
-                        print("[Thumb] preload sprite failed: \(url)")
+                        // silent fail
                     }
                 }
             }
