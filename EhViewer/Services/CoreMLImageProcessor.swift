@@ -37,6 +37,8 @@ final class CoreMLImageProcessor: @unchecked Sendable, ImageProcessor {
     private let maxTileCount = 20
     /// 空きメモリ下限（バイト）
     private let minFreeMemory = 100 * 1024 * 1024
+    /// 同時処理制限（GPU占有防止）
+    private let processSemaphore = DispatchSemaphore(value: 1)
 
     /// アプリがアクティブかどうか（FaceIDロック中は処理しない）
     /// デフォルトtrue（onChange初期値問題の回避）、background遷移時にfalseにする
@@ -186,11 +188,18 @@ final class CoreMLImageProcessor: @unchecked Sendable, ImageProcessor {
         let totalTiles = tilesX * tilesY
 
         if totalTiles > maxTileCount {
-            LogManager.shared.log("CoreML", "process: \(totalTiles) tiles exceeds limit \(maxTileCount), using Lanczos fallback")
-            return lanczosUpscale(image, scale: CGFloat(modelScale))
+            LogManager.shared.log("CoreML", "process: \(totalTiles) tiles exceeds limit \(maxTileCount), using Lanczos 2x fallback")
+            // GPU占有防止: セマフォで同時実行制限 + スケールを2xに制限
+            processSemaphore.wait()
+            defer { processSemaphore.signal() }
+            return lanczosUpscale(image, scale: 2.0)
         }
 
         LogManager.shared.log("CoreML", "process: \(totalTiles) tiles (\(tilesX)x\(tilesY)) to process")
+
+        // GPU占有防止: セマフォで同時実行制限
+        processSemaphore.wait()
+        defer { processSemaphore.signal() }
 
         // タイリング処理（全体をdo-catchで囲む）
         do {
