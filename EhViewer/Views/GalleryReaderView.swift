@@ -265,8 +265,7 @@ struct GalleryReaderView: View {
             imageForPage: { index in viewModel.holder(for: index).image },
             onPageAppear: { index in viewModel.onAppear(index: index) },
             onDismiss: { handleDismiss() },
-            onZoomImage: { img in zoomImage = img },
-            viewModel: viewModel
+            onZoomImage: { img in zoomImage = img }
         )
         .ignoresSafeArea()
         .onLongPressGesture(minimumDuration: 0.3) {
@@ -279,10 +278,13 @@ struct GalleryReaderView: View {
             #if canImport(UIKit)
             if isSliding {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                // horizontalPageは更新しない（setViewControllers連射防止）
-                // ページラベルはsliderValueから直接表示
             }
             #endif
+        }
+        .onReceive(NotificationCenter.default.publisher(for: PagedReaderView.pageChangedNotification)) { notif in
+            guard !isSliding, let page = notif.userInfo?["page"] as? Int else { return }
+            if horizontalPage != page { horizontalPage = page }
+            if viewModel.currentIndex != page { viewModel.currentIndex = page }
         }
         .onAppear {
             horizontalPage = viewModel.initialPage
