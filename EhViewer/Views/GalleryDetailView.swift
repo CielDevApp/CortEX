@@ -614,17 +614,71 @@ struct GalleryDetailView: View {
 
     // MARK: - Thumbnail Grid
 
+    @State private var loadingThumbPages = Set<Int>()
+    private let thumbsPerPage = 20
+
     @ViewBuilder
     private func thumbnailGrid(_ detail: GalleryDetail) -> some View {
         GroupBox("ページ一覧（\(detail.gallery.pageCount)ページ）") {
             LazyVGrid(columns: columns, spacing: 4) {
                 ForEach(0..<detail.gallery.pageCount, id: \.self) { index in
                     thumbnailCell(index: index)
+                        .onAppear {
+                            // サムネ情報が未取得ならオンデマンドでページ取得
+                            if index >= thumbnails.count {
+                                let neededPage = index / thumbsPerPage
+                                loadThumbPageIfNeeded(page: neededPage)
+                            }
+                        }
                 }
             }
         }
         .task {
             await loadThumbnails()
+        }
+    }
+
+    private func loadThumbPageIfNeeded(page: Int) {
+        guard !loadingThumbPages.contains(page) else { return }
+        loadingThumbPages.insert(page)
+        guard let detail else { return }
+
+        Task {
+            let tp = CFAbsoluteTimeGetCurrent()
+            do {
+                let infos = try await EhClient.shared.fetchThumbnailInfos(
+                    host: host, gallery: detail.gallery, page: page
+                )
+                LogManager.shared.log("Perf", "thumbPage \(page) (lazy): \(Int((CFAbsoluteTimeGetCurrent() - tp) * 1000))ms \(infos.count) infos")
+
+                let offset = page * thumbsPerPage
+                let reindexed = infos.enumerated().map { (i, info) in
+                    ThumbnailInfo(
+                        index: offset + i,
+                        spriteURL: info.spriteURL,
+                        offsetX: info.offsetX,
+                        width: info.width,
+                        height: info.height
+                    )
+                }
+
+                // 必要に応じて配列を拡張
+                var current = thumbnails
+                while current.count < offset + reindexed.count {
+                    current.append(ThumbnailInfo(index: current.count, spriteURL: URL(string: "about:blank")!, offsetX: 0, width: 0, height: 0))
+                }
+                for info in reindexed {
+                    if info.index < current.count {
+                        current[info.index] = info
+                    }
+                }
+                thumbnails = current
+
+                // スプライトpreload（1ページ分のみ）
+                Task { await preloadSprites(for: reindexed) }
+            } catch {
+                LogManager.shared.log("Perf", "thumbPage \(page) (lazy): FAILED")
+            }
         }
     }
 
@@ -793,64 +847,8 @@ struct GalleryDetailView: View {
             return
         }
 
-        // 残ページが存在しない場合はここで終了
-        guard allInfos.count < pageCount, allInfos.count > 0 else { return }
-
-        // 残りのページ数を算出（ページ0の件数から推定）
-        let infosPerPage = allInfos.count
-        let estimatedPages = min(51, (pageCount + infosPerPage - 1) / infosPerPage)
-        guard estimatedPages > 1 else { return }
-
-        // 残りページ（1〜）を並列フェッチ
-        let capturedGallery = detail.gallery
-        let capturedHost = host
-        let capturedPageCount = pageCount
-        var pageResults: [(page: Int, infos: [ThumbnailInfo])] = []
-
-        await withTaskGroup(of: (Int, [ThumbnailInfo])?.self) { group in
-            for page in 1..<estimatedPages {
-                // ノーマルモード時は500msディレイをページ間に挿入
-                if !ExtremeMode.shared.isEnabled {
-                    try? await Task.sleep(nanoseconds: 500_000_000)
-                }
-                group.addTask {
-                    let tp = CFAbsoluteTimeGetCurrent()
-                    do {
-                        let infos = try await EhClient.shared.fetchThumbnailInfos(
-                            host: capturedHost, gallery: capturedGallery, page: page
-                        )
-                        LogManager.shared.log("Perf", "thumbPage \(page): \(Int((CFAbsoluteTimeGetCurrent() - tp) * 1000))ms \(infos.count) infos")
-                        return infos.isEmpty ? nil : (page, infos)
-                    } catch {
-                        return nil
-                    }
-                }
-            }
-
-            for await result in group {
-                guard let (page, infos) = result else { continue }
-                pageResults.append((page: page, infos: infos))
-            }
-        }
-
-        // ページ順にソートしてallInfosに追加・表示更新
-        pageResults.sort { $0.page < $1.page }
-        for (_, infos) in pageResults {
-            guard allInfos.count < capturedPageCount else { break }
-            let offset = allInfos.count
-            let reindexed = infos.enumerated().map { (i, info) in
-                ThumbnailInfo(
-                    index: offset + i,
-                    spriteURL: info.spriteURL,
-                    offsetX: info.offsetX,
-                    width: info.width,
-                    height: info.height
-                )
-            }
-            allInfos.append(contentsOf: reindexed)
-            // page 1+のスプライトprefetchは行わない（オンデマンドロード）
-            // ネットワーク帯域競合によるフレームドロップ防止
-        }
+        // 残りのページはスクロール時にオンデマンドロード（ブラウザ方式）
+        // page 0のみ即ロード、page 1+はthumbnailCellのonAppearで取得
         thumbnails = allInfos
         LogManager.shared.log("Perf", "loadThumbnails total: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms \(allInfos.count) infos")
     }
