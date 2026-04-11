@@ -68,7 +68,10 @@ struct PagedReaderView: UIViewControllerRepresentable {
             // normalizeIndexで正規化された場合、currentPageを実際のページに合わせる
             // （不一致が残るとupdateUIViewControllerが無限ループする）
             if newVC.pageIndex != currentPage {
-                currentPage = newVC.pageIndex
+                let normalized = newVC.pageIndex
+                DispatchQueue.main.async {
+                    self.currentPage = normalized
+                }
             }
         }
     }
