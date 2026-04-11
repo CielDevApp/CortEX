@@ -30,6 +30,7 @@ final class EhClient: Sendable {
     // MARK: - Gallery List
 
     nonisolated func fetchGalleryList(host: GalleryHost, page: Int = 0, searchQuery: String? = nil, categoryFilter: Int? = nil) async throws -> (galleries: [Gallery], pageNumber: PageNumber) {
+        let t0 = CFAbsoluteTimeGetCurrent()
         var urlString = host.baseURL + "/"
         var queryItems: [String] = []
 
@@ -55,6 +56,7 @@ final class EhClient: Sendable {
             LogManager.shared.log("Reader", "  0件")
         }
 
+        LogManager.shared.log("Perf", "fetchGalleryList: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms count=\(galleries.count) page=\(page)")
         return (galleries, pageNumber)
     }
 
@@ -158,24 +160,31 @@ final class EhClient: Sendable {
     // MARK: - Gallery Detail
 
     nonisolated func fetchGalleryDetail(host: GalleryHost, gallery: Gallery) async throws -> GalleryDetail {
+        let t0 = CFAbsoluteTimeGetCurrent()
         let urlString = gallery.galleryURL(host: host) + "?hc=1"
         let html = try await fetchHTML(urlString: urlString, host: host)
-        return HTMLParser.parseGalleryDetail(html: html, gallery: gallery)
+        let detail = HTMLParser.parseGalleryDetail(html: html, gallery: gallery)
+        LogManager.shared.log("Perf", "fetchGalleryDetail: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms gid=\(gallery.gid)")
+        return detail
     }
 
     // MARK: - Image Pages
 
     nonisolated func fetchImagePageURLs(host: GalleryHost, gallery: Gallery, page: Int = 0) async throws -> [URL] {
+        let t0 = CFAbsoluteTimeGetCurrent()
         var urlString = gallery.galleryURL(host: host)
         if page > 0 {
             urlString += "?p=\(page)"
         }
         let html = try await fetchHTML(urlString: urlString, host: host)
-        return HTMLParser.parseImagePageURLs(html: html)
+        let urls = HTMLParser.parseImagePageURLs(html: html)
+        LogManager.shared.log("Perf", "fetchImagePageURLs: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms count=\(urls.count) page=\(page) gid=\(gallery.gid)")
+        return urls
     }
 
     /// ギャラリーページからサムネイル情報を取得
     nonisolated func fetchThumbnailInfos(host: GalleryHost, gallery: Gallery, page: Int = 0) async throws -> [ThumbnailInfo] {
+        let t0 = CFAbsoluteTimeGetCurrent()
         var urlString = gallery.galleryURL(host: host)
         if page > 0 {
             urlString += "?p=\(page)"
@@ -186,6 +195,7 @@ final class EhClient: Sendable {
         if let first = infos.first {
             LogManager.shared.log("Reader", "  first: url=\(first.spriteURL) offsetX=\(first.offsetX) size=\(first.width)x\(first.height)")
         }
+        LogManager.shared.log("Perf", "fetchThumbnailInfos: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms count=\(infos.count) page=\(page) gid=\(gallery.gid)")
         return infos
     }
 
@@ -223,6 +233,7 @@ final class EhClient: Sendable {
 
     /// 画像データをcookie付きでダウンロード（AsyncImageの代わりに使用）
     nonisolated func fetchImageData(url: URL, host: GalleryHost) async throws -> Data {
+        let t0 = CFAbsoluteTimeGetCurrent()
         var request = URLRequest(url: url)
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue(Self.buildCookieHeader(for: host), forHTTPHeaderField: "Cookie")
@@ -235,6 +246,7 @@ final class EhClient: Sendable {
         guard !data.isEmpty else {
             throw EhError.parseFailed
         }
+        LogManager.shared.log("Perf", "fetchImageData: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms \(data.count)B \(url.lastPathComponent)")
         return data
     }
 

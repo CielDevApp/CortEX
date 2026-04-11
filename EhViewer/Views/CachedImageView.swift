@@ -27,10 +27,12 @@ struct CachedImageView: View {
 
     private func loadImage() async {
         guard let url else { failed = true; return }
+        let t0 = CFAbsoluteTimeGetCurrent()
 
         // キャッシュヒット → 即表示
         if let cached = ImageCache.shared.image(for: url) {
             LogManager.shared.log("Thumb", "cache hit \(url.lastPathComponent)")
+            LogManager.shared.log("Perf", "coverImage(cache hit): \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms \(url.lastPathComponent)")
             uiImage = cached
             return
         }
@@ -111,6 +113,7 @@ struct CachedImageView: View {
         ImageCache.shared.removeLoading(url)
 
         if let result {
+            LogManager.shared.log("Perf", "coverImage(fetch): \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms \(url.lastPathComponent)")
             withAnimation(.easeIn(duration: 0.15)) { uiImage = result }
         } else if !Task.isCancelled {
             failed = true

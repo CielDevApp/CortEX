@@ -41,6 +41,7 @@ extension ReaderViewModel {
     /// ページをロード。成功したらtrue、URLが未準備ならfalse
     @discardableResult
     func loadSingle(_ index: Int) async -> Bool {
+        let t0 = CFAbsoluteTimeGetCurrent()
         guard index < totalPages else {
             LogManager.shared.log("Reader", "loadSingle \(index) exit: index>=totalPages (\(totalPages))")
             return false
@@ -49,6 +50,7 @@ extension ReaderViewModel {
         // ダウンロード済みローカル画像
         if let localImage = DownloadManager.shared.loadLocalImage(gid: gallery.gid, page: index) {
             LogManager.shared.log("Reader", "loadSingle \(index) exit: local image hit")
+            LogManager.shared.log("Perf", "pageLoad[\(index)]: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms source=local")
             rawImages[index] = localImage
             applyFilterPipeline(index: index, raw: localImage)
             return true
@@ -131,6 +133,7 @@ extension ReaderViewModel {
                 rawImages[index] = display
                 applyFilterPipeline(index: index, raw: display)
                 LogManager.shared.log("Reader", "loadSingle \(index) exit: cache hit, displayed")
+                LogManager.shared.log("Perf", "pageLoad[\(index)]: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms source=imageCache")
                 if mode >= 3 {
                     let capturedIndex = index
                     Task.detached(priority: .utility) {
@@ -153,7 +156,9 @@ extension ReaderViewModel {
                 await ExtremeMode.shared.delay(nanoseconds: requestDelay)
             }
 
+            let fetchStart = CFAbsoluteTimeGetCurrent()
             let imageData = try await client.fetchImageData(url: imageURL, host: host)
+            let fetchMs = Int((CFAbsoluteTimeGetCurrent() - fetchStart) * 1000)
 
             // 自動保存: 設定ONの場合のみ
             if UserDefaults.standard.bool(forKey: "autoSaveOnRead") {
@@ -164,6 +169,7 @@ extension ReaderViewModel {
             }
 
             let decodePriority: TaskPriority = isVisible ? .userInitiated : .utility
+            let decodeStart = CFAbsoluteTimeGetCurrent()
             let image: PlatformImage? = await Task.detached(priority: decodePriority) {
                 guard let img = PlatformImage(data: imageData) else { return nil }
                 #if canImport(UIKit)
@@ -174,6 +180,7 @@ extension ReaderViewModel {
                 return img
                 #endif
             }.value
+            let decodeMs = Int((CFAbsoluteTimeGetCurrent() - decodeStart) * 1000)
 
             guard let image else {
                 LogManager.shared.log("Reader", "loadSingle \(index) exit: image decode failed")
@@ -186,6 +193,7 @@ extension ReaderViewModel {
             rawImages[index] = display
             applyFilterPipeline(index: index, raw: display)
             LogManager.shared.log("Reader", "loadSingle \(index) exit: fetched & displayed (\(image.pixelWidth)x\(image.pixelHeight))")
+            LogManager.shared.log("Perf", "pageLoad[\(index)]: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms fetch=\(fetchMs)ms decode=\(decodeMs)ms size=\(imageData.count)B \(image.pixelWidth)x\(image.pixelHeight)")
 
             if mode >= 3 {
                 let capturedIndex = index

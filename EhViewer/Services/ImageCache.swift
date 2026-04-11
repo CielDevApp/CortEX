@@ -76,7 +76,9 @@ final class ImageCache {
     func image(for url: URL) -> PlatformImage? {
         let key = url as NSURL
         if let img = memoryCache.object(forKey: key) { return img }
+        let t0 = CFAbsoluteTimeGetCurrent()
         if let img = loadFromDisk(url: url) {
+            LogManager.shared.log("Perf", "ImageCache diskRead: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms \(url.lastPathComponent)")
             memoryCache.setObject(img, forKey: key)
             return img
         }
