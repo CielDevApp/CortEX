@@ -92,17 +92,31 @@ struct PagedReaderView: UIViewControllerRepresentable {
         }
 
         // 横長チェック
-        if let provider = imageForPage, let img = provider(currentPage) {
-            if img.size.width > img.size.height {
-                return "\(currentPage + 1) / \(totalPages)"
+        let isWide: (Int) -> Bool = { idx in
+            guard let provider = imageForPage, let img = provider(idx) else { return false }
+            return img.size.width > img.size.height
+        }
+
+        if isWide(currentPage) {
+            return "\(currentPage + 1) / \(totalPages)"
+        }
+
+        // normalizeIndexと同じロジックでペア先頭を計算
+        var pairStart = 1
+        var i = 1
+        while i <= currentPage {
+            if isWide(i) { i += 1; pairStart = i; continue }
+            if i == currentPage { break }
+            let next = i + 1
+            if next <= currentPage && !isWide(next) {
+                i = next + 1; pairStart = i
+            } else {
+                i += 1; pairStart = i
             }
         }
 
-        // ペア計算
-        let pairStart = currentPage % 2 == 1 ? currentPage : currentPage - 1
         let pairEnd = pairStart + 1
-
-        if pairEnd >= totalPages {
+        if pairEnd >= totalPages || isWide(pairEnd) {
             return "\(pairStart + 1) / \(totalPages)"
         }
 
