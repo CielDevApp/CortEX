@@ -236,6 +236,15 @@ struct PagedReaderView: UIViewControllerRepresentable {
                 }
             }
 
+            // currentPage同期（didFinishAnimating非発火対策）
+            vc.onPageChange = { [weak self] pageIdx in
+                DispatchQueue.main.async {
+                    if self?.parent.currentPage != pageIdx {
+                        self?.parent.currentPage = pageIdx
+                    }
+                }
+            }
+
             vc.view.backgroundColor = .black
             return vc
         }
@@ -412,6 +421,8 @@ class ReaderPageVC: UIViewController {
     var onZoomImage: ((PlatformImage) -> Void)?
     /// 表示時コールバック（onPageAppear遅延実行用）
     var onDidAppear: (() -> Void)?
+    /// ページ表示通知（currentPage同期用）
+    var onPageChange: ((Int) -> Void)?
 
     /// 単一ページ表示
     func setupImageView() {
@@ -570,7 +581,9 @@ class ReaderPageVC: UIViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         onDidAppear?()
-        onDidAppear = nil // 1回だけ
+        onDidAppear = nil
+        // currentPageを確実に同期（didFinishAnimatingが発火しない場合の保険）
+        onPageChange?(pageIndex)
         // 表示時に合成+ポーリング開始（プリフェッチ時は実行しない）
         if isSpreadLayout {
             updateSpreadImage()
