@@ -348,6 +348,7 @@ struct FavoritesView: View {
 
     /// nhentaiお気に入りをサーバーと同期（WKWebView HTML解析）
     private func syncNhFavorites() async {
+        let t0 = CFAbsoluteTimeGetCurrent()
         LogManager.shared.log("nhFav", "=== syncNhFavorites START ===")
         LogManager.shared.log("nhFav", "isLoggedIn=\(NhentaiCookieManager.isLoggedIn()) hasCf=\(NhentaiCookieManager.hasCfClearance())")
         isLoadingNh = true
@@ -381,6 +382,7 @@ struct FavoritesView: View {
             nhFavCache.save(galleries)
             nhFavorites = galleries
             LogManager.shared.log("nhFav", "synced: \(galleries.count) items")
+            LogManager.shared.log("Perf", "syncNhFavorites: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms total=\(galleries.count)")
             #else
             let serverFavs = try await NhentaiClient.fetchAllFavorites()
             nhFavCache.save(serverFavs)

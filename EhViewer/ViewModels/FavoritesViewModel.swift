@@ -73,6 +73,7 @@ class FavoritesViewModel: ObservableObject {
             await fullRefreshFromServer()
             return
         }
+        let t0 = CFAbsoluteTimeGetCurrent()
         isLoading = true
         errorMessage = nil
 
@@ -121,6 +122,7 @@ class FavoritesViewModel: ObservableObject {
             galleries = displayGalleries
             isFromCache = false
             cache.save(allGalleries)
+            LogManager.shared.log("Perf", "refreshFromServer: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms total=\(allGalleries.count) new=\(newItems.count)")
 
             // サムネをバックグラウンドでプリフェッチ
             Task(priority: .background) {
@@ -136,6 +138,7 @@ class FavoritesViewModel: ObservableObject {
 
     /// 全件再取得（設定画面から呼ぶ）
     func fullRefreshFromServer() async {
+        let t0 = CFAbsoluteTimeGetCurrent()
         isLoading = true
         errorMessage = nil
         isFromCache = false
@@ -170,6 +173,7 @@ class FavoritesViewModel: ObservableObject {
 
             cache.save(serverGalleries)
             LogManager.shared.log("Reader", "favorites full refresh: \(serverGalleries.count) items saved")
+            LogManager.shared.log("Perf", "fullRefreshFromServer: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms total=\(serverGalleries.count)")
 
             // サムネをバックグラウンドでプリフェッチ
             Task(priority: .background) {
