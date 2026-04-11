@@ -947,6 +947,7 @@ struct GalleryDetailView: View {
             }
         }
 
+        guard index < thumbnails.count else { return }
         let info = thumbnails[index]
         let cache = SpriteCache.shared
         let croppedKey = cache.croppedKey(url: info.spriteURL, offsetX: info.offsetX)
