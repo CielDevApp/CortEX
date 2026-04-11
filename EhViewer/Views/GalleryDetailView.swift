@@ -656,21 +656,22 @@ struct GalleryDetailView: View {
 
     private func loadDetail() async {
         isLoading = true
+        let t0 = CFAbsoluteTimeGetCurrent()
         do {
             let result = try await EhClient.shared.fetchGalleryDetail(host: host, gallery: gallery)
-            LogManager.shared.log("Detail", "gid=\(gallery.gid) pageCount=\(result.gallery.pageCount) previews=\(result.previewURLs.count) tags=\(result.normalizedTags.count) fav=\(result.favoritedCount ?? -1)")
-            // 中身が空のギャラリーも削除扱い（ページ0のみ）
+            let dt = Int((CFAbsoluteTimeGetCurrent() - t0) * 1000)
+            LogManager.shared.log("Perf", "loadDetail: \(dt)ms gid=\(gallery.gid) pages=\(result.gallery.pageCount) tags=\(result.normalizedTags.count)")
             if result.gallery.pageCount == 0 {
                 isGalleryRemoved = true
-                LogManager.shared.log("Detail", "→ treated as removed (empty)")
             } else {
                 detail = result
             }
         } catch let error as EhError where error == .galleryRemoved {
             isGalleryRemoved = true
-            LogManager.shared.log("Detail", "gid=\(gallery.gid) gallery removed (EhError)")
+            LogManager.shared.log("Detail", "gid=\(gallery.gid) gallery removed")
         } catch {
-            LogManager.shared.log("Detail", "gid=\(gallery.gid) error: \(error.localizedDescription)")
+            let dt = Int((CFAbsoluteTimeGetCurrent() - t0) * 1000)
+            LogManager.shared.log("Perf", "loadDetail: \(dt)ms FAILED \(error.localizedDescription)")
             errorMessage = error.localizedDescription
         }
         isLoading = false
@@ -759,6 +760,7 @@ struct GalleryDetailView: View {
 
     private func loadThumbnails() async {
         guard let detail, thumbnails.isEmpty else { return }
+        let t0 = CFAbsoluteTimeGetCurrent()
         // エクストリームモード: フル画像先読み開始
         prefetchFullImages()
         let pageCount = detail.gallery.pageCount
@@ -768,9 +770,11 @@ struct GalleryDetailView: View {
 
         while hasMore {
             do {
+                let tp = CFAbsoluteTimeGetCurrent()
                 let infos = try await EhClient.shared.fetchThumbnailInfos(
                     host: host, gallery: detail.gallery, page: page
                 )
+                LogManager.shared.log("Perf", "thumbPage \(page): \(Int((CFAbsoluteTimeGetCurrent() - tp) * 1000))ms \(infos.count) infos")
                 if infos.isEmpty {
                     hasMore = false
                 } else {
