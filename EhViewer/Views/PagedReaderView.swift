@@ -44,6 +44,7 @@ struct PagedReaderView: UIViewControllerRepresentable {
         pvc.view.addGestureRecognizer(edgeTap)
 
         context.coordinator.pageViewController = pvc
+        context.coordinator.startPageSyncTimer()
 
         // 画面回転監視
         NotificationCenter.default.addObserver(
@@ -142,10 +143,32 @@ struct PagedReaderView: UIViewControllerRepresentable {
         weak var pageViewController: UIPageViewController?
         /// updateUIViewController再トリガー防止フラグ
         var isSyncingPage = false
+        private var syncTimer: Timer?
 
         init(_ parent: PagedReaderView) {
             self.parent = parent
         }
+
+        /// currentPage同期タイマー開始（0.3秒ごとに表示中VCのpageIndexと同期）
+        func startPageSyncTimer() {
+            syncTimer?.invalidate()
+            syncTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
+                guard let self,
+                      let pvc = self.pageViewController,
+                      let vc = pvc.viewControllers?.first as? ReaderPageVC else { return }
+                if self.parent.currentPage != vc.pageIndex {
+                    self.isSyncingPage = true
+                    self.parent.currentPage = vc.pageIndex
+                    self.isSyncingPage = false
+                }
+            }
+        }
+
+        func stopPageSyncTimer() {
+            syncTimer?.invalidate()
+            syncTimer = nil
+        }
+
 
         /// 見開きモードかどうか
         var isSpread: Bool { PagedReaderView.isSpreadMode }
@@ -417,6 +440,7 @@ struct PagedReaderView: UIViewControllerRepresentable {
         }
 
         deinit {
+            syncTimer?.invalidate()
             NotificationCenter.default.removeObserver(self)
         }
     }
