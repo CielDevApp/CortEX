@@ -59,19 +59,14 @@ struct PagedReaderView: UIViewControllerRepresentable {
         let coord = context.coordinator
         coord.parent = self
 
-        if let currentVC = pvc.viewControllers?.first as? ReaderPageVC,
-           currentVC.pageIndex != currentPage {
-            let direction: UIPageViewController.NavigationDirection =
-                currentPage > currentVC.pageIndex ? .forward : .reverse
-            let newVC = coord.makePageVC(for: currentPage)
-            pvc.setViewControllers([newVC], direction: direction, animated: false)
-            // normalizeIndexで正規化された場合、currentPageを実際のページに合わせる
-            // （不一致が残るとupdateUIViewControllerが無限ループする）
-            if newVC.pageIndex != currentPage {
-                let normalized = newVC.pageIndex
-                DispatchQueue.main.async {
-                    self.currentPage = normalized
-                }
+        if let currentVC = pvc.viewControllers?.first as? ReaderPageVC {
+            // normalizeIndexで正規化した値で比較（ずれによる無限ループ防止）
+            let normalizedTarget = coord.normalizeIndex(currentPage)
+            if currentVC.pageIndex != normalizedTarget {
+                let direction: UIPageViewController.NavigationDirection =
+                    currentPage > currentVC.pageIndex ? .forward : .reverse
+                let newVC = coord.makePageVC(for: currentPage)
+                pvc.setViewControllers([newVC], direction: direction, animated: false)
             }
         }
     }
