@@ -266,14 +266,7 @@ struct GalleryReaderView: View {
             onPageAppear: { index in viewModel.onAppear(index: index) },
             onDismiss: { handleDismiss() },
             onZoomImage: { img in zoomImage = img },
-            onPageChanged: { page in
-                // バインディング不安定対策: 直接viewModelとsliderを更新
-                if !isSliding {
-                    viewModel.currentIndex = page
-                    sliderValue = Double(page)
-                    horizontalPage = page
-                }
-            }
+            viewModel: viewModel
         )
         .ignoresSafeArea()
         .onLongPressGesture(minimumDuration: 0.3) {

@@ -17,6 +17,8 @@ struct PagedReaderView: UIViewControllerRepresentable {
     var onZoomImage: ((PlatformImage) -> Void)? = nil
     /// ページ変更通知（viewModelのcurrentIndex更新用）
     var onPageChanged: ((Int) -> Void)? = nil
+    /// viewModelへの直接参照（ポーリング同期用）
+    weak var viewModel: ReaderViewModel? = nil
 
     func makeUIViewController(context: Context) -> UIPageViewController {
         let pvc = UIPageViewController(
@@ -159,14 +161,16 @@ struct PagedReaderView: UIViewControllerRepresentable {
                       let pvc = self.pageViewController,
                       let vc = pvc.viewControllers?.first as? ReaderPageVC else { return }
                 let pageIdx = vc.pageIndex
+                // viewModelを直接更新（@Published → SwiftUI自動再描画）
+                if let vm = self.parent.viewModel, vm.currentIndex != pageIdx {
+                    vm.currentIndex = pageIdx
+                }
                 // バインディング経由の同期
                 if self.parent.currentPage != pageIdx {
                     self.isSyncingPage = true
                     self.parent.currentPage = pageIdx
                     self.isSyncingPage = false
                 }
-                // コールバック経由の直接同期（バインディング不安定対策）
-                self.parent.onPageChanged?(pageIdx)
             }
         }
 
