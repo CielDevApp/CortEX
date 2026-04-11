@@ -329,6 +329,7 @@ struct GalleryReaderView: View {
             .onChange(of: viewModel.currentIndex) { _, newIndex in
                 if !isSliding {
                     sliderValue = Double(newIndex)
+                    if readerDirection == 1 { horizontalPage = newIndex }
                 }
                 HistoryManager.shared.updateLastPage(gid: gallery.gid, page: newIndex)
             }
@@ -573,7 +574,7 @@ struct GalleryReaderView: View {
 
     /// 見開き対応ページラベル
     private var spreadPageLabelText: String {
-        let page = isSliding ? Int(sliderValue) : viewModel.currentIndex
+        let page = isSliding ? Int(sliderValue) : (readerDirection == 1 ? horizontalPage : viewModel.currentIndex)
         if readerDirection == 1 { // 横モード
             return PagedReaderView.spreadPageLabel(
                 currentPage: page,
