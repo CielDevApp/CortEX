@@ -66,6 +66,12 @@ struct PagedReaderView: UIViewControllerRepresentable {
                 currentPage > currentVC.pageIndex ? .forward : .reverse
             let newVC = coord.makePageVC(for: currentPage)
             pvc.setViewControllers([newVC], direction: direction, animated: false)
+            // normalizeIndexでページが正規化された場合、currentPageを実際の表示ページに同期
+            if newVC.pageIndex != currentPage {
+                DispatchQueue.main.async {
+                    self.currentPage = newVC.pageIndex
+                }
+            }
         }
     }
 
