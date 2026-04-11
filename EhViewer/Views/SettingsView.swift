@@ -604,6 +604,8 @@ struct CharacterCensusView: View {
     @State private var cortexSearchURL: URL?
     @State private var ageInputs: [String: String] = [:]
     @State private var showResetConfirm = false
+    @State private var ageExportURL: URL?
+    @State private var showAgeImport = false
 
     // キャッシュ: キャラ名 → 代表coverURL（初回アクセス時に構築）
     @State private var coverURLCache: [String: URL] = [:]
@@ -624,6 +626,23 @@ struct CharacterCensusView: View {
             return url
         }
         return nil
+    }
+
+    private func exportAges() -> URL? {
+        guard !ages.isEmpty else { return nil }
+        let dir = FileManager.default.temporaryDirectory
+        let file = dir.appendingPathComponent("cortex_character_ages.json")
+        guard let data = try? JSONSerialization.data(withJSONObject: ages, options: [.prettyPrinted, .sortedKeys]) else { return nil }
+        try? data.write(to: file)
+        return file
+    }
+
+    private func importAges(from url: URL) {
+        guard url.startAccessingSecurityScopedResource() else { return }
+        defer { url.stopAccessingSecurityScopedResource() }
+        guard let data = try? Data(contentsOf: url),
+              let imported = try? JSONSerialization.jsonObject(with: data) as? [String: Int] else { return }
+        ages.merge(imported) { _, new in new }
     }
 
     private var averageAge: Double? {
@@ -787,10 +806,34 @@ struct CharacterCensusView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if cortexUnlocked && !ages.isEmpty {
-                    ToolbarItem(placement: .primaryAction) {
+                    ToolbarItemGroup(placement: .primaryAction) {
+                        // エクスポート
+                        if let url = ageExportURL {
+                            ShareLink(item: url) {
+                                Image(systemName: "square.and.arrow.up")
+                            }
+                        } else {
+                            Button {
+                                ageExportURL = exportAges()
+                            } label: {
+                                Image(systemName: "square.and.arrow.up")
+                            }
+                        }
+                        // インポート
+                        Button {
+                            showAgeImport = true
+                        } label: {
+                            Image(systemName: "square.and.arrow.down")
+                        }
+                        // リセット
                         Button("リセット") { showResetConfirm = true }
                             .foregroundStyle(.red)
                     }
+                }
+            }
+            .fileImporter(isPresented: $showAgeImport, allowedContentTypes: [.json]) { result in
+                if case .success(let url) = result {
+                    importAges(from: url)
                 }
             }
             .alert("年齢データをリセット", isPresented: $showResetConfirm) {
