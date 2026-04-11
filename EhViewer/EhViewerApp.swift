@@ -178,6 +178,7 @@ struct EhViewerApp: App {
                 .onAppear {
                     #if canImport(UIKit)
                     UNUserNotificationCenter.current().delegate = appDelegate
+                    LogManager.shared.startFrameMonitor()
                     #endif
                 }
                 .onChange(of: scenePhase) { _, newPhase in
