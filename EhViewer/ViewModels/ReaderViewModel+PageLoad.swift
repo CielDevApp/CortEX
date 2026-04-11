@@ -1,6 +1,5 @@
 import Foundation
 import SwiftUI
-import CoreImage
 
 // MARK: - ページロード & リクエストキュー
 extension ReaderViewModel {
@@ -169,18 +168,18 @@ extension ReaderViewModel {
                 )
             }
 
+            let decodePriority: TaskPriority = isVisible ? .userInitiated : .utility
             let decodeStart = CFAbsoluteTimeGetCurrent()
-            // 専用キュー+GPU(CIContext)でデコード（協調プール不使用 → UIスレッド影響ゼロ）
-            let image: PlatformImage? = await withCheckedContinuation { (cont: CheckedContinuation<PlatformImage?, Never>) in
-                SpriteCache.imageQueue.async {
-                    if let ciImage = CIImage(data: imageData),
-                       let cgImage = SpriteCache.ciContext.createCGImage(ciImage, from: ciImage.extent) {
-                        cont.resume(returning: PlatformImage(cgImage: cgImage))
-                    } else {
-                        cont.resume(returning: nil)
-                    }
-                }
-            }
+            let image: PlatformImage? = await Task.detached(priority: decodePriority) {
+                guard let img = PlatformImage(data: imageData) else { return nil }
+                #if canImport(UIKit)
+                if let prepared = await img.byPreparingForDisplay() { return prepared }
+                let renderer = UIGraphicsImageRenderer(size: img.size)
+                return renderer.image { _ in img.draw(at: .zero) }
+                #else
+                return img
+                #endif
+            }.value
             let decodeMs = Int((CFAbsoluteTimeGetCurrent() - decodeStart) * 1000)
 
             guard let image else {
@@ -231,16 +230,17 @@ extension ReaderViewModel {
                         )
                     }
 
-                    let retryImage: PlatformImage? = await withCheckedContinuation { (cont: CheckedContinuation<PlatformImage?, Never>) in
-                        SpriteCache.imageQueue.async {
-                            if let ciImage = CIImage(data: imageData),
-                               let cgImage = SpriteCache.ciContext.createCGImage(ciImage, from: ciImage.extent) {
-                                cont.resume(returning: PlatformImage(cgImage: cgImage))
-                            } else {
-                                cont.resume(returning: nil)
-                            }
-                        }
-                    }
+                    let decodePriority: TaskPriority = isVisible ? .userInitiated : .utility
+                    let retryImage: PlatformImage? = await Task.detached(priority: decodePriority) {
+                        guard let img = PlatformImage(data: imageData) else { return nil }
+                        #if canImport(UIKit)
+                        if let prepared = await img.byPreparingForDisplay() { return prepared }
+                        let renderer = UIGraphicsImageRenderer(size: img.size)
+                        return renderer.image { _ in img.draw(at: .zero) }
+                        #else
+                        return img
+                        #endif
+                    }.value
                     if let retryImage {
                         ImageCache.shared.set(retryImage, for: freshURL)
                         let display = Self.downsample(retryImage)
@@ -275,15 +275,7 @@ extension ReaderViewModel {
                         for url in spriteURLs {
                             if ImageCache.shared.image(for: url) == nil {
                                 if let data = try? await client.fetchImageData(url: url, host: host) {
-                                    let img: PlatformImage? = await withCheckedContinuation { cont in
-                                        SpriteCache.imageQueue.async {
-                                            if let ci = CIImage(data: data),
-                                               let cg = SpriteCache.ciContext.createCGImage(ci, from: ci.extent) {
-                                                cont.resume(returning: PlatformImage(cgImage: cg))
-                                            } else { cont.resume(returning: nil) }
-                                        }
-                                    }
-                                    if let img { ImageCache.shared.setThumb(img, for: url) }
+                                    if let img = PlatformImage(data: data) { ImageCache.shared.setThumb(img, for: url) }
                                 }
                             }
                         }
@@ -377,15 +369,7 @@ extension ReaderViewModel {
                 for url in spriteURLs {
                     if ImageCache.shared.image(for: url) == nil {
                         if let data = try? await client.fetchImageData(url: url, host: host) {
-                            let img: PlatformImage? = await withCheckedContinuation { cont in
-                                SpriteCache.imageQueue.async {
-                                    if let ci = CIImage(data: data),
-                                       let cg = SpriteCache.ciContext.createCGImage(ci, from: ci.extent) {
-                                        cont.resume(returning: PlatformImage(cgImage: cg))
-                                    } else { cont.resume(returning: nil) }
-                                }
-                            }
-                            if let img { ImageCache.shared.setThumb(img, for: url) }
+                            if let img = PlatformImage(data: data) { ImageCache.shared.setThumb(img, for: url) }
                         }
                     }
                 }
