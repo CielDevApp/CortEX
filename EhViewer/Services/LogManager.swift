@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 #if canImport(UIKit)
+import UIKit
 import QuartzCore
 #endif
 
@@ -26,12 +27,38 @@ final class LogManager: ObservableObject {
 
     @Published var logs: [LogEntry] = []
     private let maxEntries = 1000
+    private var deviceInfoLogged = false
 
     var isEnabled: Bool {
         UserDefaults.standard.bool(forKey: "debugLogEnabled")
     }
 
+    /// 実行端末情報を取得
+    static var deviceSignature: String {
+        #if canImport(UIKit)
+        let device = UIDevice.current
+        let modelName = UIDevice.deviceModelName() ?? device.model
+        return "\(modelName) \(device.systemName) \(device.systemVersion)"
+        #elseif canImport(AppKit)
+        return "macOS \(ProcessInfo.processInfo.operatingSystemVersionString)"
+        #else
+        return "Unknown"
+        #endif
+    }
+
     func log(_ category: String, _ message: String) {
+        // 初回ログ時に端末情報を先に出力
+        if !deviceInfoLogged {
+            deviceInfoLogged = true
+            let sig = Self.deviceSignature
+            print("[Device] \(sig)")
+            if isEnabled {
+                let entry = LogEntry(timestamp: Date(), category: "Device", message: sig)
+                DispatchQueue.main.async {
+                    self.logs.append(entry)
+                }
+            }
+        }
         // 常にprint（Xcodeコンソール用）
         print("[\(category)] \(message)")
 
@@ -94,6 +121,25 @@ final class LogManager: ObservableObject {
     #endif
 
     func allText() -> String {
-        logs.map { "[\($0.timeString)] [\($0.category)] \($0.message)" }.joined(separator: "\n")
+        let header = "[Device] \(Self.deviceSignature)"
+        let body = logs.map { "[\($0.timeString)] [\($0.category)] \($0.message)" }.joined(separator: "\n")
+        return "\(header)\n\(body)"
     }
 }
+
+#if canImport(UIKit)
+extension UIDevice {
+    /// sysctl から hw.machine (e.g. "iPhone14,5", "iPad14,1") を取得して、
+    /// 可能なら可読モデル名に変換
+    static func deviceModelName() -> String? {
+        var systemInfo = utsname()
+        uname(&systemInfo)
+        let identifier = withUnsafePointer(to: &systemInfo.machine) {
+            $0.withMemoryRebound(to: CChar.self, capacity: 1) {
+                String(validatingCString: $0)
+            }
+        }
+        return identifier
+    }
+}
+#endif

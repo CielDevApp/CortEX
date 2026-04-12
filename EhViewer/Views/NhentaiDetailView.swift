@@ -98,17 +98,27 @@ struct NhentaiDetailView: View {
                 // お気に入りボタン
                 if NhentaiCookieManager.isLoggedIn() {
                     Button {
-                        // まずローカルで即座にトグル（UIレスポンス優先）
-                        isFavorited.toggle()
-                        if isFavorited {
-                            NhentaiFavoritesCache.shared.addToCache(gallery)
-                        } else {
-                            NhentaiFavoritesCache.shared.removeFromCache(id: gallery.id)
-                        }
-                        // サーバー同期はバックグラウンドで（失敗しても握り潰す）
+                        // UIは先に反応（optimistic）
+                        let targetState = !isFavorited
+                        isFavorited = targetState
                         let gid = gallery.id
-                        Task.detached {
-                            _ = try? await NhentaiClient.toggleFavorite(galleryId: gid)
+                        let capturedGallery = gallery
+                        Task {
+                            // サーバートグル → 成功してからキャッシュ更新
+                            let result = (try? await NhentaiClient.toggleFavorite(galleryId: gid)) ?? false
+                            if result {
+                                // 成功: キャッシュに反映
+                                if targetState {
+                                    NhentaiFavoritesCache.shared.addToCache(capturedGallery)
+                                } else {
+                                    NhentaiFavoritesCache.shared.removeFromCache(id: gid)
+                                }
+                                LogManager.shared.log("nhentai", "toggleFavorite gid=\(gid) → \(targetState) (server confirmed)")
+                            } else {
+                                // 失敗: UIを元に戻す
+                                isFavorited = !targetState
+                                LogManager.shared.log("nhentai", "toggleFavorite gid=\(gid) FAILED, reverting UI")
+                            }
                         }
                     } label: {
                         Label(
