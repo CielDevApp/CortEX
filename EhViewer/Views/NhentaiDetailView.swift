@@ -269,6 +269,7 @@ struct NhentaiDetailView: View {
         VStack(spacing: 8) {
             // 最初から読む
             Button {
+                HistoryManager.shared.recordNhentai(gallery: gallery, page: 0)
                 readerRequest = NhReaderRequest(page: 0)
             } label: {
                 Label("最初から読む", systemImage: "book.fill")
@@ -335,6 +336,7 @@ struct NhentaiDetailView: View {
             LazyVGrid(columns: columns, spacing: 4) {
                 ForEach(0..<gallery.num_pages, id: \.self) { index in
                     NhThumbCell(gallery: gallery, index: index) {
+                        HistoryManager.shared.recordNhentai(gallery: gallery, page: index)
                         readerRequest = NhReaderRequest(page: index)
                     }
                 }

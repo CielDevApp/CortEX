@@ -15,16 +15,47 @@ struct HistoryEntry: Codable, Identifiable, Hashable {
     var id: Int { gid }
 }
 
+/// nhentai作品の履歴エントリ（NhGalleryをまるごと保持）
+struct NhHistoryEntry: Codable, Identifiable, Hashable {
+    var gallery: NhentaiClient.NhGallery
+    var lastReadPage: Int
+    var viewedDate: Date
+
+    var id: Int { gallery.id }
+}
+
+/// HistoryViewで混在表示するための統合型
+enum HistoryItem: Identifiable, Hashable {
+    case eh(HistoryEntry)
+    case nh(NhHistoryEntry)
+
+    var id: String {
+        switch self {
+        case .eh(let e): return "eh_\(e.gid)"
+        case .nh(let n): return "nh_\(n.id)"
+        }
+    }
+
+    var viewedDate: Date {
+        switch self {
+        case .eh(let e): return e.viewedDate
+        case .nh(let n): return n.viewedDate
+        }
+    }
+}
+
 class HistoryManager: ObservableObject {
     static let shared = HistoryManager()
 
     @Published var entries: [HistoryEntry] = []
+    @Published var nhEntries: [NhHistoryEntry] = []
 
     private let maxEntries = 500
     private let fileManager = FileManager.default
 
     private init() {
         load()
+        loadNh()
     }
 
     // MARK: - ファイルパス
@@ -36,6 +67,15 @@ class HistoryManager: ObservableObject {
             try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
         }
         return dir.appendingPathComponent("history.json")
+    }
+
+    private var nhFilePath: URL {
+        let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let dir = docs.appendingPathComponent("EhViewer", isDirectory: true)
+        if !fileManager.fileExists(atPath: dir.path) {
+            try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir.appendingPathComponent("history_nh.json")
     }
 
     // MARK: - 永続化
@@ -53,6 +93,31 @@ class HistoryManager: ObservableObject {
             }
         }
     }
+
+    private func loadNh() {
+        guard let data = try? Data(contentsOf: nhFilePath),
+              let decoded = try? JSONDecoder().decode([NhHistoryEntry].self, from: data) else { return }
+        nhEntries = decoded
+    }
+
+    private func saveNh() {
+        Task.detached(priority: .utility) {
+            if let data = try? JSONEncoder().encode(self.nhEntries) {
+                try? data.write(to: self.nhFilePath)
+            }
+        }
+    }
+
+    // MARK: - 統合取得
+
+    /// EH/NH エントリを時系列マージして返す
+    var mergedItems: [HistoryItem] {
+        let eh = entries.map { HistoryItem.eh($0) }
+        let nh = nhEntries.map { HistoryItem.nh($0) }
+        return (eh + nh).sorted { $0.viewedDate > $1.viewedDate }
+    }
+
+    var isEmpty: Bool { entries.isEmpty && nhEntries.isEmpty }
 
     // MARK: - 記録
 
@@ -99,9 +164,44 @@ class HistoryManager: ObservableObject {
         }
     }
 
+    // MARK: - nhentai 記録
+
+    func recordNhentai(gallery: NhentaiClient.NhGallery, page: Int = 0) {
+        if let idx = nhEntries.firstIndex(where: { $0.id == gallery.id }) {
+            var entry = nhEntries[idx]
+            entry.viewedDate = Date()
+            entry.lastReadPage = max(entry.lastReadPage, page)
+            entry.gallery = gallery
+            nhEntries.remove(at: idx)
+            nhEntries.insert(entry, at: 0)
+        } else {
+            let entry = NhHistoryEntry(
+                gallery: gallery,
+                lastReadPage: page,
+                viewedDate: Date()
+            )
+            nhEntries.insert(entry, at: 0)
+        }
+
+        if nhEntries.count > maxEntries {
+            nhEntries = Array(nhEntries.prefix(maxEntries))
+        }
+        saveNh()
+    }
+
+    func updateLastPageNh(id: Int, page: Int) {
+        guard let idx = nhEntries.firstIndex(where: { $0.id == id }) else { return }
+        if nhEntries[idx].lastReadPage < page {
+            nhEntries[idx].lastReadPage = page
+            saveNh()
+        }
+    }
+
     func clearAll() {
         entries.removeAll()
+        nhEntries.removeAll()
         save()
+        saveNh()
     }
 
     func toGallery(_ entry: HistoryEntry) -> Gallery {
