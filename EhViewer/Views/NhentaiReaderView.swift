@@ -151,26 +151,25 @@ struct NhentaiReaderView: View {
 
     // MARK: - 画質設定パネル
 
+    private var nhIsLowQualityMode: Bool { onlineQualityMode <= 1 }
+
     private var nhFilterPanel: some View {
         VStack(spacing: 12) {
             HStack {
                 Image(systemName: "slider.horizontal.3").font(.subheadline)
                 Text("画質設定").font(.subheadline.bold())
                 Spacer()
-                Button { withAnimation { showFilterPanel = false } } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.gray)
+                if nhIsLowQualityMode {
+                    Text("低画質モード")
+                        .font(.caption2)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(.orange.opacity(0.3))
+                        .clipShape(Capsule())
+                        .foregroundStyle(.orange)
                 }
             }
             .foregroundStyle(.white)
-
-            Toggle("低画質モード（サムネのみ）", isOn: Binding(
-                get: { onlineQualityMode <= 1 },
-                set: { on in
-                    onlineQualityMode = on ? 0 : 2
-                    reapplyFilters()
-                }
-            ))
-            .font(.subheadline).tint(.orange)
 
             Toggle("無補正モード", isOn: $noFilterMode)
                 .font(.subheadline).tint(.green)
@@ -178,12 +177,87 @@ struct NhentaiReaderView: View {
             if !noFilterMode {
                 Toggle("画像補正フィルタ", isOn: $imageEnhanceFilter)
                     .font(.subheadline).tint(.blue)
+
                 Toggle("ノイズ除去", isOn: $denoiseEnabled)
                     .font(.subheadline).tint(.blue)
-                Toggle("HDR風補正", isOn: $hdrEnhancement)
-                    .font(.subheadline).tint(.blue)
+
+                HStack {
+                    Toggle("HDR風補正", isOn: $hdrEnhancement)
+                        .font(.subheadline).tint(.blue)
+                    if imageEnhanceFilter {
+                        Text("(HDR統合済み)")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
+                }
+
                 Toggle("AI超解像", isOn: $aiImageProcessing)
                     .font(.subheadline).tint(.blue)
+            }
+
+            Divider().overlay(.gray.opacity(0.5))
+
+            if nhIsLowQualityMode {
+                HStack {
+                    Text("現在: 低画質モード")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    Spacer()
+                }
+
+                Button {
+                    onlineQualityMode = 2
+                    nhReloadAll()
+                } label: {
+                    VStack(spacing: 2) {
+                        HStack {
+                            Image(systemName: "arrow.up.circle.fill")
+                            Text("標準画質で読み込み直す")
+                        }
+                        Text("通信量増・サーバーから高解像度画像を取得")
+                            .font(.caption2)
+                            .foregroundStyle(.gray)
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .background(.orange.opacity(0.15))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+            } else {
+                HStack {
+                    Text("現在: 標準画質")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                    Spacer()
+                }
+
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showFilterPanel = false
+                    }
+                    onlineQualityMode = 0
+                    nhReloadAll()
+                } label: {
+                    VStack(spacing: 2) {
+                        HStack {
+                            Image(systemName: "arrow.down.circle.fill")
+                            Text("低画質モードに切り替え")
+                        }
+                        Text("通信量削減・サムネベースで高速表示")
+                            .font(.caption2)
+                            .foregroundStyle(.gray)
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(.blue)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .background(.blue.opacity(0.15))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
             }
 
             Divider().overlay(.gray.opacity(0.5))
@@ -203,6 +277,19 @@ struct NhentaiReaderView: View {
         .frame(maxWidth: 320)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         .padding(.top, 60)
+    }
+
+    /// 画質モード切替時の全リロード
+    private func nhReloadAll() {
+        rawImages.removeAll()
+        images.removeAll()
+        pageDataCache.removeAll()
+        loadingPages.removeAll()
+        // 現在表示中ページ周辺を即リロード
+        let center = currentIndex
+        loadPage(center)
+        loadPage(center + 1)
+        loadPage(center - 1)
     }
 
     @AppStorage("autoSaveOnRead") private var autoSaveOnRead = false
