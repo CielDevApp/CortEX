@@ -14,6 +14,8 @@ struct FavoritesView: View {
     @State private var searchText = ""
     @State private var nhSortOrder: FavoritesSort = .dateDesc
     @State private var tabBarHidden = false
+    /// サーバー側と同期成功したIDsのセット（緑チェックマーク表示用）
+    @State private var nhSyncedIds: Set<Int> = []
 
     var body: some View {
         NavigationStack {
@@ -313,6 +315,14 @@ struct FavoritesView: View {
                     ForEach(filteredNhFavorites) { nh in
                         NavigationLink(value: nh) {
                             NhentaiCardView(gallery: nh)
+                                .overlay(alignment: .topTrailing) {
+                                    if nhSyncedIds.contains(nh.id) {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .font(.caption)
+                                            .foregroundStyle(.white, .green)
+                                            .padding(6)
+                                    }
+                                }
                         }
                     }
                 }
@@ -353,15 +363,32 @@ struct FavoritesView: View {
         LogManager.shared.log("nhFav", "isLoggedIn=\(NhentaiCookieManager.isLoggedIn()) hasCf=\(NhentaiCookieManager.hasCfClearance())")
         isLoadingNh = true
         nhErrorMessage = nil
+
+        // 現在キャッシュのスナップショット（同期失敗時の復元用）
+        let cachedSnapshot = nhFavCache.load()
+
         do {
             #if canImport(UIKit)
             let fetcher = NhentaiFavoritesFetcher()
             let ids = try await fetcher.fetchAllFavoriteIds()
             LogManager.shared.log("nhFav", "WKWebView returned \(ids.count) IDs")
 
+            // 失敗判定: キャッシュは非空なのにIDs=0が返った場合は認証失敗等とみなし
+            // キャッシュを破壊せずに失敗表示だけする
+            if ids.isEmpty && !cachedSnapshot.isEmpty {
+                LogManager.shared.log("nhFav", "sync returned 0 IDs but cache has \(cachedSnapshot.count) items - preserving cache")
+                nhErrorMessage = "同期に失敗しました（キャッシュを維持しています）"
+                nhFavorites = cachedSnapshot
+                nhSyncedIds = []  // 失敗なのでチェックマーク全削除
+                isLoadingNh = false
+                return
+            }
+
+            // 成功時: IDsをsyncedIdsに記録
+            nhSyncedIds = Set(ids)
+
             // キャッシュ済みギャラリーを辞書化（APIコール削減）
-            let cached = nhFavCache.load()
-            let cachedDict = Dictionary(uniqueKeysWithValues: cached.map { ($0.id, $0) })
+            let cachedDict = Dictionary(uniqueKeysWithValues: cachedSnapshot.map { ($0.id, $0) })
             LogManager.shared.log("nhFav", "cache has \(cachedDict.count) items, need to fetch \(ids.filter { cachedDict[$0] == nil }.count) new")
 
             var galleries: [NhentaiClient.NhGallery] = []
@@ -389,8 +416,11 @@ struct FavoritesView: View {
             nhFavorites = serverFavs
             #endif
         } catch {
-            nhErrorMessage = error.localizedDescription
-            LogManager.shared.log("nhFav", "sync failed: \(error.localizedDescription)")
+            // 例外時もキャッシュを破壊せず維持
+            nhErrorMessage = "同期に失敗しました: \(error.localizedDescription)（キャッシュを維持しています）"
+            nhFavorites = cachedSnapshot
+            nhSyncedIds = []  // 失敗なのでチェックマーク全削除
+            LogManager.shared.log("nhFav", "sync failed: \(error.localizedDescription) - preserving \(cachedSnapshot.count) cached items")
         }
         isLoadingNh = false
     }
