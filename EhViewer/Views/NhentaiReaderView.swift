@@ -24,6 +24,8 @@ struct NhentaiReaderView: View {
     @State private var showSavePrompt = false
     @State private var zoomImage: PlatformImage?
     @State private var showFilterPanel = false
+    @State private var showFavFailedAlert = false
+    @State private var favFailedGalleryId: Int = 0
     @AppStorage("translationMode") private var translationMode = false
     @AppStorage("noFilterMode") private var noFilterMode = false
     @AppStorage("imageEnhanceFilter") private var imageEnhanceFilter = false
@@ -137,6 +139,22 @@ struct NhentaiReaderView: View {
             Button("キャンセル", role: .cancel) {}
         } message: {
             Text("\(pageDataCache.count)/\(totalPages) ページ閲覧済み。残りをダウンロードしますか？")
+        }
+        .alert("サーバー反映に失敗しました", isPresented: $showFavFailedAlert) {
+            Button("Safari で完了") {
+                #if canImport(UIKit)
+                if let url = URL(string: "https://nhentai.net/g/\(favFailedGalleryId)/") {
+                    UIApplication.shared.open(url)
+                }
+                #endif
+            }
+            Button("設定で再認証") {
+                NotificationCenter.default.post(name: .navigateToSettingsTab, object: nil)
+                dismiss()
+            }
+            Button("キャンセル", role: .cancel) {}
+        } message: {
+            Text("ローカルには追加済みです。Safari で手動完了するか、設定から nhentai に再認証してください。")
         }
         .task {
             loadPage(initialPage)
@@ -663,13 +681,10 @@ struct NhentaiReaderView: View {
                             Task {
                                 let result = (try? await NhentaiClient.toggleFavorite(galleryId: gid)) ?? false
                                 if !result {
-                                    #if canImport(UIKit)
-                                    if let url = URL(string: "https://nhentai.net/g/\(gid)/") {
-                                        await MainActor.run {
-                                            UIApplication.shared.open(url)
-                                        }
+                                    await MainActor.run {
+                                        favFailedGalleryId = gid
+                                        showFavFailedAlert = true
                                     }
-                                    #endif
                                 }
                             }
                         }
