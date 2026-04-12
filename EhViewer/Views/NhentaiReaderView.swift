@@ -644,16 +644,26 @@ struct NhentaiReaderView: View {
                 Spacer()
 
                 // お気に入りボタン
+                // ファボ追加: アプリ内で完結 / ファボ削除: Safari 誘導（CF 保護対策）
                 if NhentaiCookieManager.isLoggedIn() {
                     Button {
-                        Task {
-                            if let result = try? await NhentaiClient.toggleFavorite(galleryId: gallery.id) {
-                                isFavorited = result
-                                // キャッシュ即時更新
+                        if isFavorited {
+                            // アンファボは Safari で
+                            #if canImport(UIKit)
+                            if let url = URL(string: "https://nhentai.net/g/\(gallery.id)/") {
+                                UIApplication.shared.open(url)
+                                LogManager.shared.log("nhentai", "unfavorite gid=\(gallery.id) → opened in Safari")
+                            }
+                            #endif
+                        } else {
+                            // ファボ追加はアプリ内 optimistic
+                            isFavorited = true
+                            Task {
+                                let result = (try? await NhentaiClient.toggleFavorite(galleryId: gallery.id)) ?? false
                                 if result {
                                     NhentaiFavoritesCache.shared.addToCache(gallery)
                                 } else {
-                                    NhentaiFavoritesCache.shared.removeFromCache(id: gallery.id)
+                                    isFavorited = false
                                 }
                             }
                         }
