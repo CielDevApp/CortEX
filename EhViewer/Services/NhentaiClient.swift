@@ -489,6 +489,45 @@ enum NhentaiClient {
         return try await fetchPageImage(galleryId: 0, mediaId: mediaId, page: page, ext: ext)
     }
 
+    /// サムネ画像取得（低画質モード/プログレッシブロード用）
+    /// 優先順: thumbPath → 既定フォーマット → 全CDNフォールバック
+    static func fetchThumbImage(galleryId: Int, mediaId: String, page: Int, ext: String, thumbPath: String? = nil) async throws -> Data {
+        // 1. v2 thumbPath直接アクセス
+        if let thumbPath {
+            let url = URL(string: "https://t.nhentai.net/\(thumbPath)")!
+            if let result = await fetchRawImage(url: url),
+               result.status == 200 && !result.data.isEmpty && !isHTMLResponse(result.data) {
+                return result.data
+            }
+            // t1-t5 フォールバック
+            for cdnNum in 1...5 {
+                let altURL = URL(string: "https://t\(cdnNum).nhentai.net/\(thumbPath)")!
+                if let result = await fetchRawImage(url: altURL),
+                   result.status == 200 && !result.data.isEmpty && !isHTMLResponse(result.data) {
+                    return result.data
+                }
+            }
+        }
+
+        // 2. 既定フォーマット (galleries/{mediaId}/{page}t.{ext})
+        let url = URL(string: "https://t.nhentai.net/galleries/\(mediaId)/\(page)t.\(ext)")!
+        if let result = await fetchRawImage(url: url),
+           result.status == 200 && !result.data.isEmpty && !isHTMLResponse(result.data) {
+            return result.data
+        }
+
+        // 3. 全CDNフォールバック
+        for cdnNum in 1...5 {
+            let altURL = URL(string: "https://t\(cdnNum).nhentai.net/galleries/\(mediaId)/\(page)t.\(ext)")!
+            if let result = await fetchRawImage(url: altURL),
+               result.status == 200 && !result.data.isEmpty && !isHTMLResponse(result.data) {
+                return result.data
+            }
+        }
+
+        throw URLError(.badServerResponse)
+    }
+
     /// カバー画像取得（v2 path対応 + 拡張子フォールバック）
     static func fetchCoverImage(galleryId: Int, mediaId: String, ext: String, path: String? = nil) async throws -> Data {
         // v2: pathが指定されていればそれを使う
