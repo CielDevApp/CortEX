@@ -453,7 +453,7 @@ struct GalleryReaderView: View {
                 .font(.subheadline)
                 .tint(.green)
                 .onChange(of: noFilterMode) {
-                    viewModel.qualityModeChanged()
+                    viewModel.filterSettingsChanged()
                 }
 
             if !noFilterMode {
