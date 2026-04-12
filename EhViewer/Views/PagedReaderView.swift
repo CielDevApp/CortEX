@@ -44,6 +44,7 @@ struct PagedReaderView: UIViewControllerRepresentable {
         pvc.view.addGestureRecognizer(edgeTap)
 
         context.coordinator.pageViewController = pvc
+
         // 画面回転監視
         NotificationCenter.default.addObserver(
             context.coordinator,
@@ -277,7 +278,8 @@ struct PagedReaderView: UIViewControllerRepresentable {
         func pageViewController(_ pvc: UIPageViewController, didFinishAnimating finished: Bool, previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
             self.pageViewController = pvc
             guard let vc = pvc.viewControllers?.first as? ReaderPageVC else { return }
-            if completed || vc.pageIndex != parent.currentPage {
+            if completed {
+                parent.currentPage = vc.pageIndex
                 postPageChange(vc.pageIndex)
             }
         }
@@ -345,7 +347,7 @@ struct PagedReaderView: UIViewControllerRepresentable {
             )
         }
 
-        private func goForward(pvc: UIPageViewController) {
+        func goForward(pvc: UIPageViewController) {
             guard let currentVC = pvc.viewControllers?.first as? ReaderPageVC else {
                 LogManager.shared.log("Spread", "goForward: no currentVC")
                 return
@@ -360,6 +362,8 @@ struct PagedReaderView: UIViewControllerRepresentable {
             guard let n = next else { return }
             let newVC = makePageVC(for: n)
             pvc.setViewControllers([newVC], direction: .forward, animated: false)
+            // currentPageを同期（updateUIViewControllerの巻き戻し防止）
+            parent.currentPage = newVC.pageIndex
             postPageChange(newVC.pageIndex)
         }
 
@@ -374,6 +378,7 @@ struct PagedReaderView: UIViewControllerRepresentable {
             guard let p = prev else { return }
             let newVC = makePageVC(for: p)
             pvc.setViewControllers([newVC], direction: .reverse, animated: false)
+            parent.currentPage = newVC.pageIndex
             postPageChange(newVC.pageIndex)
         }
 
