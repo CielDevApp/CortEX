@@ -396,7 +396,20 @@ final class CoreMLImageProcessor: @unchecked Sendable, ImageProcessor {
         }
 
         LogManager.shared.log("CoreML", "process: success \(srcW)x\(srcH) → \(finalCG.width)x\(finalCG.height)")
-        return UIImage(cgImage: finalCG)
+        // UIGraphicsImageRenderer経由で再描画し、SwiftUI/UIKitの表示パイプラインと互換の
+        // 標準UIImageとして返す（生CGImageだと表示されない問題の対策）
+        return Self.sanitizeForDisplay(cgImage: finalCG)
+    }
+
+    /// CGImageをUIGraphicsImageRenderer経由で標準UIImageに正規化
+    nonisolated private static func sanitizeForDisplay(cgImage: CGImage) -> PlatformImage {
+        return autoreleasepool {
+            let size = CGSize(width: cgImage.width, height: cgImage.height)
+            let renderer = UIGraphicsImageRenderer(size: size)
+            return renderer.image { _ in
+                UIImage(cgImage: cgImage).draw(in: CGRect(origin: .zero, size: size))
+            }
+        }
     }
 
     /// 画像がタイルサイズ以下の場合: パディング→1タイル推論→クロップ
@@ -464,7 +477,7 @@ final class CoreMLImageProcessor: @unchecked Sendable, ImageProcessor {
         }
 
         LogManager.shared.log("CoreML", "padded: success \(srcW)x\(srcH) → \(croppedCG.width)x\(croppedCG.height)")
-        return UIImage(cgImage: croppedCG)
+        return Self.sanitizeForDisplay(cgImage: croppedCG)
     }
 
     /// Lanczosアップスケールフォールバック（タイル数超過時）

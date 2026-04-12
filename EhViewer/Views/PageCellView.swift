@@ -12,10 +12,6 @@ struct PageCellView: View {
 
     var isHorizontalMode: Bool = false
 
-    /// 横モード用: 表示中の画像を保持（差し替え時のリサイズ防止）
-    @State private var displayImage: PlatformImage?
-    @State private var displaySize: CGSize = .zero
-
     var body: some View {
         if isHorizontalMode {
             horizontalBody
@@ -24,7 +20,7 @@ struct PageCellView: View {
         }
     }
 
-    // MARK: - 横モード（画像差し替え制御あり）
+    // MARK: - 横モード（holder.image直接参照、verticalBodyと同じ方式）
 
     private static var screenSize: CGSize {
         #if os(iOS)
@@ -36,20 +32,18 @@ struct PageCellView: View {
 
     private var horizontalBody: some View {
         ZStack {
-            if let img = displayImage {
-                Image(platformImage: img)
+            if let image = holder.image {
+                Image(platformImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(width: Self.screenSize.width, height: Self.screenSize.height)
-                    .drawingGroup()
-                    .transition(.identity)
             } else if holder.isFailed {
                 failedView
             } else {
                 loadingView
             }
 
-            if isPlaceholder && qualityMode >= 2 && displayImage != nil {
+            if isPlaceholder && qualityMode >= 2 && holder.image != nil {
                 VStack {
                     Spacer()
                     ProgressView().scaleEffect(0.6).tint(.white)
@@ -64,28 +58,8 @@ struct PageCellView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            if let img = displayImage, verticalSizeClass == .regular {
+            if let img = holder.image, verticalSizeClass == .regular {
                 onTap(img)
-            }
-        }
-        .onChange(of: holder.image) { _, newImage in
-            guard let newImage else { return }
-            if displayImage == nil {
-                // 初回: 即セット（サムネ画質）
-                displayImage = newImage
-                return
-            }
-            // 2回目以降: プレースホルダー（サムネ画質）から実画像に差し替える場合のみ更新
-            // 同サイズ画像同士での差し替えはスキップ（リサイズ防止）
-            if isPlaceholder || holder.isPlaceholder {
-                displayImage = newImage
-            } else if newImage.pixelWidth != displayImage?.pixelWidth || newImage.pixelHeight != displayImage?.pixelHeight {
-                displayImage = newImage
-            }
-        }
-        .onAppear {
-            if displayImage == nil, let img = holder.image {
-                displayImage = img
             }
         }
     }
