@@ -29,6 +29,7 @@ struct NhentaiReaderView: View {
     @AppStorage("imageEnhanceFilter") private var imageEnhanceFilter = false
     @AppStorage("denoiseEnabled") private var denoiseEnabled = false
     @AppStorage("hdrEnhancement") private var hdrEnhancement = false
+    @AppStorage("aiImageProcessing") private var aiImageProcessing = false
 
     init(gallery: NhentaiClient.NhGallery, initialPage: Int = 0) {
         self.gallery = gallery
@@ -143,6 +144,7 @@ struct NhentaiReaderView: View {
         .onChange(of: imageEnhanceFilter) { _, _ in reapplyFilters() }
         .onChange(of: denoiseEnabled) { _, _ in reapplyFilters() }
         .onChange(of: hdrEnhancement) { _, _ in reapplyFilters() }
+        .onChange(of: aiImageProcessing) { _, _ in reapplyFilters() }
     }
 
     // MARK: - 画質設定パネル
@@ -168,6 +170,8 @@ struct NhentaiReaderView: View {
                 Toggle("ノイズ除去", isOn: $denoiseEnabled)
                     .font(.subheadline).tint(.blue)
                 Toggle("HDR風補正", isOn: $hdrEnhancement)
+                    .font(.subheadline).tint(.blue)
+                Toggle("AI超解像", isOn: $aiImageProcessing)
                     .font(.subheadline).tint(.blue)
             }
 
@@ -369,8 +373,7 @@ struct NhentaiReaderView: View {
                 }
                 if let img {
                     rawImages[index] = img
-                    let filtered = applyFilters(img)
-                    images[index] = filtered
+                    applyFiltersAsync(index: index, raw: img)
                 }
             } catch {
                 LogManager.shared.log("nhentai", "page \(index + 1) failed: \(error.localizedDescription)")
@@ -380,6 +383,7 @@ struct NhentaiReaderView: View {
     }
 
     /// 画像フィルタ適用（E-Hentaiと同じ処理を使用）
+    /// 同期版: CoreML以外のフィルタのみ
     private func applyFilters(_ image: PlatformImage) -> PlatformImage {
         guard !noFilterMode, !EcoMode.shared.isEnabled else { return image }
 
@@ -404,13 +408,66 @@ struct NhentaiReaderView: View {
         return result
     }
 
-    /// 設定変更時に全画像を再フィルタ
-    private func reapplyFilters() {
-        Task.detached(priority: .utility) {
-            for (index, raw) in await rawImages {
-                let filtered = await applyFilters(raw)
-                await MainActor.run { images[index] = filtered }
+    /// 非同期フィルタ適用（EHと同じパイプライン）
+    /// デフォルトで Vision Framework による Neural Engine 人物セグメンテーション補正を適用。
+    /// noFilterMode=true で無効化。
+    private func applyFiltersAsync(index: Int, raw: PlatformImage) {
+        // noFilter/EcoModeなら即座にraw表示
+        if noFilterMode || EcoMode.shared.isEnabled {
+            images[index] = raw
+            return
+        }
+        // 即表示(フィルタ完了まで仮表示)
+        if images[index] == nil {
+            images[index] = raw
+        }
+        let capturedIndex = index
+        let capturedRaw = raw
+        let capturedUseAI = aiImageProcessing && CoreMLImageProcessor.shared.modelAvailable
+        let capturedDenoise = denoiseEnabled
+        let capturedEnhance = imageEnhanceFilter
+        let capturedHDR = hdrEnhancement
+
+        Task.detached(priority: .userInitiated) {
+            var result = capturedRaw
+
+            // CoreML 4x超解像
+            if capturedUseAI {
+                let upscaled = await CoreMLImageProcessor.shared.process(result)
+                if let upscaled { result = upscaled }
             }
+
+            // ノイズ除去
+            if capturedDenoise {
+                result = ReaderViewModel.applyDenoiseStatic(result) ?? result
+            }
+
+            // 画像補正フィルタ / HDR排他
+            if capturedEnhance {
+                result = LanczosUpscaler.shared.enhanceFilter(result) ?? result
+            } else if capturedHDR {
+                result = HDREnhancer().enhance(result) ?? result
+            }
+
+            // Neural Engine 人物セグメンテーション（デフォルト補正）
+            #if canImport(UIKit)
+            if let enhanced = LanczosUpscaler.shared.applyPersonSegmentation(result) {
+                result = enhanced
+            }
+            #endif
+
+            await MainActor.run {
+                images[capturedIndex] = result
+            }
+        }
+    }
+
+    /// 設定変更時に全画像を再フィルタ（Main thread同期、確実にUI反映）
+    private func reapplyFilters() {
+        let snapshot = rawImages
+        LogManager.shared.log("nhFilter", "reapplyFilters: count=\(snapshot.count) noFilter=\(noFilterMode) enhance=\(imageEnhanceFilter) denoise=\(denoiseEnabled) hdr=\(hdrEnhancement) ai=\(aiImageProcessing)")
+        for (index, raw) in snapshot {
+            applyFiltersAsync(index: index, raw: raw)
         }
     }
 
