@@ -96,33 +96,37 @@ struct NhentaiDetailView: View {
                 Spacer()
 
                 // お気に入りボタン
+                // ファボ追加: アプリ内で完結（WKWebView click 方式）
+                // ファボ削除: nhentai の CF 保護でアプリ内は不可 → Safari 誘導
                 if NhentaiCookieManager.isLoggedIn() {
                     Button {
-                        // UIは先に反応（optimistic）
-                        let targetState = !isFavorited
-                        isFavorited = targetState
-                        let gid = gallery.id
-                        let capturedGallery = gallery
-                        Task {
-                            // サーバートグル → 成功してからキャッシュ更新
-                            let result = (try? await NhentaiClient.toggleFavorite(galleryId: gid)) ?? false
-                            if result {
-                                // 成功: キャッシュに反映
-                                if targetState {
+                        if isFavorited {
+                            // アンファボは Safari で
+                            #if canImport(UIKit)
+                            if let url = URL(string: "https://nhentai.net/g/\(gallery.id)/") {
+                                UIApplication.shared.open(url)
+                                LogManager.shared.log("nhentai", "unfavorite gid=\(gallery.id) → opened in Safari")
+                            }
+                            #endif
+                        } else {
+                            // ファボ追加はアプリ内で optimistic toggle
+                            isFavorited = true
+                            let gid = gallery.id
+                            let capturedGallery = gallery
+                            Task {
+                                let result = (try? await NhentaiClient.toggleFavorite(galleryId: gid)) ?? false
+                                if result {
                                     NhentaiFavoritesCache.shared.addToCache(capturedGallery)
+                                    LogManager.shared.log("nhentai", "favorite gid=\(gid) (server confirmed)")
                                 } else {
-                                    NhentaiFavoritesCache.shared.removeFromCache(id: gid)
+                                    isFavorited = false
+                                    LogManager.shared.log("nhentai", "favorite gid=\(gid) FAILED, reverting UI")
                                 }
-                                LogManager.shared.log("nhentai", "toggleFavorite gid=\(gid) → \(targetState) (server confirmed)")
-                            } else {
-                                // 失敗: UIを元に戻す
-                                isFavorited = !targetState
-                                LogManager.shared.log("nhentai", "toggleFavorite gid=\(gid) FAILED, reverting UI")
                             }
                         }
                     } label: {
                         Label(
-                            isFavorited ? "お気に入り済み" : "お気に入り",
+                            isFavorited ? "Safari で削除" : "お気に入り",
                             systemImage: isFavorited ? "heart.fill" : "heart"
                         )
                         .font(.caption)
