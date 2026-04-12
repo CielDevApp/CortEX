@@ -372,6 +372,7 @@ struct NhentaiReaderView: View {
             }
             .onChange(of: currentIndex) { _, newIndex in
                 if !isSliding { sliderValue = Double(newIndex) }
+                HistoryManager.shared.updateLastPageNh(id: gallery.id, page: newIndex)
             }
             .onChange(of: sliderJumpTarget) { _, target in
                 if let target {
@@ -458,7 +459,10 @@ struct NhentaiReaderView: View {
 
     private func loadPage(_ index: Int) {
         guard index >= 0, index < totalPages else { return }
-        guard images[index] == nil, !loadingPages.contains(index) else { return }
+        // images既読みなら再ロード不要。ただし低画質モード時はrawImagesだけ埋まって
+        // いるケースもあるので !images[index] でも重複loadingだけは弾く
+        guard !loadingPages.contains(index) else { return }
+        if images[index] != nil && rawImages[index] != nil { return }
         loadingPages.insert(index)
 
         guard let pages = gallery.images?.pages, index < pages.count else { return }
@@ -466,16 +470,27 @@ struct NhentaiReaderView: View {
         let isLowQuality = onlineQualityMode <= 1
 
         Task {
-            // サムネ先行ロード（低画質モード or プログレッシブ表示用）
-            // 低画質モード: サムネだけで完結
-            // 標準画質モード: サムネ即表示→標準画質で差し替え
-            if rawImages[index] == nil {
-                if let thumbData = try? await NhentaiClient.fetchThumbImage(
-                    galleryId: gallery.id, mediaId: gallery.media_id, page: index + 1, ext: page.ext, thumbPath: page.thumbPath
-                ), let thumb = await decodeImageData(thumbData) {
+            LogManager.shared.log("nhLoad", "page \(index + 1) start mode=\(onlineQualityMode)")
+
+            // サムネ先行ロード
+            // 低画質モード: サムネに対してフィルタパイプライン実行（CoreML超解像含む）
+            // 標準画質モード: サムネを即placeholder表示（フィルタ適用しない）、すぐ裏で標準画質fetch
+            if let thumbData = try? await NhentaiClient.fetchThumbImage(
+                galleryId: gallery.id, mediaId: gallery.media_id, page: index + 1, ext: page.ext, thumbPath: page.thumbPath
+            ), let thumb = await decodeImageData(thumbData) {
+                LogManager.shared.log("nhLoad", "page \(index + 1) thumb loaded \(thumb.pixelWidth)x\(thumb.pixelHeight)")
+                if isLowQuality {
+                    // 低画質モード: thumb に対してフィルタパイプライン実行
                     rawImages[index] = thumb
                     applyFiltersAsync(index: index, raw: thumb)
+                } else {
+                    // 標準画質モード: placeholder表示のみ、rawImagesは上書きしない
+                    if images[index] == nil {
+                        images[index] = thumb
+                    }
                 }
+            } else {
+                LogManager.shared.log("nhLoad", "page \(index + 1) thumb failed")
             }
 
             // 低画質モードならここで終了（標準画質取得しない）
@@ -492,6 +507,7 @@ struct NhentaiReaderView: View {
                 pageDataCache[index] = data
 
                 if let img = await decodeImageData(data) {
+                    LogManager.shared.log("nhLoad", "page \(index + 1) full loaded \(img.pixelWidth)x\(img.pixelHeight)")
                     rawImages[index] = img
                     applyFiltersAsync(index: index, raw: img)
                 }
