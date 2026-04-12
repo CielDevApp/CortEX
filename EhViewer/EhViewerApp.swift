@@ -169,24 +169,24 @@ struct EhViewerApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .task {
-                    FavoritesViewModel.prefetchCachedFavorites()
-                    Task.detached(priority: .utility) {
-                        ImageCache.shared.prewarmRecentThumbs()
-                    }
+            .task {
+                FavoritesViewModel.prefetchCachedFavorites()
+                Task.detached(priority: .utility) {
+                    ImageCache.shared.prewarmRecentThumbs()
                 }
-                .onAppear {
-                    #if canImport(UIKit)
-                    UNUserNotificationCenter.current().delegate = appDelegate
-                    LogManager.shared.startFrameMonitor()
-                    #endif
+            }
+            .onAppear {
+                #if canImport(UIKit)
+                UNUserNotificationCenter.current().delegate = appDelegate
+                LogManager.shared.startFrameMonitor()
+                #endif
+            }
+            .onChange(of: scenePhase) { _, newPhase in
+                CoreMLImageProcessor.shared.isAppActive = (newPhase == .active)
+                if newPhase == .active {
+                    LogManager.shared.log("App", "scene active")
                 }
-                .onChange(of: scenePhase) { _, newPhase in
-                    CoreMLImageProcessor.shared.isAppActive = (newPhase == .active)
-                    if newPhase == .active {
-                        LogManager.shared.log("App", "scene active")
-                    }
-                }
+            }
         }
     }
 }
