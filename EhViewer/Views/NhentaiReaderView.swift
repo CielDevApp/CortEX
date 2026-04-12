@@ -30,6 +30,8 @@ struct NhentaiReaderView: View {
     @AppStorage("denoiseEnabled") private var denoiseEnabled = false
     @AppStorage("hdrEnhancement") private var hdrEnhancement = false
     @AppStorage("aiImageProcessing") private var aiImageProcessing = false
+    /// 0=低画質(サムネのみ), 2=標準(サムネ→標準画質のプログレッシブ)
+    @AppStorage("onlineQualityMode") private var onlineQualityMode = 2
 
     init(gallery: NhentaiClient.NhGallery, initialPage: Int = 0) {
         self.gallery = gallery
@@ -160,6 +162,15 @@ struct NhentaiReaderView: View {
                 }
             }
             .foregroundStyle(.white)
+
+            Toggle("低画質モード（サムネのみ）", isOn: Binding(
+                get: { onlineQualityMode <= 1 },
+                set: { on in
+                    onlineQualityMode = on ? 0 : 2
+                    reapplyFilters()
+                }
+            ))
+            .font(.subheadline).tint(.orange)
 
             Toggle("無補正モード", isOn: $noFilterMode)
                 .font(.subheadline).tint(.green)
@@ -344,6 +355,20 @@ struct NhentaiReaderView: View {
 
     // MARK: - ページロード
 
+    /// データをGPUデコード
+    private func decodeImageData(_ data: Data) async -> PlatformImage? {
+        return await withCheckedContinuation { (cont: CheckedContinuation<PlatformImage?, Never>) in
+            SpriteCache.imageQueue.async {
+                if let ciImage = CIImage(data: data),
+                   let cgImage = SpriteCache.ciContext.createCGImage(ciImage, from: ciImage.extent) {
+                    cont.resume(returning: PlatformImage(cgImage: cgImage))
+                } else {
+                    cont.resume(returning: nil)
+                }
+            }
+        }
+    }
+
     private func loadPage(_ index: Int) {
         guard index >= 0, index < totalPages else { return }
         guard images[index] == nil, !loadingPages.contains(index) else { return }
@@ -351,27 +376,35 @@ struct NhentaiReaderView: View {
 
         guard let pages = gallery.images?.pages, index < pages.count else { return }
         let page = pages[index]
+        let isLowQuality = onlineQualityMode <= 1
 
         Task {
+            // サムネ先行ロード（低画質モード or プログレッシブ表示用）
+            // 低画質モード: サムネだけで完結
+            // 標準画質モード: サムネ即表示→標準画質で差し替え
+            if rawImages[index] == nil {
+                if let thumbData = try? await NhentaiClient.fetchThumbImage(
+                    galleryId: gallery.id, mediaId: gallery.media_id, page: index + 1, ext: page.ext, thumbPath: page.thumbPath
+                ), let thumb = await decodeImageData(thumbData) {
+                    rawImages[index] = thumb
+                    applyFiltersAsync(index: index, raw: thumb)
+                }
+            }
+
+            // 低画質モードならここで終了（標準画質取得しない）
+            if isLowQuality {
+                loadingPages.remove(index)
+                return
+            }
+
+            // 標準画質取得
             do {
                 let data = try await NhentaiClient.fetchPageImage(
                     galleryId: gallery.id, mediaId: gallery.media_id, page: index + 1, ext: page.ext, path: page.path
                 )
-
                 pageDataCache[index] = data
 
-                // 専用キュー+GPU(CIContext)でデコード
-                let img: PlatformImage? = await withCheckedContinuation { (cont: CheckedContinuation<PlatformImage?, Never>) in
-                    SpriteCache.imageQueue.async {
-                        if let ciImage = CIImage(data: data),
-                           let cgImage = SpriteCache.ciContext.createCGImage(ciImage, from: ciImage.extent) {
-                            cont.resume(returning: PlatformImage(cgImage: cgImage))
-                        } else {
-                            cont.resume(returning: nil)
-                        }
-                    }
-                }
-                if let img {
+                if let img = await decodeImageData(data) {
                     rawImages[index] = img
                     applyFiltersAsync(index: index, raw: img)
                 }
