@@ -208,8 +208,46 @@ class DownloadManager: ObservableObject {
 
     func loadCoverImage(gid: Int) -> PlatformImage? {
         let path = coverFilePath(gid: gid)
-        guard fileManager.fileExists(atPath: path.path) else { return nil }
-        return PlatformImage(contentsOfFile: path.path)
+        if fileManager.fileExists(atPath: path.path),
+           let image = PlatformImage(contentsOfFile: path.path) {
+            return image
+        }
+        // カバーが存在しない場合は1枚目をリサイズして代用 + cover.jpgに保存
+        return generateCoverFromFirstPage(gid: gid)
+    }
+
+    /// 1枚目の画像をリサイズしてcover.jpgとして保存、結果を返す
+    private func generateCoverFromFirstPage(gid: Int) -> PlatformImage? {
+        // 1枚目(page 0)を探す。見つからなければ最初に存在するページを使う
+        var sourceImage: PlatformImage?
+        for page in 0..<5 {
+            if let img = loadLocalImage(gid: gid, page: page) {
+                sourceImage = img
+                break
+            }
+        }
+        guard let source = sourceImage else { return nil }
+
+        #if canImport(UIKit)
+        let maxEdge: CGFloat = 400
+        let srcW = CGFloat(source.pixelWidth)
+        let srcH = CGFloat(source.pixelHeight)
+        let scale = min(maxEdge / max(srcW, srcH), 1.0)
+        let newSize = CGSize(width: srcW * scale, height: srcH * scale)
+        let renderer = UIGraphicsImageRenderer(size: newSize)
+        let resized = renderer.image { _ in
+            source.draw(in: CGRect(origin: .zero, size: newSize))
+        }
+        // cover.jpgに保存（次回以降高速化）
+        if let data = resized.jpegData(compressionQuality: 0.85) {
+            let path = coverFilePath(gid: gid)
+            try? data.write(to: path)
+            LogManager.shared.log("Download", "generated cover from page 0 for gid=\(gid)")
+        }
+        return resized
+        #else
+        return source
+        #endif
     }
 
     // MARK: - 自動保存（オンライン閲覧時）
