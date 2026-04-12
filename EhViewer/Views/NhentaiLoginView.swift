@@ -379,15 +379,17 @@ struct NhentaiWebView: UIViewRepresentable {
                     LogManager.shared.log("nhAuth", "cf_clearance captured from login page")
                 }
 
-                // access_token抽出
-                if let accessToken = nhCookies.first(where: { $0.name == "access_token" }) {
+                // access_token抽出（ユーザー認証済み access_token のみ保存）
+                // csrftoken + cf_clearance のみの匿名状態では保存しない
+                let hasRealSession = nhCookies.contains { $0.name == "sessionid" }
+                if hasRealSession, let accessToken = nhCookies.first(where: { $0.name == "access_token" }) {
                     NhentaiCookieManager.saveToken(accessToken.value)
-                    LogManager.shared.log("nhAuth", "access_token captured from login cookies")
+                    LogManager.shared.log("nhAuth", "access_token captured (with sessionid)")
                 }
 
-                // ログイン検出
-                let hasSession = nhCookies.contains { $0.name == "sessionid" || $0.name == "token" || $0.name == "access_token" }
-                if hasSession || nhCookies.count >= 2 {
+                // ログイン検出: sessionid cookie の存在を必須にする
+                // 以前は nhCookies.count >= 2 で誤発火していた（csrftoken + cf_clearance だけでも true）
+                if hasRealSession {
                     NhentaiCookieManager.saveCookies(cookieString)
 
                     // v2 APIトークンをlocalStorage/sessionStorageから抽出
@@ -395,6 +397,7 @@ struct NhentaiWebView: UIViewRepresentable {
 
                     DispatchQueue.main.async {
                         self.parent.loginDetected = true
+                        LogManager.shared.log("nhAuth", "real login detected (sessionid present)")
 
                         // ログイン成功後、自動でCDN認証を開始
                         if !self.isInCDNPhase && !self.cfClearanceCaptured {
@@ -403,6 +406,9 @@ struct NhentaiWebView: UIViewRepresentable {
                             }
                         }
                     }
+                } else {
+                    let names = nhCookies.map { $0.name }.joined(separator: ",")
+                    LogManager.shared.log("nhAuth", "no real session yet (anonymous cookies only: \(names))")
                 }
             }
         }
