@@ -156,7 +156,13 @@ class ReaderViewModel: ObservableObject {
 
     func qualityModeChanged() {
         resetAllState()
-        reloadAround()
+        // オフライン(0/1)↔オンライン(2+)切替時はimagePageURLsを再取得する必要がある
+        // 常にリセットして確実に再ロード
+        hasLoadedImagePages = false
+        Task(priority: .userInitiated) {
+            await loadImagePages()
+            await MainActor.run { self.reloadAround() }
+        }
     }
 
     func filterSettingsChanged() {

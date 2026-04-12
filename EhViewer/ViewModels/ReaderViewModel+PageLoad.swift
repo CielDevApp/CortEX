@@ -19,8 +19,8 @@ extension ReaderViewModel {
             return
         }
 
-        // サムネプレースホルダー
-        if holder(for: index).image == nil && !isOfflineMode {
+        // サムネプレースホルダー（全モードで実行 - mode 0/1も初回setLoadedをMainThread保証）
+        if holder(for: index).image == nil {
             if let thumb = thumbnailImage(for: index) {
                 holder(for: index).setLoaded(thumb, placeholder: true)
                 placeholderPages.insert(index)
