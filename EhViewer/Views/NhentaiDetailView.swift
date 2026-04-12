@@ -11,6 +11,8 @@ struct NhentaiDetailView: View {
     @State private var readerRequest: NhReaderRequest?
     @State private var isFavorited: Bool
     @State private var cortexSearchURL: URL?
+    @State private var showFavFailedAlert = false
+    @State private var favFailedGalleryId: Int = 0
 
     private var gallery: NhentaiClient.NhGallery { detail.gallery ?? initialGallery }
 
@@ -51,6 +53,21 @@ struct NhentaiDetailView: View {
         .id(initialGallery.id)
         .sheet(item: $cortexSearchURL) { url in
             InAppBrowserView(url: url)
+        }
+        .alert("サーバー反映に失敗しました", isPresented: $showFavFailedAlert) {
+            Button("Safari で完了") {
+                #if canImport(UIKit)
+                if let url = URL(string: "https://nhentai.net/g/\(favFailedGalleryId)/") {
+                    UIApplication.shared.open(url)
+                }
+                #endif
+            }
+            Button("設定で再認証") {
+                NotificationCenter.default.post(name: .navigateToSettingsTab, object: nil)
+            }
+            Button("キャンセル", role: .cancel) {}
+        } message: {
+            Text("ローカルには追加済みです。Safari で手動完了するか、設定から nhentai に再認証してください。")
         }
         .task {
             await loadFullDetail()
@@ -121,15 +138,12 @@ struct NhentaiDetailView: View {
                                 if result {
                                     LogManager.shared.log("nhentai", "favorite gid=\(gid) (server confirmed)")
                                 } else {
-                                    // サーバー失敗 → UI は維持、Safari 誘導
-                                    LogManager.shared.log("nhentai", "favorite gid=\(gid) server failed → opening Safari")
-                                    #if canImport(UIKit)
-                                    if let url = URL(string: "https://nhentai.net/g/\(gid)/") {
-                                        await MainActor.run {
-                                            UIApplication.shared.open(url)
-                                        }
+                                    // サーバー失敗 → UI は維持、確認 alert を出す
+                                    LogManager.shared.log("nhentai", "favorite gid=\(gid) server failed → showing alert")
+                                    await MainActor.run {
+                                        favFailedGalleryId = gid
+                                        showFavFailedAlert = true
                                     }
-                                    #endif
                                 }
                             }
                         }

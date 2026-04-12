@@ -2,6 +2,11 @@ import SwiftUI
 import Combine
 import LocalAuthentication
 
+extension Notification.Name {
+    /// 設定タブへ遷移を要求する通知（NhentaiDetailView などから）
+    static let navigateToSettingsTab = Notification.Name("Cortex.navigateToSettingsTab")
+}
+
 struct ContentView: View {
     @StateObject private var authVM = AuthViewModel()
     @ObservedObject private var bioAuth = BiometricAuth.shared
@@ -96,6 +101,9 @@ struct ContentView: View {
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) { importToast = nil }
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .navigateToSettingsTab)) { _ in
+            withAnimation { selectedTab = 6 }
         }
         .overlay {
             if let toast = importToast {
