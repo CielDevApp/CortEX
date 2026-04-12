@@ -71,11 +71,17 @@ struct PageCellView: View {
         .onChange(of: holder.image) { _, newImage in
             guard let newImage else { return }
             if displayImage == nil {
-                // 初回: 即セット
+                // 初回: 即セット（サムネ画質）
+                displayImage = newImage
+                return
+            }
+            // 2回目以降: プレースホルダー（サムネ画質）から実画像に差し替える場合のみ更新
+            // 同サイズ画像同士での差し替えはスキップ（リサイズ防止）
+            if isPlaceholder || holder.isPlaceholder {
+                displayImage = newImage
+            } else if newImage.pixelWidth != displayImage?.pixelWidth || newImage.pixelHeight != displayImage?.pixelHeight {
                 displayImage = newImage
             }
-            // 2回目以降: 無視（初回画像を維持、リサイズ防止）
-            // ダウンサンプル済み画像は見た目同じなので更新不要
         }
         .onAppear {
             if displayImage == nil, let img = holder.image {

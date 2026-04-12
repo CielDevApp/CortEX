@@ -22,7 +22,7 @@ extension ReaderViewModel {
         // サムネプレースホルダー
         if holder(for: index).image == nil && !isOfflineMode {
             if let thumb = thumbnailImage(for: index) {
-                holder(for: index).setLoaded(thumb)
+                holder(for: index).setLoaded(thumb, placeholder: true)
                 placeholderPages.insert(index)
             }
         }
