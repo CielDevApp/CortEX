@@ -644,26 +644,32 @@ struct NhentaiReaderView: View {
                 Spacer()
 
                 // お気に入りボタン
-                // ファボ追加: アプリ内で完結 / ファボ削除: Safari 誘導（CF 保護対策）
+                // ファボ追加: ローカル即時 + 裏サーバー試行 → 失敗時 Safari
+                // ファボ削除: CF 鉄壁 → ローカル即時削除 + Safari 誘導
                 if NhentaiCookieManager.isLoggedIn() {
                     Button {
+                        let gid = gallery.id
                         if isFavorited {
-                            // アンファボは Safari で
+                            isFavorited = false
+                            NhentaiFavoritesCache.shared.removeFromCache(id: gid)
                             #if canImport(UIKit)
-                            if let url = URL(string: "https://nhentai.net/g/\(gallery.id)/") {
+                            if let url = URL(string: "https://nhentai.net/g/\(gid)/") {
                                 UIApplication.shared.open(url)
-                                LogManager.shared.log("nhentai", "unfavorite gid=\(gallery.id) → opened in Safari")
                             }
                             #endif
                         } else {
-                            // ファボ追加はアプリ内 optimistic
                             isFavorited = true
+                            NhentaiFavoritesCache.shared.addToCache(gallery)
                             Task {
-                                let result = (try? await NhentaiClient.toggleFavorite(galleryId: gallery.id)) ?? false
-                                if result {
-                                    NhentaiFavoritesCache.shared.addToCache(gallery)
-                                } else {
-                                    isFavorited = false
+                                let result = (try? await NhentaiClient.toggleFavorite(galleryId: gid)) ?? false
+                                if !result {
+                                    #if canImport(UIKit)
+                                    if let url = URL(string: "https://nhentai.net/g/\(gid)/") {
+                                        await MainActor.run {
+                                            UIApplication.shared.open(url)
+                                        }
+                                    }
+                                    #endif
                                 }
                             }
                         }
