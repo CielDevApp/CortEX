@@ -9,42 +9,50 @@ class NhentaiFavoritesFetcher: NSObject, WKNavigationDelegate {
     private var pageContinuation: CheckedContinuation<(ids: [Int], hasNext: Bool), Error>?
 
     /// 単一ページのお気に入りギャラリーIDを取得
+    /// NhentaiWebBridge (API v2と同じclean cookie WebView) 経由でHTMLを取得することで、
+    /// 独立したWebViewで発生する stale cookie / 二重セッション問題を回避
     func fetchFavoritePage(page: Int) async throws -> (ids: [Int], hasNext: Bool) {
-        LogManager.shared.log("nhFav", "[1] fetchFavoritePage start: page=\(page)")
+        LogManager.shared.log("nhFav", "[1] fetchFavoritePage start: page=\(page) (via nhBridge)")
 
-        return try await withCheckedThrowingContinuation { continuation in
-            LogManager.shared.log("nhFav", "[2] creating WKWebView")
+        let url = "https://nhentai.net/favorites/?page=\(page)"
+        let data: Data
+        do {
+            data = try await NhentaiWebBridge.shared.fetch(url: url, cookieOnly: true)
+        } catch {
+            LogManager.shared.log("nhFav", "[ERROR] bridge fetch failed: \(error.localizedDescription)")
+            throw error
+        }
 
-            let config = WKWebViewConfiguration()
-            config.websiteDataStore = .default()
-            let wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 375, height: 812), configuration: config)
-            wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
-            wv.navigationDelegate = self
-            self.webView = wv
-            self.pageContinuation = continuation
+        guard let html = String(data: data, encoding: .utf8) else {
+            LogManager.shared.log("nhFav", "[ERROR] failed to decode HTML from bridge response")
+            throw URLError(.cannotDecodeContentData)
+        }
 
-            let url = URL(string: "https://nhentai.net/favorites/?page=\(page)")!
-            LogManager.shared.log("nhFav", "[3] loading URL: \(url)")
+        // /login にリダイレクトされた場合
+        if html.contains("Abandon all hope") || html.contains("name=\"username\"") {
+            LogManager.shared.log("nhFav", "[ERROR] redirected to login page - session invalid")
+            return (ids: [], hasNext: false)
+        }
 
-            // WKWebsiteDataStore.default()のCookieを確認
-            let store = wv.configuration.websiteDataStore.httpCookieStore
-            store.getAllCookies { cookies in
-                let nhCookies = cookies.filter { $0.domain.contains("nhentai") }
-                let names = nhCookies.map { "\($0.name)=\($0.value.prefix(10))..." }.joined(separator: "; ")
-                LogManager.shared.log("nhFav", "[3.5] WKWebView cookies: \(nhCookies.count) (\(names))")
-                wv.load(URLRequest(url: url))
-            }
-
-            // タイムアウト: 30秒
-            DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
-                if let cont = self?.pageContinuation {
-                    self?.pageContinuation = nil
-                    self?.webView = nil
-                    LogManager.shared.log("nhFav", "[TIMEOUT] 30s expired for page \(page)")
-                    cont.resume(throwing: URLError(.timedOut))
+        // 正規表現でギャラリーIDを抽出 (/g/12345/)
+        var ids: [Int] = []
+        let pattern = #"/g/(\d+)/"#
+        if let regex = try? NSRegularExpression(pattern: pattern) {
+            let matches = regex.matches(in: html, range: NSRange(html.startIndex..., in: html))
+            for match in matches {
+                if let range = Range(match.range(at: 1), in: html), let id = Int(html[range]) {
+                    if !ids.contains(id) { ids.append(id) }
                 }
             }
         }
+
+        // 次ページの存在確認 (pagination, rel="next", Next link)
+        let hasNext = html.contains("rel=\"next\"")
+            || html.contains("class=\"next\"")
+            || html.range(of: #"page=\#(page + 1)"#, options: .regularExpression) != nil
+
+        LogManager.shared.log("nhFav", "[DONE] page \(page): \(ids.count) IDs, hasNext=\(hasNext), html=\(html.count) bytes")
+        return (ids: ids, hasNext: hasNext)
     }
 
     /// 全ページのお気に入りを取得
