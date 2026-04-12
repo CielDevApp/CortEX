@@ -68,6 +68,13 @@ extension ReaderViewModel {
                     } else {
                         LogManager.shared.log("Pipeline", "page \(capturedIndex): CoreML returned nil, keeping original")
                     }
+                } else if mode == 0 {
+                    // AI OFF + mode 0: Lanczosでベースアップスケール
+                    // これがないとフィルタ処理が小さいサムネに対してかかり視認できない
+                    LogManager.shared.log("Pipeline", "page \(capturedIndex): mode0 Lanczos upscale (input \(rawWidth)x\(rawHeight))")
+                    if let upscaled = LanczosUpscaler.shared.upscale(result, scale: 4.0) {
+                        result = upscaled
+                    }
                 }
 
                 // ノイズ除去
