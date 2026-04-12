@@ -404,11 +404,11 @@ extension ReaderViewModel {
     func getThumbImage(index: Int) async -> PlatformImage? {
         guard index < thumbnails.count else { return nil }
         let info = thumbnails[index]
-        let croppedKey = "\(info.spriteURL.absoluteString)_\(Int(info.offsetX))"
-        let stableHash = croppedKey.utf8.reduce(into: UInt64(5381)) { h, c in h = h &* 33 &+ UInt64(c) }
-        let cacheURL = URL(string: "ehviewer-crop://\(stableHash)")!
-        if let cached = ImageCache.shared.image(for: cacheURL) { return cached }
-        if let sprite = ImageCache.shared.image(for: info.spriteURL) {
+        // SpriteCacheのクロップ済みキャッシュを先に確認
+        let croppedKey = SpriteCache.shared.croppedKey(url: info.spriteURL, offsetX: info.offsetX)
+        if let cached = SpriteCache.shared.croppedImage(key: croppedKey) { return cached }
+        // スプライトシートからクロップ
+        if let sprite = SpriteCache.shared.sprite(for: info.spriteURL) {
             let x = abs(Int(info.offsetX))
             let w = Int(info.width), h = Int(info.height)
             let clampedX = min(x, sprite.pixelWidth - 1)

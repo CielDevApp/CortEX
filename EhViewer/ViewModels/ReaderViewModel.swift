@@ -201,7 +201,13 @@ class ReaderViewModel: ObservableObject {
         }
         if index < thumbnails.count {
             let info = thumbnails[index]
-            if let sprite = ImageCache.shared.image(for: info.spriteURL) {
+            // SpriteCacheのクロップ済みキャッシュを先に確認
+            let croppedKey = SpriteCache.shared.croppedKey(url: info.spriteURL, offsetX: info.offsetX)
+            if let cached = SpriteCache.shared.croppedImage(key: croppedKey) {
+                return cached
+            }
+            // スプライトシートからクロップ
+            if let sprite = SpriteCache.shared.sprite(for: info.spriteURL) {
                 let x = abs(Int(info.offsetX))
                 let w = Int(info.width)
                 let h = Int(info.height)
