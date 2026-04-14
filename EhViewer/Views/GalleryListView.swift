@@ -516,21 +516,41 @@ struct NhentaiCardView: View {
         Task {
             // 最大2回リトライ（CDNレート制限対策）
             for attempt in 1...2 {
-                do {
-                    let coverExt = gallery.images?.cover?.ext ?? "jpg"
-                    let coverPath = gallery.thumbnailPath ?? gallery.images?.cover?.path
-                    let data = try await NhentaiClient.fetchCoverImage(galleryId: gallery.id, mediaId: gallery.media_id, ext: coverExt, path: coverPath)
-                    if let img = PlatformImage(data: data) {
-                        ImageCache.shared.setThumb(img, for: url)
-                        coverImage = img
-                        return
+                let coverExt = gallery.images?.cover?.ext ?? "jpg"
+                let coverPath = gallery.thumbnailPath ?? gallery.images?.cover?.path
+                let galleryId = gallery.id
+                let mediaId = gallery.media_id
+                let capturedURL = url
+
+                // ネットワーク取得 + GPUデコードを MainActor から外して並列実行
+                // (CachedImageView と同じパターン: CIImage → CIContext(GPU) → CGImage)
+                let decoded: PlatformImage? = await Task.detached(priority: .userInitiated) {
+                    guard let data = try? await NhentaiClient.fetchCoverImage(
+                        galleryId: galleryId, mediaId: mediaId,
+                        ext: coverExt, path: coverPath
+                    ) else { return nil }
+                    #if canImport(UIKit)
+                    // GPU経由デコード
+                    let ciCtx = CIContext(options: [.useSoftwareRenderer: false])
+                    if let ciImage = CIImage(data: data),
+                       let cgImage = ciCtx.createCGImage(ciImage, from: ciImage.extent) {
+                        return UIImage(cgImage: cgImage)
                     }
-                } catch {
-                    if attempt < 2 {
-                        try? await Task.sleep(nanoseconds: UInt64.random(in: 2_000_000_000...4_000_000_000))
-                    } else {
-                        LogManager.shared.log("nhentai", "cover failed: \(gallery.media_id) \(error.localizedDescription)")
-                    }
+                    #endif
+                    // GPU失敗時のCPUフォールバック
+                    return PlatformImage(data: data)
+                }.value
+
+                if let img = decoded {
+                    ImageCache.shared.setThumb(img, for: capturedURL)
+                    coverImage = img
+                    return
+                }
+
+                if attempt < 2 {
+                    try? await Task.sleep(nanoseconds: UInt64.random(in: 2_000_000_000...4_000_000_000))
+                } else {
+                    LogManager.shared.log("nhentai", "cover failed: \(mediaId)")
                 }
             }
         }
