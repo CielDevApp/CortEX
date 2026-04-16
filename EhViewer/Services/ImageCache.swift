@@ -14,11 +14,11 @@ final class ImageCache {
     /// ディスクキャッシュのファイル名一覧（高速存在チェック用）
     private var diskIndex: Set<String> = []
 
-    /// サムネ同時ダウンロード数制限
-    private let thumbDownloadSemaphore = AsyncSemaphore(limit: 5)
+    /// サムネ同時ダウンロード数制限（GPU化済みなので並列数を増やせる）
+    private let thumbDownloadSemaphore = AsyncSemaphore(limit: 20)
 
     private init() {
-        memoryCache.countLimit = 150
+        memoryCache.countLimit = 500
         recalculateCacheLimit()
 
         #if canImport(UIKit)
@@ -200,7 +200,7 @@ final class ImageCache {
         Task.detached(priority: .utility) {
             let galleries = FavoritesCache.shared.load()
             var loaded = 0
-            for g in galleries.prefix(25) {
+            for g in galleries.prefix(100) {
                 if let url = g.coverURL {
                     let key = url as NSURL
                     if self.memoryCache.object(forKey: key) == nil {
