@@ -323,7 +323,7 @@ class ReaderViewModel: ObservableObject {
         return autoreleasepool {
             guard let cgImage = image.cgImage else { return nil }
             var ciImage = CIImage(cgImage: cgImage)
-            let ctx = CIContext(options: [.useSoftwareRenderer: false])
+            let ctx = SpriteCache.ciContext
             if let f = CIFilter(name: "CINoiseReduction") {
                 f.setValue(ciImage, forKey: kCIInputImageKey)
                 f.setValue(0.02, forKey: "inputNoiseLevel")

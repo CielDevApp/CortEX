@@ -323,7 +323,7 @@ struct GalleryScrollList: View {
                                     do {
                                         let data = try await EhClient.shared.fetchThumbData(url: url, host: .exhentai)
                                         #if canImport(UIKit)
-                                        let ciCtx = CIContext(options: [.useSoftwareRenderer: false])
+                                        let ciCtx = SpriteCache.ciContext
                                         if let ciImage = CIImage(data: data),
                                            let cgImage = ciCtx.createCGImage(ciImage, from: ciImage.extent) {
                                             let img = UIImage(cgImage: cgImage)
@@ -531,7 +531,7 @@ struct NhentaiCardView: View {
                     ) else { return nil }
                     #if canImport(UIKit)
                     // GPU経由デコード
-                    let ciCtx = CIContext(options: [.useSoftwareRenderer: false])
+                    let ciCtx = SpriteCache.ciContext
                     if let ciImage = CIImage(data: data),
                        let cgImage = ciCtx.createCGImage(ciImage, from: ciImage.extent) {
                         return UIImage(cgImage: cgImage)
