@@ -349,7 +349,7 @@ final class EhClient: Sendable {
         }
 
         if statusCode == 503 || statusCode == 429 {
-            throw EhError.banned
+            throw EhError.banned(remaining: nil)
         }
 
         guard let html = String(data: data, encoding: .utf8)
@@ -366,7 +366,15 @@ final class EhClient: Sendable {
         }
 
         if html.contains("The ban expires in") {
-            throw EhError.banned
+            // 残り時間を抽出: "The ban expires in X minutes" or "The ban expires in X hours and Y minutes"
+            var remaining: String?
+            if let range = html.range(of: "The ban expires in ") {
+                let after = String(html[range.upperBound...])
+                if let dotRange = after.range(of: ".") {
+                    remaining = String(after[..<dotRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+            throw EhError.banned(remaining: remaining)
         }
         if html.contains("This gallery has been removed") || html.contains("Gallery not found") {
             throw EhError.galleryRemoved
@@ -379,7 +387,7 @@ final class EhClient: Sendable {
 enum EhError: LocalizedError, Sendable, Equatable {
     case invalidURL
     case notLoggedIn
-    case banned
+    case banned(remaining: String?)
     case parseFailed
     case galleryRemoved
 
@@ -387,7 +395,11 @@ enum EhError: LocalizedError, Sendable, Equatable {
         switch self {
         case .invalidURL: return "無効なURL"
         case .notLoggedIn: return "ログインが必要です（ExHentaiにはigneousが必要です）"
-        case .banned: return "アクセスが制限されています"
+        case .banned(let remaining):
+            if let remaining {
+                return "アクセスが制限されています（残り \(remaining)）"
+            }
+            return "アクセスが制限されています"
         case .parseFailed: return "ページの解析に失敗しました"
         case .galleryRemoved: return "ギャラリーが削除されています"
         }
