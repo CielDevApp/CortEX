@@ -46,8 +46,8 @@ extension ReaderViewModel {
         }
 
         // ★ 周辺ページの URL を先行並列解決（fetchImageURL の 300ms 待ちを事前に消化）
-        // loadSingle 内で resolvedImageURLs[idx] があればキャッシュヒットで即画像取得に入れる
-        if isVisible {
+        // DL中はサーバー負荷を避けて prefetch しない（banned 防止）
+        if isVisible && DownloadManager.shared.activeDownloadCount == 0 {
             prefetchImageURLs(around: index, range: 3)
         }
     }
@@ -256,6 +256,12 @@ extension ReaderViewModel {
                     }
                 }
             }
+        } catch let error as EhError where error == .banned {
+            // サーバーからアクセス制限 → 30秒バックオフ（全リクエスト停止）
+            LogManager.shared.log("Reader", "loadSingle \(index): BANNED — backing off 30s")
+            holder(for: index).setFailed("アクセス制限中（30秒後に再試行）")
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            return false
         } catch {
             if resolvedHit && !ExtremeMode.shared.isEnabled {
                 LogManager.shared.log("Reader", "loadSingle \(index): resolved URL expired, retrying fresh")
@@ -454,6 +460,14 @@ extension ReaderViewModel {
                 requestLoad(center - 1)
             } else if errorMessage == nil {
                 errorMessage = "ページURLを取得できませんでした"
+            }
+        } catch let error as EhError where error == .banned {
+            LogManager.shared.log("Reader", "fetchAndCacheURLs: BANNED — waiting 30s before retry")
+            errorMessage = "アクセス制限中（30秒後に再試行）"
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            // 取得済み分は imagePageURLs 経由で使えるようにする（do内でセット済み）
+            if !imagePageURLs.isEmpty {
+                Self.saveURLCache(imagePageURLs, gid: gallery.gid)
             }
         } catch {
             errorMessage = error.localizedDescription
