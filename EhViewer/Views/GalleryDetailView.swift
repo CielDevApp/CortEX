@@ -141,6 +141,7 @@ struct GalleryDetailView: View {
     @State private var readerRequest: ReaderRequest?
     @State private var thumbnails: [ThumbnailInfo] = []
     @State private var croppedThumbs: [Int: PlatformImage] = [:]
+    @State private var visibleThumbCount = 50
 
     private let columns = [
         GridItem(.flexible(), spacing: 4),
@@ -671,7 +672,7 @@ struct GalleryDetailView: View {
     private func thumbnailGrid(_ detail: GalleryDetail) -> some View {
         GroupBox("ページ一覧（\(detail.gallery.pageCount)ページ）") {
             LazyVGrid(columns: columns, spacing: 4) {
-                ForEach(0..<detail.gallery.pageCount, id: \.self) { index in
+                ForEach(0..<min(visibleThumbCount, detail.gallery.pageCount), id: \.self) { index in
                     thumbnailCell(index: index)
                         .onAppear {
                             // ダウンロード済み画像があればAPI不要でサムネ生成
@@ -682,6 +683,10 @@ struct GalleryDetailView: View {
                             if index >= thumbnails.count {
                                 let neededPage = index / thumbsPerPage
                                 loadThumbPageIfNeeded(page: neededPage)
+                            }
+                            // 末尾付近で次の50枚を追加
+                            if index >= visibleThumbCount - 10 && visibleThumbCount < detail.gallery.pageCount {
+                                visibleThumbCount = min(visibleThumbCount + 50, detail.gallery.pageCount)
                             }
                         }
                 }
