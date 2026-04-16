@@ -205,7 +205,7 @@ enum NhentaiClient {
     private static let cdnSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 15
-        config.httpMaximumConnectionsPerHost = 1
+        config.httpMaximumConnectionsPerHost = 6  // ブラウザ同等（nhentaiはレート制限なし）
         config.httpCookieAcceptPolicy = .never
         config.httpShouldSetCookies = false
         config.httpCookieStorage = nil
