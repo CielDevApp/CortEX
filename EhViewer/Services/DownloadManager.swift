@@ -574,9 +574,6 @@ class DownloadManager: ObservableObject {
                 state.failedPages.append((index: index, pageURL: allPageURLs[index]))
             }
 
-            // nhentaiレート制限: Cloudflare対策で2.5秒
-            try? await Task.sleep(nanoseconds: 2_500_000_000)
-
             if state.downloadedSet.count >= totalPages { break }
         }
 
@@ -600,8 +597,7 @@ class DownloadManager: ObservableObject {
                     state.downloadedSet.insert(index)
                     updateProgress(gid: gid, current: state.downloadedSet.count, total: totalPages)
                 }
-                // セカンドパスもCloudflare対策で2.5秒
-                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                // セカンドパスも即座にリトライ
             }
         }
 
@@ -643,8 +639,6 @@ class DownloadManager: ObservableObject {
             } else {
                 state.failedPages.append((index: index, pageURL: state.allPageURLs[index]))
             }
-            // nhentaiレート制限: Cloudflare対策で2.5秒
-            try? await Task.sleep(nanoseconds: 2_500_000_000)
             if state.downloadedSet.count >= totalPages { break }
         }
         state.backwardRunning = false
