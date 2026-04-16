@@ -924,16 +924,17 @@ struct GalleryDetailView: View {
         thumbnails = allInfos
         LogManager.shared.log("Perf", "loadThumbnails page0: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms \(allInfos.count) infos")
 
-        // ★ 残り全ページをバックグラウンドで先行読み込み（スクロール前に取得開始）
+        // ★ 初回は最大100サムネ（5ページ）まで先行取得。残りはスクロールでオンデマンド
+        // 2000ページギャラリーで100ページ一括取得するとサーバー制限に引っかかる
         let totalInfoPages = max(1, (pageCount + thumbsPerPage - 1) / thumbsPerPage)
-        if totalInfoPages > 1 {
+        let initialBatchPages = min(totalInfoPages, 5) // 100サムネ = 5ページ
+        if initialBatchPages > 1 {
             Task(priority: .utility) {
-                for page in 1..<totalInfoPages {
+                for page in 1..<initialBatchPages {
                     loadThumbPageIfNeeded(page: page)
-                    // ネットワーク飽和防止のためページ間に間隔を置く
                     try? await Task.sleep(nanoseconds: 150_000_000)
                 }
-                LogManager.shared.log("Perf", "loadThumbnails: all \(totalInfoPages) pages queued")
+                LogManager.shared.log("Perf", "loadThumbnails: initial \(initialBatchPages)/\(totalInfoPages) pages queued (remaining on-demand)")
             }
         }
     }
