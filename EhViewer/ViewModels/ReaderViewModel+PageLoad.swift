@@ -102,7 +102,14 @@ extension ReaderViewModel {
 
         // モード2,3: フル画像
         guard index < imagePageURLs.count else {
-            LogManager.shared.log("Reader", "loadSingle \(index) exit: imagePageURLs not ready (count=\(imagePageURLs.count), mode=\(mode))")
+            // "not ready" ログはスロットリング（洪水防止）
+            skippedSinceLastLog += 1
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - lastSkipLogTime > 1.0 {
+                LogManager.shared.log("Reader", "loadSingle \(index) exit: imagePageURLs not ready (count=\(imagePageURLs.count), mode=\(mode)), \(skippedSinceLastLog) not-ready since last log")
+                lastSkipLogTime = now
+                skippedSinceLastLog = 0
+            }
             return false
         }
 
@@ -342,24 +349,76 @@ extension ReaderViewModel {
     }
 
     func fetchAndCacheURLs() async {
+        let urlsPerPage = 20
+        let knownTotal = gallery.pageCount
+        let targetPage = max(currentIndex, initialPage)
+        let targetURLPage = targetPage / urlsPerPage
+
         do {
             var allPageURLs: [URL] = []
             var seenURLs: Set<URL> = []
+            var fetchedPages: Set<Int> = []
+
+            // ★ Phase 1: ジャンプ先の URL ページを最優先で取得
+            // 後半ページタップ時に page 0 から順番待ちする問題を解消
+            if targetURLPage > 0 {
+                // page 0 → targetURLPage を一気に取得（途中の URL が無いと配列に穴が空く）
+                // 穴を埋めるためにプレースホルダーを置きつつ、targetURLPage 周辺を先に取得
+                let priorityPages = [targetURLPage, targetURLPage + 1, targetURLPage - 1].filter { $0 >= 0 }
+                for p in priorityPages {
+                    if fetchedPages.contains(p) { continue }
+                    let urls = try await client.fetchImagePageURLs(host: host, gallery: gallery, page: p)
+                    if urls.isEmpty { continue }
+                    fetchedPages.insert(p)
+                    let offset = p * urlsPerPage
+                    // 配列を拡張
+                    while allPageURLs.count < offset + urls.count {
+                        allPageURLs.append(URL(string: "about:blank")!)
+                    }
+                    for (i, url) in urls.enumerated() {
+                        let idx = offset + i
+                        if idx < allPageURLs.count {
+                            allPageURLs[idx] = url
+                            seenURLs.insert(url)
+                        }
+                    }
+                    imagePageURLs = allPageURLs
+                    LogManager.shared.log("Perf", "fetchImagePageURLs: priority p=\(p) count=\(urls.count) total=\(allPageURLs.count)")
+                }
+                // 優先ページ取得完了 → 即座にリクエスト
+                if targetPage < allPageURLs.count {
+                    requestLoad(targetPage)
+                    requestLoad(targetPage + 1)
+                    requestLoad(targetPage - 1)
+                }
+            }
+
+            // ★ Phase 2: 残り全ページを順番に取得（穴埋め + 新規）
             var page = 0
-            let knownTotal = gallery.pageCount
             while true {
+                if fetchedPages.contains(page) { page += 1; continue }
                 let urls = try await client.fetchImagePageURLs(host: host, gallery: gallery, page: page)
                 if urls.isEmpty { break }
-                let newURLs = urls.filter { !seenURLs.contains($0) }
-                if newURLs.isEmpty { break }
-                seenURLs.formUnion(urls)
-                allPageURLs.append(contentsOf: newURLs)
+                fetchedPages.insert(page)
+                let offset = page * urlsPerPage
+                // 配列を拡張
+                while allPageURLs.count < offset + urls.count {
+                    allPageURLs.append(URL(string: "about:blank")!)
+                }
+                for (i, url) in urls.enumerated() {
+                    let idx = offset + i
+                    if idx < allPageURLs.count && !seenURLs.contains(url) {
+                        allPageURLs[idx] = url
+                        seenURLs.insert(url)
+                    }
+                }
                 page += 1
                 imagePageURLs = allPageURLs
-                if knownTotal > 0 && allPageURLs.count >= knownTotal { break }
+                if knownTotal > 0 && seenURLs.count >= knownTotal { break }
                 if page > 200 { break }
                 await ExtremeMode.shared.delay(nanoseconds: requestDelay)
             }
+
             imagePageURLs = allPageURLs
             if allPageURLs.count > totalPages { totalPages = allPageURLs.count }
             if !allPageURLs.isEmpty {
