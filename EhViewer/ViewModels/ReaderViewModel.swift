@@ -126,6 +126,28 @@ class ReaderViewModel: ObservableObject {
         currentIndex = clamped
         requestLoad(clamped)
         requestLoad(clamped + 1)
+
+        // ジャンプ先のスプライトシートを優先 preload（サムネプレースホルダー高速化）
+        Task(priority: .userInitiated) {
+            for offset in 0...2 {
+                let idx = clamped + offset
+                guard idx < thumbnails.count else { break }
+                let info = thumbnails[idx]
+                if SpriteCache.shared.sprite(for: info.spriteURL) == nil {
+                    if let data = try? await client.fetchImageData(url: info.spriteURL, host: host) {
+                        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                            SpriteCache.imageQueue.async {
+                                if let ciImage = CIImage(data: data),
+                                   let cgImage = SpriteCache.ciContext.createCGImage(ciImage, from: ciImage.extent) {
+                                    SpriteCache.shared.setSprite(PlatformImage(cgImage: cgImage), for: info.spriteURL)
+                                }
+                                cont.resume()
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     func isPlaceholder(index: Int) -> Bool {
