@@ -200,7 +200,7 @@ final class ImageCache {
         Task.detached(priority: .utility) {
             let galleries = FavoritesCache.shared.load()
             var loaded = 0
-            for g in galleries.prefix(100) {
+            for g in galleries.prefix(25) {
                 if let url = g.coverURL {
                     let key = url as NSURL
                     if self.memoryCache.object(forKey: key) == nil {
