@@ -313,7 +313,7 @@ struct GalleryScrollList: View {
                         // 次の3〜5件のカバー画像をバックグラウンドでプリフェッチ
                         let prefetchRange = (index + 1)...(index + 4)
                         let galleries = viewModel.galleries
-                        Task.detached(priority: .utility) {
+                        Task.detached(priority: .userInitiated) {
                             for i in prefetchRange {
                                 guard i < galleries.count else { break }
                                 if let url = galleries[i].coverURL,

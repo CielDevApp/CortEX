@@ -111,7 +111,7 @@ struct ThumbnailCellView: View {
         let clampedH = min(h, sprite.pixelHeight)
         let cropRect = CGRect(x: clampedX, y: 0, width: clampedW, height: clampedH)
 
-        let result: PlatformImage? = await Task.detached(priority: .utility) {
+        let result: PlatformImage? = await Task.detached(priority: .userInitiated) {
             guard let cropped = sprite.croppedImage(rect: cropRect) else { return nil }
             #if canImport(UIKit)
             let maxPx: CGFloat = 360

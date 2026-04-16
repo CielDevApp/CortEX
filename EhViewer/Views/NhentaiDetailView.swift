@@ -398,7 +398,7 @@ struct NhentaiDetailView: View {
             let batchSize = 15
             for batchStart in stride(from: 20, to: totalPages, by: batchSize) {
                 let batchEnd = min(batchStart + batchSize, totalPages)
-                await fetchNhThumbBatch(pages: pages, mediaId: mediaId, range: batchStart..<batchEnd, priority: .utility)
+                await fetchNhThumbBatch(pages: pages, mediaId: mediaId, range: batchStart..<batchEnd, priority: .userInitiated)
                 // ネットワーク飽和防止
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
