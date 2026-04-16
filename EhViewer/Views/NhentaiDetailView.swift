@@ -458,6 +458,21 @@ struct NhentaiDetailView: View {
     // MARK: - Cover Loading
 
     private func loadCover() async {
+        // 一覧画面で既に取得済みのカバーを ImageCache から流用（ネットワーク不要）
+        let coverURL: URL?
+        if let thumbPath = gallery.thumbnailPath {
+            coverURL = URL(string: "https://t.nhentai.net/\(thumbPath)")
+        } else if let cover = gallery.images?.cover {
+            coverURL = NhentaiClient.coverURL(mediaId: gallery.media_id, ext: cover.ext, path: cover.path)
+        } else {
+            coverURL = nil
+        }
+        if let coverURL, let cached = ImageCache.shared.image(for: coverURL) {
+            coverImage = cached
+            return
+        }
+
+        // キャッシュにない場合のみネットワーク取得
         guard let cover = gallery.images?.cover else { return }
         if let data = try? await NhentaiClient.fetchCoverImage(
             galleryId: gallery.id, mediaId: gallery.media_id, ext: cover.ext, path: cover.path
