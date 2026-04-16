@@ -240,19 +240,25 @@ final class ImageCache {
         return nil
     }
 
+    /// ディスク保存用の専用キュー（MainActor・cooperative pool から完全分離）
+    private static let diskWriteQueue = DispatchQueue(label: "imageCache-diskWrite", qos: .utility)
+
     private func saveToDisk(image: PlatformImage, url: URL, directory: URL) {
         let filename = cacheFileHash(for: url)
         diskIndex.insert(filename)
         let path = directory.appendingPathComponent(filename)
-        #if canImport(UIKit)
-        guard let data = image.jpegData(compressionQuality: 0.9) else { return }
-        #elseif canImport(AppKit)
-        guard let tiff = image.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff),
-              let data = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.9]) else { return }
-        #endif
-        try? data.write(to: path)
-
+        // JPEG エンコード + disk write を専用キューで実行（MainActor ブロック防止）
+        let capturedImage = image
+        Self.diskWriteQueue.async {
+            #if canImport(UIKit)
+            guard let data = capturedImage.jpegData(compressionQuality: 0.9) else { return }
+            #elseif canImport(AppKit)
+            guard let tiff = capturedImage.tiffRepresentation,
+                  let rep = NSBitmapImageRep(data: tiff),
+                  let data = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.9]) else { return }
+            #endif
+            try? data.write(to: path)
+        }
         Task.detached(priority: .utility) {
             await self.evictIfNeeded()
         }
