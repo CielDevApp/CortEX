@@ -425,7 +425,7 @@ struct NhentaiDetailView: View {
                         mediaId: mediaId, page: pageNum, ext: page.ext, path: page.thumbPath
                     ) else { return }
                     #if canImport(UIKit)
-                    let ciCtx = CIContext(options: [.useSoftwareRenderer: false])
+                    let ciCtx = SpriteCache.ciContext
                     if let ciImage = CIImage(data: data),
                        let cgImage = ciCtx.createCGImage(ciImage, from: ciImage.extent) {
                         ImageCache.shared.setThumb(UIImage(cgImage: cgImage), for: cacheKey)
@@ -555,7 +555,7 @@ private struct NhThumbCell: View {
             }
             #if canImport(UIKit)
             // GPU 経由デコード
-            let ciCtx = CIContext(options: [.useSoftwareRenderer: false])
+            let ciCtx = SpriteCache.ciContext
             if let ciImage = CIImage(data: data),
                let cgImage = ciCtx.createCGImage(ciImage, from: ciImage.extent) {
                 let img = UIImage(cgImage: cgImage)
