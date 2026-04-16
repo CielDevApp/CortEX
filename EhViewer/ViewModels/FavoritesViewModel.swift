@@ -201,7 +201,7 @@ class FavoritesViewModel: ObservableObject {
         guard !urls.isEmpty else { return }
         LogManager.shared.log("Download", "\(urls.count) thumbnails to prefetch")
 
-        let batchSize = 5
+        let batchSize = 15
         for batchStart in stride(from: 0, to: urls.count, by: batchSize) {
             let batchEnd = min(batchStart + batchSize, urls.count)
             let batch = Array(urls[batchStart..<batchEnd])
@@ -214,6 +214,16 @@ class FavoritesViewModel: ObservableObject {
                         defer { ImageCache.shared.removeLoading(url) }
                         do {
                             let data = try await EhClient.shared.fetchThumbData(url: url, host: .exhentai)
+                            #if canImport(UIKit)
+                            // GPU経由デコード（CachedImageViewと同じパターン）
+                            let ciCtx = CIContext(options: [.useSoftwareRenderer: false])
+                            if let ciImage = CIImage(data: data),
+                               let cgImage = ciCtx.createCGImage(ciImage, from: ciImage.extent) {
+                                ImageCache.shared.setThumb(UIImage(cgImage: cgImage), for: url)
+                                return
+                            }
+                            #endif
+                            // GPUフォールバック
                             if let image = PlatformImage(data: data) {
                                 ImageCache.shared.setThumb(image, for: url)
                             }
@@ -229,8 +239,8 @@ class FavoritesViewModel: ObservableObject {
     static func prefetchCachedFavorites() {
         let cached = FavoritesCache.shared.load()
         guard !cached.isEmpty else { return }
-        // 最初の画面に表示される分だけ（全件ダウンロードしない）
-        let visible = Array(cached.prefix(30))
+        // GPU化済みなので多めにプリフェッチ（network律速のため上限は維持）
+        let visible = Array(cached.prefix(200))
         Task(priority: .background) {
             await prefetchThumbnails(visible)
         }
