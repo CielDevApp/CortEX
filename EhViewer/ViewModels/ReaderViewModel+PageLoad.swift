@@ -106,8 +106,15 @@ extension ReaderViewModel {
             return false
         }
 
+        // サムネプレースホルダー: requestLoad時にスプライト未クロップだった場合のリトライ
+        // ネットワーク fetch 前にサムネを表示して黒画面を回避（NHリーダーと同じ設計）
         if holder(for: index).image == nil {
-            holder(for: index).setLoading()
+            if let thumb = await getThumbImage(index: index) {
+                holder(for: index).setLoaded(thumb, placeholder: true)
+                placeholderPages.insert(index)
+            } else {
+                holder(for: index).setLoading()
+            }
         }
 
         let resolvedHit = resolvedImageURLs[index] != nil
