@@ -8,14 +8,21 @@ extension ReaderViewModel {
     /// ロードをリクエスト（重複チェック+キューイング）
     func requestLoad(_ index: Int) {
         guard index >= 0, index < totalPages else { return }
+        // currentIndex から遠すぎるページはロードしない（スライダージャンプ時のスパム防止）
+        let maxDistance = ExtremeMode.shared.isEnabled ? 10 : 5
+        if abs(index - currentIndex) > maxDistance { return }
         if rawImages[index] != nil { return }
-        if completedPages.contains(index) {
-            LogManager.shared.log("Reader", "requestLoad \(index) skip: already completed (but no rawImage)")
-            return
-        }
+        if completedPages.contains(index) { return }
         if loadingPages.contains(index) { return }
         if loadingPages.count >= maxConcurrent {
-            LogManager.shared.log("Reader", "requestLoad \(index) skip: maxConcurrent reached (\(loadingPages.count))")
+            // スキップログは1秒に1回だけ（洪水防止）
+            skippedSinceLastLog += 1
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - lastSkipLogTime > 1.0 {
+                LogManager.shared.log("Reader", "requestLoad skip: maxConcurrent(\(loadingPages.count)), \(skippedSinceLastLog) skipped since last log")
+                lastSkipLogTime = now
+                skippedSinceLastLog = 0
+            }
             return
         }
 
