@@ -93,7 +93,7 @@ struct CachedImageView: View {
                 let decStart = CFAbsoluteTimeGetCurrent()
                 #if canImport(UIKit)
                 // GPU経由デコード: CIImage → CIContext(GPU) → CGImage
-                let ciCtx = CIContext(options: [.useSoftwareRenderer: false])
+                let ciCtx = SpriteCache.ciContext
                 if let ciImage = CIImage(data: data),
                    let cgImage = ciCtx.createCGImage(ciImage, from: ciImage.extent) {
                     let gpuDecoded = UIImage(cgImage: cgImage)
