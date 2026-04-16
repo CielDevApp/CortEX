@@ -21,6 +21,9 @@ class ReaderViewModel: ObservableObject {
     var resolvedImageURLs: [Int: URL] = [:]
     var loadingPages: Set<Int> = []
     var completedPages: Set<Int> = []
+    /// スキップログ抑制用
+    var lastSkipLogTime: CFAbsoluteTime = 0
+    var skippedSinceLastLog: Int = 0
     var maxConcurrent: Int {
         if EcoMode.shared.isEnabled { return 3 }
         return ExtremeMode.shared.isEnabled ? 20 : 5
