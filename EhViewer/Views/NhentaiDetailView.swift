@@ -394,13 +394,13 @@ struct NhentaiDetailView: View {
         let priorityEnd = min(20, maxPrefetch)
         await fetchNhThumbBatch(pages: pages, mediaId: mediaId, range: 0..<priorityEnd, priority: .userInitiated)
 
-        // Phase 2: 21-100 をバックグラウンドで取得（15枚ずつバッチ）
+        // Phase 2: 21-100 をバックグラウンドで取得（5枚ずつバッチ、UIに譲歩）
         if maxPrefetch > 20 {
-            let batchSize = 15
+            let batchSize = 5
             for batchStart in stride(from: 20, to: maxPrefetch, by: batchSize) {
                 let batchEnd = min(batchStart + batchSize, maxPrefetch)
                 await fetchNhThumbBatch(pages: pages, mediaId: mediaId, range: batchStart..<batchEnd, priority: .utility)
-                try? await Task.sleep(nanoseconds: 500_000_000)
+                try? await Task.sleep(nanoseconds: 300_000_000)
             }
         }
         LogManager.shared.log("nhentai", "prefetchNhThumbs: \(maxPrefetch)/\(totalPages) done (remaining on-demand)")

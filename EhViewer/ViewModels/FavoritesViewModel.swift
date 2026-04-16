@@ -240,7 +240,7 @@ class FavoritesViewModel: ObservableObject {
         let cached = FavoritesCache.shared.load()
         guard !cached.isEmpty else { return }
         // GPU化済みなので多めにプリフェッチ（network律速のため上限は維持）
-        let visible = Array(cached.prefix(200))
+        let visible = Array(cached.prefix(50))
         Task(priority: .background) {
             await prefetchThumbnails(visible)
         }
