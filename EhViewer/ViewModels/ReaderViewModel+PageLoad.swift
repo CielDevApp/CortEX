@@ -126,6 +126,10 @@ extension ReaderViewModel {
         }
 
         // モード2,3: フル画像
+        // about:blank はURL優先取得のプレースホルダー → 実URL取得まで待つ
+        if index < imagePageURLs.count && imagePageURLs[index].absoluteString == "about:blank" {
+            return false
+        }
         guard index < imagePageURLs.count else {
             // "not ready" ログはスロットリング（洪水防止）
             skippedSinceLastLog += 1
