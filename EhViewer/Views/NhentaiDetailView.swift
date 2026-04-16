@@ -382,27 +382,28 @@ struct NhentaiDetailView: View {
         .task { await prefetchAllNhThumbs() }
     }
 
-    /// 全ページサムネをバックグラウンドで先行取得（NH は無制限）
+    /// サムネを先行取得（最大100件。残りはスクロールでオンデマンド取得）
     /// リーダー表示中も Task が生存するため、読みながらサムネが埋まっていく
     private func prefetchAllNhThumbs() async {
         guard let pages = gallery.images?.pages, !pages.isEmpty else { return }
         let mediaId = gallery.media_id
         let totalPages = pages.count
+        let maxPrefetch = min(100, totalPages) // 最大100件（235ページで3.8秒フリーズ防止）
 
         // Phase 1: 1-20 を高優先で並列取得
-        let priorityEnd = min(20, totalPages)
+        let priorityEnd = min(20, maxPrefetch)
         await fetchNhThumbBatch(pages: pages, mediaId: mediaId, range: 0..<priorityEnd, priority: .userInitiated)
 
-        // Phase 2: 21+ をバックグラウンドで取得（15枚ずつバッチ）
-        if totalPages > 20 {
+        // Phase 2: 21-100 をバックグラウンドで取得（15枚ずつバッチ）
+        if maxPrefetch > 20 {
             let batchSize = 15
-            for batchStart in stride(from: 20, to: totalPages, by: batchSize) {
-                let batchEnd = min(batchStart + batchSize, totalPages)
+            for batchStart in stride(from: 20, to: maxPrefetch, by: batchSize) {
+                let batchEnd = min(batchStart + batchSize, maxPrefetch)
                 await fetchNhThumbBatch(pages: pages, mediaId: mediaId, range: batchStart..<batchEnd, priority: .utility)
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
         }
-        LogManager.shared.log("nhentai", "prefetchAllNhThumbs: \(totalPages) pages done")
+        LogManager.shared.log("nhentai", "prefetchNhThumbs: \(maxPrefetch)/\(totalPages) done (remaining on-demand)")
     }
 
     private func fetchNhThumbBatch(
