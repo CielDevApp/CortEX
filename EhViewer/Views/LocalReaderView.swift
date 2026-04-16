@@ -339,7 +339,7 @@ struct LocalReaderView: View {
         let usePersonSeg = !enhanceFilterOn && !hdrOn && !useAI && !denoiseOn
 
         let capturedIndex = index
-        Task.detached(priority: .utility) {
+        Task.detached(priority: .userInitiated) {
             let original = image
             var result: PlatformImage = image
 
