@@ -91,14 +91,23 @@ struct ThumbnailCellView: View {
             return
         }
 
-        // スプライトシート取得
+        // スプライトシート取得（他 Task がフェッチ中ならスキップ）
         var sprite = cache.sprite(for: info.spriteURL)
-        if sprite == nil {
+        if sprite == nil && !SpriteCache.shared.fetchingSprites.contains(info.spriteURL) {
+            SpriteCache.shared.fetchingSprites.insert(info.spriteURL)
+            defer { SpriteCache.shared.fetchingSprites.remove(info.spriteURL) }
             if let data = try? await EhClient.shared.fetchThumbData(url: info.spriteURL, host: host) {
                 if let downloaded = PlatformImage(data: data) {
                     cache.setSprite(downloaded, for: info.spriteURL)
                     sprite = downloaded
                 }
+            }
+        } else if sprite == nil {
+            // 他 Task のフェッチ完了を待つ
+            for _ in 0..<20 {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                sprite = cache.sprite(for: info.spriteURL)
+                if sprite != nil { break }
             }
         }
         guard let sprite else { return }

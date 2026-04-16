@@ -11,6 +11,8 @@ final class SpriteCache {
     static let shared = SpriteCache()
     private let sprites = NSCache<NSURL, PlatformImage>()
     private let croppedCache = NSCache<NSString, PlatformImage>()
+    /// フェッチ中のスプライト URL（重複 DL 防止）
+    var fetchingSprites: Set<URL> = []
 
     /// Metal GPU-backed CIContext（デコード・クロップ・リサイズ全てGPU実行）
     static let ciContext: CIContext = {
@@ -952,6 +954,9 @@ struct GalleryDetailView: View {
             var running = 0
             for url in urls {
                 if SpriteCache.shared.sprite(for: url) != nil { continue }
+                // 他の Task が既にフェッチ中ならスキップ（重複 DL 防止）
+                if SpriteCache.shared.fetchingSprites.contains(url) { continue }
+                SpriteCache.shared.fetchingSprites.insert(url)
 
                 if running >= maxConcurrent {
                     await group.next()
@@ -959,6 +964,7 @@ struct GalleryDetailView: View {
                 }
                 running += 1
                 group.addTask {
+                    defer { SpriteCache.shared.fetchingSprites.remove(url) }
                     do {
                         let data = try await EhClient.shared.fetchImageData(url: url, host: self.host)
                         // 専用キューでデコード（協調プール完全不使用 → UIスレッド影響ゼロ）
@@ -1028,10 +1034,12 @@ struct GalleryDetailView: View {
             return
         }
 
-        // スプライトシートをダウンロード（キャッシュ済みならスキップ）
+        // スプライトシートをダウンロード（キャッシュ済み or 他 Task フェッチ中ならスキップ）
         var sprite = cache.sprite(for: info.spriteURL)
-        if sprite == nil {
+        if sprite == nil && !SpriteCache.shared.fetchingSprites.contains(info.spriteURL) {
+            SpriteCache.shared.fetchingSprites.insert(info.spriteURL)
             do {
+                defer { SpriteCache.shared.fetchingSprites.remove(info.spriteURL) }
                 let data = try await EhClient.shared.fetchImageData(url: info.spriteURL, host: host)
                 // 専用キューでデコード
                 sprite = await withCheckedContinuation { (cont: CheckedContinuation<PlatformImage?, Never>) in
@@ -1048,6 +1056,13 @@ struct GalleryDetailView: View {
                 }
             } catch {
                 return
+            }
+        } else if sprite == nil {
+            // 他 Task のフェッチ完了を待つ
+            for _ in 0..<20 {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                sprite = cache.sprite(for: info.spriteURL)
+                if sprite != nil { break }
             }
         }
 
