@@ -232,13 +232,8 @@ final class ImageCache {
             let path = dir.appendingPathComponent(filename)
             if let data = try? Data(contentsOf: path) {
                 try? fileManager.setAttributes([.modificationDate: Date()], ofItemAtPath: path.path)
-                #if canImport(UIKit)
-                // GPU経由デコード（SpriteCache.ciContext共有で Metal パイプライン再生成なし）
-                if let ciImage = CIImage(data: data),
-                   let cgImage = SpriteCache.ciContext.createCGImage(ciImage, from: ciImage.extent) {
-                    return UIImage(cgImage: cgImage)
-                }
-                #endif
+                // ディスクキャッシュは小画像が多いため CPU デコードが最速
+                // GPU dispatch のオーバーヘッドが MainActor をブロックする
                 return PlatformImage(data: data)
             }
         }
