@@ -368,13 +368,22 @@ struct NhentaiDetailView: View {
 
     // MARK: - Thumbnail Grid
 
+    /// サムネグリッドに表示するページ数（順次追加）
+    @State private var visibleThumbCount = 50
+
     private var thumbnailGrid: some View {
         GroupBox("ページ一覧（\(gallery.num_pages)ページ）") {
             LazyVGrid(columns: columns, spacing: 4) {
-                ForEach(0..<gallery.num_pages, id: \.self) { index in
+                ForEach(0..<min(visibleThumbCount, gallery.num_pages), id: \.self) { index in
                     NhThumbCell(gallery: gallery, index: index, coverImage: coverImage) {
                         HistoryManager.shared.recordNhentai(gallery: gallery, page: index)
                         readerRequest = NhReaderRequest(page: index)
+                    }
+                    .onAppear {
+                        // 末尾付近に到達したら次の50枚を追加
+                        if index >= visibleThumbCount - 10 && visibleThumbCount < gallery.num_pages {
+                            visibleThumbCount = min(visibleThumbCount + 50, gallery.num_pages)
+                        }
                     }
                 }
             }
