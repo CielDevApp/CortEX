@@ -392,6 +392,13 @@ struct NhentaiReaderView: View {
                 if !isSliding { sliderValue = Double(newIndex) }
                 HistoryManager.shared.updateLastPageNh(id: gallery.id, page: newIndex)
             }
+            .onChange(of: Int(sliderValue)) {
+                #if canImport(UIKit)
+                if isSliding {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                }
+                #endif
+            }
             .onChange(of: sliderJumpTarget) { _, target in
                 if let target {
                     proxy.scrollTo(target, anchor: .top)
