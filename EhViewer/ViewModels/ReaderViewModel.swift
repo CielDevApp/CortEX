@@ -86,6 +86,41 @@ class ReaderViewModel: ObservableObject {
                 requestLoad(index - offset)
             }
         }
+        // ★ スクロール先の URL が未取得なら動的に優先取得
+        ensureImagePageURLs(around: index)
+    }
+
+    /// currentIndex 周辺の imagePageURLs が未取得なら動的にフェッチ
+    private var urlPageFetchingSet: Set<Int> = []
+    private func ensureImagePageURLs(around index: Int) {
+        let urlsPerPage = 20
+        let neededPage = index / urlsPerPage
+        // 既に十分な URL があるか、フェッチ中ならスキップ
+        guard index >= imagePageURLs.count || (index < imagePageURLs.count && imagePageURLs[index].absoluteString == "about:blank") else { return }
+        guard !urlPageFetchingSet.contains(neededPage) else { return }
+        urlPageFetchingSet.insert(neededPage)
+        Task(priority: .userInitiated) {
+            do {
+                let urls = try await client.fetchImagePageURLs(host: host, gallery: gallery, page: neededPage)
+                if !urls.isEmpty {
+                    let offset = neededPage * urlsPerPage
+                    var current = imagePageURLs
+                    while current.count < offset + urls.count {
+                        current.append(URL(string: "about:blank")!)
+                    }
+                    for (i, url) in urls.enumerated() {
+                        current[offset + i] = url
+                    }
+                    imagePageURLs = current
+                    LogManager.shared.log("Perf", "ensureImagePageURLs: dynamic fetch p=\(neededPage) count=\(urls.count) total=\(current.count)")
+                    // 取得完了 → 即座にリクエスト
+                    requestLoad(index)
+                    requestLoad(index + 1)
+                    requestLoad(index - 1)
+                }
+            } catch {}
+            urlPageFetchingSet.remove(neededPage)
+        }
     }
 
     func scrollStateChanged(isDragging: Bool) {

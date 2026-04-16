@@ -382,7 +382,7 @@ struct NhentaiDetailView: View {
         .task { await prefetchAllNhThumbs() }
     }
 
-    /// 全ページサムネをバックグラウンドで先行取得（1-20優先、21+は低優先）
+    /// 全ページサムネをバックグラウンドで先行取得（NH は無制限）
     /// リーダー表示中も Task が生存するため、読みながらサムネが埋まっていく
     private func prefetchAllNhThumbs() async {
         guard let pages = gallery.images?.pages, !pages.isEmpty else { return }
@@ -399,7 +399,6 @@ struct NhentaiDetailView: View {
             for batchStart in stride(from: 20, to: totalPages, by: batchSize) {
                 let batchEnd = min(batchStart + batchSize, totalPages)
                 await fetchNhThumbBatch(pages: pages, mediaId: mediaId, range: batchStart..<batchEnd, priority: .utility)
-                // UI に譲歩（バッチ間で MainActor を解放）
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
         }
