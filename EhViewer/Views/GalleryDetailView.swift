@@ -832,7 +832,7 @@ struct GalleryDetailView: View {
         guard ExtremeMode.shared.isEnabled, let detail else { return }
         let gallery = detail.gallery
         let galleryHost = host
-        Task.detached(priority: .userInitiated) {
+        Task.detached(priority: .utility) {
             LogManager.shared.log("Download", "extreme prefetch: starting for gid=\(gallery.gid)")
             // URLキャッシュからページURLを取得
             var pageURLs: [URL] = []
@@ -925,7 +925,7 @@ struct GalleryDetailView: View {
         // ★ 残り全ページをバックグラウンドで先行読み込み（スクロール前に取得開始）
         let totalInfoPages = max(1, (pageCount + thumbsPerPage - 1) / thumbsPerPage)
         if totalInfoPages > 1 {
-            Task(priority: .userInitiated) {
+            Task(priority: .utility) {
                 for page in 1..<totalInfoPages {
                     loadThumbPageIfNeeded(page: page)
                     // ネットワーク飽和防止のためページ間に間隔を置く
