@@ -44,6 +44,31 @@ extension ReaderViewModel {
                 self.completedPages.insert(index)
             }
         }
+
+        // ★ 周辺ページの URL を先行並列解決（fetchImageURL の 300ms 待ちを事前に消化）
+        // loadSingle 内で resolvedImageURLs[idx] があればキャッシュヒットで即画像取得に入れる
+        if isVisible {
+            prefetchImageURLs(around: index, range: 3)
+        }
+    }
+
+    /// 周辺ページの画像 URL を先行解決（resolvedImageURLs に格納）
+    func prefetchImageURLs(around center: Int, range: Int) {
+        for offset in 1...range {
+            for idx in [center + offset, center - offset] {
+                guard idx >= 0, idx < imagePageURLs.count else { continue }
+                guard resolvedImageURLs[idx] == nil else { continue }
+                guard !urlResolvingPages.contains(idx) else { continue }
+                urlResolvingPages.insert(idx)
+                Task(priority: .utility) {
+                    do {
+                        let url = try await client.fetchImageURL(pageURL: imagePageURLs[idx])
+                        resolvedImageURLs[idx] = url
+                    } catch {}
+                    urlResolvingPages.remove(idx)
+                }
+            }
+        }
     }
 
     /// ページをロード。成功したらtrue、URLが未準備ならfalse
