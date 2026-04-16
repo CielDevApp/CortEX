@@ -372,7 +372,7 @@ struct NhentaiDetailView: View {
         GroupBox("ページ一覧（\(gallery.num_pages)ページ）") {
             LazyVGrid(columns: columns, spacing: 4) {
                 ForEach(0..<gallery.num_pages, id: \.self) { index in
-                    NhThumbCell(gallery: gallery, index: index) {
+                    NhThumbCell(gallery: gallery, index: index, coverImage: coverImage) {
                         HistoryManager.shared.recordNhentai(gallery: gallery, page: index)
                         readerRequest = NhReaderRequest(page: index)
                     }
@@ -468,6 +468,8 @@ private struct NhReaderRequest: Identifiable {
 private struct NhThumbCell: View {
     let gallery: NhentaiClient.NhGallery
     let index: Int
+    /// 1ページ目のプレースホルダーとしてカバー画像を流用（E-Hと同じ設計）
+    let coverImage: PlatformImage?
     let onTap: () -> Void
 
     @State private var thumbImage: PlatformImage?
@@ -484,6 +486,11 @@ private struct NhThumbCell: View {
             Group {
                 if let img = thumbImage {
                     Image(platformImage: img)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                } else if index == 0, let coverImage {
+                    // カバー画像を1ページ目のプレースホルダーに流用（追加コスト0）
+                    Image(platformImage: coverImage)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                 } else if failed {
