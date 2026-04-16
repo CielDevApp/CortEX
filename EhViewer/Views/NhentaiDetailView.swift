@@ -379,6 +379,65 @@ struct NhentaiDetailView: View {
                 }
             }
         }
+        .task { await prefetchAllNhThumbs() }
+    }
+
+    /// 全ページサムネをバックグラウンドで先行取得（1-20優先、21+は低優先）
+    /// リーダー表示中も Task が生存するため、読みながらサムネが埋まっていく
+    private func prefetchAllNhThumbs() async {
+        guard let pages = gallery.images?.pages, !pages.isEmpty else { return }
+        let mediaId = gallery.media_id
+        let totalPages = pages.count
+
+        // Phase 1: 1-20 を高優先で並列取得
+        let priorityEnd = min(20, totalPages)
+        await fetchNhThumbBatch(pages: pages, mediaId: mediaId, range: 0..<priorityEnd, priority: .userInitiated)
+
+        // Phase 2: 21+ をバックグラウンドで取得（15枚ずつバッチ）
+        if totalPages > 20 {
+            let batchSize = 15
+            for batchStart in stride(from: 20, to: totalPages, by: batchSize) {
+                let batchEnd = min(batchStart + batchSize, totalPages)
+                await fetchNhThumbBatch(pages: pages, mediaId: mediaId, range: batchStart..<batchEnd, priority: .utility)
+                // ネットワーク飽和防止
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+        }
+        LogManager.shared.log("nhentai", "prefetchAllNhThumbs: \(totalPages) pages done")
+    }
+
+    private func fetchNhThumbBatch(
+        pages: [NhentaiClient.NhPage],
+        mediaId: String,
+        range: Range<Int>,
+        priority: TaskPriority
+    ) async {
+        await withTaskGroup(of: Void.self) { group in
+            for idx in range {
+                let cacheKey = NhThumbCell.thumbCacheURL(mediaId: mediaId, page: idx + 1)
+                // 既にキャッシュ済みならスキップ
+                guard ImageCache.shared.image(for: cacheKey) == nil else { continue }
+                let page = pages[idx]
+                let pageNum = idx + 1
+
+                group.addTask(priority: priority) {
+                    guard let data = try? await NhentaiClient.fetchThumbImage(
+                        mediaId: mediaId, page: pageNum, ext: page.ext, path: page.thumbPath
+                    ) else { return }
+                    #if canImport(UIKit)
+                    let ciCtx = CIContext(options: [.useSoftwareRenderer: false])
+                    if let ciImage = CIImage(data: data),
+                       let cgImage = ciCtx.createCGImage(ciImage, from: ciImage.extent) {
+                        ImageCache.shared.setThumb(UIImage(cgImage: cgImage), for: cacheKey)
+                        return
+                    }
+                    #endif
+                    if let img = PlatformImage(data: data) {
+                        ImageCache.shared.setThumb(img, for: cacheKey)
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Detail Loading
@@ -414,6 +473,11 @@ private struct NhThumbCell: View {
     @State private var thumbImage: PlatformImage?
     @State private var failed = false
     @State private var isLoading = false
+
+    /// prefetch と共有するキャッシュキー（安定した URL 形式）
+    static func thumbCacheURL(mediaId: String, page: Int) -> URL {
+        URL(string: "nhthumb://\(mediaId)/\(page)")!
+    }
 
     var body: some View {
         Button(action: onTap) {
@@ -461,16 +525,40 @@ private struct NhThumbCell: View {
     private func loadThumb() {
         guard thumbImage == nil, !failed, !isLoading else { return }
         guard let pages = gallery.images?.pages, index < pages.count else { return }
+
+        // ★ prefetch 済みキャッシュをチェック（ImageCache 経由）
+        let cacheKey = Self.thumbCacheURL(mediaId: gallery.media_id, page: index + 1)
+        if let cached = ImageCache.shared.image(for: cacheKey) {
+            thumbImage = cached
+            return
+        }
+
         isLoading = true
         let mediaId = gallery.media_id
         let page = pages[index]
         let ext = page.ext
         let pageNum = index + 1
         let thumbPath = page.thumbPath
-        Task.detached(priority: .utility) {
-            if let data = try? await NhentaiClient.fetchThumbImage(
+        Task.detached(priority: .userInitiated) {
+            guard let data = try? await NhentaiClient.fetchThumbImage(
                 mediaId: mediaId, page: pageNum, ext: ext, path: thumbPath
-            ), let img = PlatformImage(data: data) {
+            ) else {
+                await MainActor.run { failed = true; isLoading = false }
+                return
+            }
+            #if canImport(UIKit)
+            // GPU 経由デコード
+            let ciCtx = CIContext(options: [.useSoftwareRenderer: false])
+            if let ciImage = CIImage(data: data),
+               let cgImage = ciCtx.createCGImage(ciImage, from: ciImage.extent) {
+                let img = UIImage(cgImage: cgImage)
+                ImageCache.shared.setThumb(img, for: cacheKey)
+                await MainActor.run { thumbImage = img; isLoading = false }
+                return
+            }
+            #endif
+            if let img = PlatformImage(data: data) {
+                ImageCache.shared.setThumb(img, for: cacheKey)
                 await MainActor.run { thumbImage = img; isLoading = false }
             } else {
                 await MainActor.run { failed = true; isLoading = false }

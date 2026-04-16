@@ -919,10 +919,21 @@ struct GalleryDetailView: View {
             return
         }
 
-        // 残りのページはスクロール時にオンデマンドロード（ブラウザ方式）
-        // page 0のみ即ロード、page 1+はthumbnailCellのonAppearで取得
         thumbnails = allInfos
-        LogManager.shared.log("Perf", "loadThumbnails total: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms \(allInfos.count) infos")
+        LogManager.shared.log("Perf", "loadThumbnails page0: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms \(allInfos.count) infos")
+
+        // ★ 残り全ページをバックグラウンドで先行読み込み（スクロール前に取得開始）
+        let totalInfoPages = max(1, (pageCount + thumbsPerPage - 1) / thumbsPerPage)
+        if totalInfoPages > 1 {
+            Task(priority: .utility) {
+                for page in 1..<totalInfoPages {
+                    loadThumbPageIfNeeded(page: page)
+                    // ネットワーク飽和防止のためページ間に間隔を置く
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                }
+                LogManager.shared.log("Perf", "loadThumbnails: all \(totalInfoPages) pages queued")
+            }
+        }
     }
 
     /// スプライトシート画像を並列ダウンロード（画像サーバーへのリクエストはディレイ不要）
@@ -935,8 +946,8 @@ struct GalleryDetailView: View {
             }
         }
 
-        // スプライトDL並列数: DL中は1、通常2（GPU/ネットワーク競合防止）
-        let maxConcurrent = DownloadManager.shared.activeDownloadCount > 0 ? 1 : 2
+        // スプライトDL並列数: GPU化済みなのでデコード負荷軽い、並列数を増やす
+        let maxConcurrent = DownloadManager.shared.activeDownloadCount > 0 ? 2 : 6
         await withTaskGroup(of: Void.self) { group in
             var running = 0
             for url in urls {
