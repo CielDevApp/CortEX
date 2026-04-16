@@ -24,6 +24,8 @@ class ReaderViewModel: ObservableObject {
     /// スキップログ抑制用
     var lastSkipLogTime: CFAbsoluteTime = 0
     var skippedSinceLastLog: Int = 0
+    /// URL先行解決の重複防止
+    var urlResolvingPages: Set<Int> = []
     var maxConcurrent: Int {
         if EcoMode.shared.isEnabled { return 3 }
         return ExtremeMode.shared.isEnabled ? 20 : 5
