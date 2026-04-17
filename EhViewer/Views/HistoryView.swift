@@ -3,9 +3,14 @@ import SwiftUI
 struct HistoryView: View {
     @ObservedObject private var history = HistoryManager.shared
     @State private var showClearConfirm = false
+    @State private var navPath = NavigationPath()
+    @State private var previewEhGallery: Gallery?
+    @State private var previewNhGallery: NhentaiClient.NhGallery?
+    @State private var previewEhReader: GalleryPreviewReaderRequest?
+    @State private var previewNhReader: NhentaiPreviewReaderRequest?
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navPath) {
             List {
                 if history.isEmpty {
                     ContentUnavailableView {
@@ -18,13 +23,26 @@ struct HistoryView: View {
                 ForEach(history.mergedItems) { item in
                     switch item {
                     case .eh(let entry):
-                        NavigationLink(value: history.toGallery(entry)) {
-                            ehHistoryRow(entry: entry)
-                        }
+                        let g = history.toGallery(entry)
+                        ehHistoryRow(entry: entry)
+                            .contentShape(Rectangle())
+                            .onTapGesture { navPath.append(g) }
+                            .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 15) {
+                                #if canImport(UIKit)
+                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                #endif
+                                previewEhGallery = g
+                            }
                     case .nh(let entry):
-                        NavigationLink(value: entry.gallery) {
-                            nhHistoryRow(entry: entry)
-                        }
+                        nhHistoryRow(entry: entry)
+                            .contentShape(Rectangle())
+                            .onTapGesture { navPath.append(entry.gallery) }
+                            .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 15) {
+                                #if canImport(UIKit)
+                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                #endif
+                                previewNhGallery = entry.gallery
+                            }
                     }
                 }
             }
@@ -64,6 +82,43 @@ struct HistoryView: View {
             .navigationDestination(for: UploaderSearch.self) { search in
                 TagSearchResultView(searchQuery: search.query, host: .exhentai, title: search.displayTitle)
             }
+            .overlay {
+                if let g = previewEhGallery {
+                    GalleryPreviewOverlay(
+                        gallery: g,
+                        host: .exhentai,
+                        onDismiss: { previewEhGallery = nil },
+                        onTapPage: { thumbnails, page in
+                            previewEhReader = GalleryPreviewReaderRequest(gallery: g, page: page, thumbnails: thumbnails)
+                        }
+                    )
+                }
+                if let nh = previewNhGallery {
+                    NhentaiPreviewOverlay(
+                        gallery: nh,
+                        onDismiss: { previewNhGallery = nil },
+                        onTapPage: { loadedGallery, page in
+                            previewNhReader = NhentaiPreviewReaderRequest(gallery: loadedGallery, page: page)
+                        }
+                    )
+                }
+            }
+            #if os(iOS)
+            .fullScreenCover(item: $previewEhReader) { req in
+                GalleryReaderView(gallery: req.gallery, host: .exhentai, initialPage: req.page, thumbnails: req.thumbnails)
+                    .onAppear {
+                        HistoryManager.shared.record(gallery: req.gallery, page: req.page)
+                        previewEhGallery = nil
+                    }
+            }
+            .fullScreenCover(item: $previewNhReader) { req in
+                NhentaiReaderView(gallery: req.gallery, initialPage: req.page)
+                    .onAppear {
+                        HistoryManager.shared.recordNhentai(gallery: req.gallery, page: req.page)
+                        previewNhGallery = nil
+                    }
+            }
+            #endif
         }
     }
 
