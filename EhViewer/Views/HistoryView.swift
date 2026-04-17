@@ -124,19 +124,10 @@ struct HistoryView: View {
     @ViewBuilder
     private func nhHistoryRow(entry: NhHistoryEntry) -> some View {
         HStack(spacing: 12) {
-            if let cover = entry.gallery.images?.cover {
-                AsyncImage(url: NhentaiClient.coverURL(mediaId: entry.gallery.media_id, ext: cover.ext)) { image in
-                    image.resizable().aspectRatio(contentMode: .fill)
-                } placeholder: {
-                    Color.gray.opacity(0.15)
-                }
+            // NhentaiCardViewと同じcache優先 + v2 path対応
+            NhentaiCoverView(gallery: entry.gallery)
                 .frame(width: 80, height: 110)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
-            } else {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.gray.opacity(0.15))
-                    .frame(width: 80, height: 110)
-            }
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(entry.gallery.displayTitle)

@@ -546,3 +546,61 @@ struct NhentaiCardView: View {
         }
     }
 }
+
+/// nhentaiカバー画像の共通View（履歴・お気に入り等でも使用）
+/// v2 path + disk/memory cache + 拡張子フォールバック対応
+struct NhentaiCoverView: View {
+    let gallery: NhentaiClient.NhGallery
+    @State private var coverImage: PlatformImage?
+
+    var body: some View {
+        Group {
+            if let img = coverImage {
+                Image(platformImage: img)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                Color.gray.opacity(0.15)
+                    .overlay { Image(systemName: "photo").foregroundStyle(.secondary) }
+                    .onAppear { loadCover() }
+            }
+        }
+    }
+
+    private func loadCover() {
+        let url: URL
+        if let thumbPath = gallery.thumbnailPath {
+            url = URL(string: "https://t.nhentai.net/\(thumbPath)")!
+        } else if let cover = gallery.images?.cover {
+            url = NhentaiClient.coverURL(mediaId: gallery.media_id, ext: cover.ext, path: cover.path)
+        } else {
+            return
+        }
+
+        if let cached = ImageCache.shared.image(for: url) {
+            coverImage = cached
+            return
+        }
+
+        Task {
+            let coverExt = gallery.images?.cover?.ext ?? "jpg"
+            let coverPath = gallery.thumbnailPath ?? gallery.images?.cover?.path
+            let galleryId = gallery.id
+            let mediaId = gallery.media_id
+            let capturedURL = url
+
+            let decoded: PlatformImage? = await Task.detached(priority: .userInitiated) {
+                guard let data = try? await NhentaiClient.fetchCoverImage(
+                    galleryId: galleryId, mediaId: mediaId,
+                    ext: coverExt, path: coverPath
+                ) else { return nil }
+                return PlatformImage(data: data)
+            }.value
+
+            if let img = decoded {
+                ImageCache.shared.setThumb(img, for: capturedURL)
+                coverImage = img
+            }
+        }
+    }
+}
