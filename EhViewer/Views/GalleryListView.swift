@@ -315,12 +315,16 @@ struct GalleryScrollList: View {
                         .onTapGesture {
                             navPath.append(gallery)
                         }
-                        .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 15) {
-                            #if canImport(UIKit)
-                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                            #endif
-                            previewGallery = gallery
-                        }
+                        // iPadでGalleryCardView内NavigationLinkが長押しを奪うのでhighPriority
+                        .highPriorityGesture(
+                            LongPressGesture(minimumDuration: 0.4, maximumDistance: 15)
+                                .onEnded { _ in
+                                    #if canImport(UIKit)
+                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                    #endif
+                                    previewGallery = gallery
+                                }
+                        )
                         .id(gallery.gid)
                     .onAppear {
                         // 次の3〜5件のカバー画像をバックグラウンドでプリフェッチ
@@ -492,9 +496,31 @@ struct GalleryPreviewOverlay: View {
                             Text(err).font(.caption).foregroundStyle(.secondary)
                         }
                         .padding(.vertical, 40)
+                    } else if !isLoading && thumbnails.isEmpty {
+                        // 古いギャラリーなどでparseが失敗するケース
+                        VStack(spacing: 12) {
+                            Image(systemName: "photo.on.rectangle.angled")
+                                .font(.largeTitle)
+                                .foregroundStyle(.secondary)
+                            Text("サムネイル情報を取得できませんでした")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text("古いギャラリーの場合があります")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                            Button("1ページ目から読む") {
+                                onTapPage([], 0)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                        }
+                        .padding(.vertical, 40)
                     } else {
+                        // お気に入りキャッシュのGalleryはpageCount=0のケースがある
+                        // そのため total は thumbnails.count も加味して決定
+                        let totalPages = max(gallery.pageCount, thumbnails.count)
                         LazyVGrid(columns: columns, spacing: 6) {
-                            ForEach(0..<min(visibleCount, gallery.pageCount), id: \.self) { index in
+                            ForEach(0..<min(visibleCount, totalPages), id: \.self) { index in
                                 ThumbnailCellView(
                                     index: index,
                                     coverURL: gallery.coverURL,
@@ -505,13 +531,15 @@ struct GalleryPreviewOverlay: View {
                                     gid: gallery.gid
                                 )
                                 .onAppear {
-                                    // スクロールで末尾付近→追加ページ取得
-                                    if index >= thumbnails.count {
-                                        let neededPage = index / thumbsPerPage
-                                        loadThumbPageIfNeeded(page: neededPage)
+                                    // 末尾近く到達で次ページ先読み（gallery.pageCount=0でも動作）
+                                    if index >= thumbnails.count - 3 {
+                                        let nextPage = thumbnails.count / thumbsPerPage
+                                        loadThumbPageIfNeeded(page: nextPage)
                                     }
-                                    if index >= visibleCount - 6 && visibleCount < gallery.pageCount {
-                                        visibleCount = min(visibleCount + 20, gallery.pageCount)
+                                    // visibleCount拡張 - pageCount未知なら thumbnails.count+20 まで広げる
+                                    let ceiling = gallery.pageCount > 0 ? gallery.pageCount : (thumbnails.count + 20)
+                                    if index >= visibleCount - 6 && visibleCount < ceiling {
+                                        visibleCount = min(visibleCount + 20, ceiling)
                                     }
                                 }
                             }
@@ -532,13 +560,16 @@ struct GalleryPreviewOverlay: View {
     }
 
     private func loadInitial() async {
+        LogManager.shared.log("preview", "loadInitial start gid=\(gallery.gid) host=\(host) pageCount=\(gallery.pageCount)")
         isLoading = true
         errorMessage = nil
         do {
             let infos = try await EhClient.shared.fetchThumbnailInfos(host: host, gallery: gallery, page: 0)
+            LogManager.shared.log("preview", "loadInitial ok gid=\(gallery.gid) infos=\(infos.count)")
             thumbnails = infos
             isLoading = false
         } catch {
+            LogManager.shared.log("preview", "loadInitial failed gid=\(gallery.gid): \(error.localizedDescription)")
             errorMessage = error.localizedDescription
             isLoading = false
         }

@@ -104,12 +104,17 @@ struct FavoritesView: View {
                             .onTapGesture {
                                 navPathBox.path.append(gallery)
                             }
-                            .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 15) {
-                                #if canImport(UIKit)
-                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                #endif
-                                previewEhGallery = gallery
-                            }
+                            // iPadでGalleryCardView内のNavigationLinkが長押しを奪うので
+                            // highPriorityGestureで優先度を上げる
+                            .highPriorityGesture(
+                                LongPressGesture(minimumDuration: 0.4, maximumDistance: 15)
+                                    .onEnded { _ in
+                                        #if canImport(UIKit)
+                                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                        #endif
+                                        previewEhGallery = gallery
+                                    }
+                            )
                     }
 
                     if viewModel.galleries.isEmpty && !viewModel.isLoading {
