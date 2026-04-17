@@ -530,10 +530,21 @@ enum NhentaiClient {
 
     /// カバー画像取得（v2 path対応 + 拡張子フォールバック）
     static func fetchCoverImage(galleryId: Int, mediaId: String, ext: String, path: String? = nil) async throws -> Data {
+        // v2 API二重拡張子バグ修正（例: "cover.webp.webp" → "cover.webp"）
+        var cleanPath = path
+        if let p = path {
+            for e in ["webp", "jpg", "png", "gif"] {
+                let double = ".\(e).\(e)"
+                if p.hasSuffix(double) {
+                    cleanPath = String(p.dropLast(e.count + 1))
+                    break
+                }
+            }
+        }
         // v2: pathが指定されていればそれを使う
-        if let path {
+        if let cleanPath {
             for cdn in fallbackThumbCDNs {
-                let url = URL(string: "https://\(cdn).nhentai.net/\(path)")!
+                let url = URL(string: "https://\(cdn).nhentai.net/\(cleanPath)")!
                 if let result = await fetchLightImage(url: url),
                    result.status == 200 && !result.data.isEmpty && !isHTMLResponse(result.data) {
                     return result.data
@@ -557,10 +568,21 @@ enum NhentaiClient {
 
     /// サムネ画像取得（v2 path対応 + 拡張子フォールバック）
     static func fetchThumbImage(mediaId: String, page: Int, ext: String, path: String? = nil) async throws -> Data {
+        // v2 API二重拡張子バグ修正（例: "2t.webp.webp" → "2t.webp"）
+        var cleanPath = path
+        if let p = path {
+            for e in ["webp", "jpg", "png", "gif"] {
+                let double = ".\(e).\(e)"
+                if p.hasSuffix(double) {
+                    cleanPath = String(p.dropLast(e.count + 1))
+                    break
+                }
+            }
+        }
         // v2: thumbPathが指定されていればそれを使う
-        if let path {
+        if let cleanPath {
             for cdn in fallbackThumbCDNs {
-                let url = URL(string: "https://\(cdn).nhentai.net/\(path)")!
+                let url = URL(string: "https://\(cdn).nhentai.net/\(cleanPath)")!
                 if let result = await fetchLightImage(url: url),
                    result.status == 200 && !result.data.isEmpty && !isHTMLResponse(result.data) {
                     return result.data
