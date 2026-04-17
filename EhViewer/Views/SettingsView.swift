@@ -39,6 +39,11 @@ struct SettingsView: View {
     @State private var showNhLogin = false
     @State private var showNhCDNVerify = false
     @State private var nhLoggedIn = NhentaiCookieManager.isLoggedIn()
+    // nhentai ID/PW フォーム自動入力用
+    @State private var nhUsername: String = KeychainService.load(key: "nh_username") ?? ""
+    @State private var nhPassword: String = KeychainService.load(key: "nh_password") ?? ""
+    @State private var showPasswordField: Bool = false
+    @State private var nhCredSaved: Bool = false
     @AppStorage("showAdvancedSettings") private var showAdvanced = false
     // CORTEX PROTOCOL (hidden)
     @State private var versionTapCount = 0
@@ -526,6 +531,7 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var nhentaiSection: some View {
+        Group {
         Section("nhentai") {
             if nhLoggedIn {
                 HStack {
@@ -542,13 +548,6 @@ struct SettingsView: View {
                     Text("未ログイン")
                 }
                 Button("nhentaiにログイン") { showNhLogin = true }
-                if UserDefaults.standard.string(forKey: "lastNhCookies") != nil {
-                    Button("前回のログイン情報で復元") {
-                        if NhentaiCookieManager.restoreFromBackup() {
-                            nhLoggedIn = true
-                        }
-                    }
-                }
             }
 
             // CDN Cloudflare認証（画像DLに必要）
@@ -560,6 +559,82 @@ struct SettingsView: View {
             }
             Button("CDN認証（画像DL用）") { showNhCDNVerify = true }
                 .foregroundColor(hasCf ? .secondary : .orange)
+        }
+
+        nhCredentialsSection
+        }
+    }
+
+    // MARK: - nhentai ID/PW 保存（自動入力 + クリップボードコピー）
+
+    private var nhCredentialsSection: some View {
+        Section {
+            TextField("ユーザー名 or メール", text: $nhUsername)
+                .textContentType(.username)
+                .autocapitalization(.none)
+                .disableAutocorrection(true)
+
+            HStack {
+                if showPasswordField {
+                    TextField("パスワード", text: $nhPassword)
+                        .textContentType(.password)
+                        .autocapitalization(.none)
+                        .disableAutocorrection(true)
+                } else {
+                    SecureField("パスワード", text: $nhPassword)
+                        .textContentType(.password)
+                }
+                Button {
+                    showPasswordField.toggle()
+                } label: {
+                    Image(systemName: showPasswordField ? "eye.slash" : "eye")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            HStack(spacing: 12) {
+                Button(nhCredSaved ? "保存済み ✓" : "保存") {
+                    KeychainService.save(key: "nh_username", value: nhUsername)
+                    KeychainService.save(key: "nh_password", value: nhPassword)
+                    nhCredSaved = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { nhCredSaved = false }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(nhUsername.isEmpty && nhPassword.isEmpty)
+
+                Button("クリア", role: .destructive) {
+                    KeychainService.delete(key: "nh_username")
+                    KeychainService.delete(key: "nh_password")
+                    nhUsername = ""
+                    nhPassword = ""
+                    nhCredSaved = false
+                }
+                .disabled(nhUsername.isEmpty && nhPassword.isEmpty)
+            }
+
+            // クリップボードコピー
+            #if canImport(UIKit)
+            if !nhUsername.isEmpty {
+                Button {
+                    UIPasteboard.general.string = nhUsername
+                } label: {
+                    Label("ユーザー名をコピー", systemImage: "doc.on.doc")
+                }
+            }
+            if !nhPassword.isEmpty {
+                Button {
+                    UIPasteboard.general.string = nhPassword
+                } label: {
+                    Label("パスワードをコピー", systemImage: "key")
+                }
+            }
+            #endif
+        } header: {
+            Text("nhentai ログイン情報")
+        } footer: {
+            Text("保存するとログイン画面を開いた時にフォームへ自動入力されます。Cloudflare突破とログインボタン押下は手動です。")
+                .font(.caption2)
         }
     }
 

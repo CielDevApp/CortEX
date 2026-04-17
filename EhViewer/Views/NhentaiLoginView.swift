@@ -210,7 +210,62 @@ struct NhentaiWebView: UIViewRepresentable {
             if isInCDNPhase {
                 handleCDNNavigation(webView: webView)
             } else {
+                // ログインページなら保存済みID/PWを自動入力（submitはしない、ユーザー手動）
+                if let url = webView.url, url.path.contains("/login") {
+                    autoFillCredentials(webView: webView)
+                }
                 extractAndSaveCookies(from: webView)
+            }
+        }
+
+        /// 保存済みID/PWをフォームに入力（Cloudflareはユーザー手動突破）
+        private func autoFillCredentials(webView: WKWebView) {
+            let username = KeychainService.load(key: "nh_username") ?? ""
+            let password = KeychainService.load(key: "nh_password") ?? ""
+            LogManager.shared.log("nhAuth", "autofill check: hasUser=\(!username.isEmpty) hasPass=\(!password.isEmpty)")
+            guard !username.isEmpty || !password.isEmpty else { return }
+            // 段階的にリトライ（SPA遅延レンダリング対応）
+            attemptAutoFill(webView: webView, username: username, password: password, delays: [0.2, 0.8, 1.8, 3.0])
+        }
+
+        private func attemptAutoFill(webView: WKWebView, username: String, password: String, delays: [Double]) {
+            guard !delays.isEmpty else { return }
+            let uEsc = username.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
+            let pEsc = password.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
+            let js = """
+            (function(){
+                var u = document.querySelector('input[name="username_or_email"]') || document.querySelector('input[name="username"]') || document.querySelector('input[type="text"]') || document.querySelector('input[type="email"]');
+                var p = document.querySelector('input[name="password"]') || document.querySelector('input[type="password"]');
+                if (u) {
+                    u.focus();
+                    u.value = '\(uEsc)';
+                    u.dispatchEvent(new Event('input', { bubbles: true }));
+                    u.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+                if (p) {
+                    p.focus();
+                    p.value = '\(pEsc)';
+                    p.dispatchEvent(new Event('input', { bubbles: true }));
+                    p.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+                return (u ? 'u' : '') + (p ? 'p' : '') + ':' + (u ? u.value.length : 0) + ',' + (p ? p.value.length : 0);
+            })();
+            """
+            let delay = delays[0]
+            let remaining = Array(delays.dropFirst())
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                webView.evaluateJavaScript(js) { result, error in
+                    if let r = result as? String {
+                        LogManager.shared.log("nhAuth", "autofill attempt delay=\(delay)s result=\(r)")
+                        // 両方のフィールドが埋まってれば終了、片方でもダメならリトライ
+                        if r.hasPrefix("up"), !r.hasSuffix(":0,0") {
+                            return
+                        }
+                    } else if let error {
+                        LogManager.shared.log("nhAuth", "autofill err delay=\(delay)s: \(error.localizedDescription)")
+                    }
+                    self.attemptAutoFill(webView: webView, username: username, password: password, delays: remaining)
+                }
             }
         }
 

@@ -55,6 +55,15 @@ class DownloadManager: ObservableObject {
     /// URL解決フェーズの直列化（複数DLが同時にページURL取得→ネットワーク飽和防止）
     private let urlResolveSemaphore = AsyncSemaphore(limit: 1)
 
+    /// リーダー表示中のギャラリーID（DL速度を落としてリーダー優先）
+    @MainActor static var readerActiveGids: Set<Int> = []
+    @MainActor static func setReaderActive(gid: Int, active: Bool) {
+        if active { readerActiveGids.insert(gid) } else { readerActiveGids.remove(gid) }
+    }
+    nonisolated static func isReaderActive(gid: Int) async -> Bool {
+        await MainActor.run { readerActiveGids.contains(gid) }
+    }
+
     /// Live Activity管理
     private var liveActivities: [Int: String] = [:] // gid → activityID
 
@@ -574,6 +583,11 @@ class DownloadManager: ObservableObject {
                 updateProgress(gid: gid, current: state.downloadedSet.count, total: totalPages)
             } else {
                 state.failedPages.append((index: index, pageURL: allPageURLs[index]))
+            }
+
+            // リーダー表示中は帯域をリーダーに譲る（1.5秒スロットル）
+            if await Self.isReaderActive(gid: gid) {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
             }
 
             if state.downloadedSet.count >= totalPages { break }

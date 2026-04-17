@@ -368,30 +368,14 @@ struct NhentaiDetailView: View {
 
     // MARK: - Thumbnail Grid
 
-    /// サムネグリッドに表示するページ数（順次追加）
-    @State private var visibleThumbCount = 15
-    @State private var lastThumbExpand = Date.distantPast
-
-    private var thumbnailGrid: some View {
-        let _ = LogManager.shared.log("nhDbg", "thumbnailGrid body eval pages=\(gallery.num_pages) visible=\(visibleThumbCount) hasImages=\(gallery.images != nil)")
-        return GroupBox("ページ一覧（\(gallery.num_pages)ページ）") {
+        private var thumbnailGrid: some View {
+        GroupBox("ページ一覧（\(gallery.num_pages)ページ）") {
             LazyVGrid(columns: columns, spacing: 4) {
-                ForEach(0..<min(visibleThumbCount, gallery.num_pages), id: \.self) { index in
+                // 全ページ一気に表示（LazyVGridが可視範囲のみインスタンス化するので安全）
+                ForEach(0..<gallery.num_pages, id: \.self) { index in
                     NhThumbCell(gallery: gallery, index: index, coverImage: coverImage) {
                         HistoryManager.shared.recordNhentai(gallery: gallery, page: index)
                         readerRequest = NhReaderRequest(page: index)
-                    }
-                    .onAppear {
-                        // ★ 本当に最後のセルが表示された時だけ追加（連鎖防止）
-                        // LazyVGridのprefetchは先回りで.onAppearを発火させるので、
-                        // 末尾5個判定だと連鎖反応で暴走する（15→45→75→...）
-                        guard index == visibleThumbCount - 1,
-                              visibleThumbCount < gallery.num_pages else { return }
-                        // デバウンス: 前回増加から1秒以上経過してから
-                        let now = Date()
-                        if now.timeIntervalSince(lastThumbExpand) < 1.0 { return }
-                        lastThumbExpand = now
-                        visibleThumbCount = min(visibleThumbCount + 15, gallery.num_pages)
                     }
                 }
             }

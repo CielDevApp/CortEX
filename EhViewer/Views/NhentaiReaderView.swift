@@ -157,8 +157,17 @@ struct NhentaiReaderView: View {
             Text("ローカルには追加済みです。Safari で手動完了するか、設定から nhentai に再認証してください。")
         }
         .task {
+            // リーダー表示開始 → DL側に減速ヒント
+            DownloadManager.setReaderActive(gid: -gallery.id, active: true)
+            // 初期表示: 現在ページ優先 + 前後5ページ先読み（爆速ページめくり用）
             loadPage(initialPage)
-            loadPage(initialPage + 1)
+            for offset in 1...5 {
+                loadPage(initialPage + offset)
+                loadPage(initialPage - offset)
+            }
+        }
+        .onDisappear {
+            DownloadManager.setReaderActive(gid: -gallery.id, active: false)
         }
         .onChange(of: noFilterMode) { _, _ in reapplyFilters() }
         .onChange(of: imageEnhanceFilter) { _, _ in reapplyFilters() }
@@ -303,11 +312,13 @@ struct NhentaiReaderView: View {
         images.removeAll()
         pageDataCache.removeAll()
         loadingPages.removeAll()
-        // 現在表示中ページ周辺を即リロード
+        // 現在表示中ページ周辺±5を即リロード
         let center = currentIndex
         loadPage(center)
-        loadPage(center + 1)
-        loadPage(center - 1)
+        for offset in 1...5 {
+            loadPage(center + offset)
+            loadPage(center - offset)
+        }
     }
 
     @AppStorage("autoSaveOnRead") private var autoSaveOnRead = false
@@ -378,8 +389,11 @@ struct NhentaiReaderView: View {
                                 currentIndex = index
                                 loadPage(index)
                                 if !EcoMode.shared.isEnabled {
-                                    loadPage(index + 1)
-                                    loadPage(index - 1)
+                                    // ±5ページ先読み（爆速ページめくり）
+                                    for offset in 1...5 {
+                                        loadPage(index + offset)
+                                        loadPage(index - offset)
+                                    }
                                 }
                             }
                     }
@@ -427,8 +441,11 @@ struct NhentaiReaderView: View {
                 currentIndex = index
                 loadPage(index)
                 if !EcoMode.shared.isEnabled {
-                    loadPage(index + 1)
-                    loadPage(index - 1)
+                    // ±5ページ先読み（爆速ページめくり、見開きモード対応）
+                    for offset in 1...5 {
+                        loadPage(index + offset)
+                        loadPage(index - offset)
+                    }
                 }
             },
             onDismiss: { handleClose() },
@@ -524,7 +541,23 @@ struct NhentaiReaderView: View {
                 return
             }
 
-            // 標準画質取得
+            // 標準画質取得: DL済みローカルファイルを先にチェック（DL中の帯域競合回避）
+            let nhGid = -gallery.id
+            let localPath = DownloadManager.shared.imageFilePath(gid: nhGid, page: index + 1)
+            if FileManager.default.fileExists(atPath: localPath.path),
+               let data = try? Data(contentsOf: localPath),
+               !data.isEmpty {
+                pageDataCache[index] = data
+                if let img = await decodeImageData(data) {
+                    LogManager.shared.log("nhLoad", "page \(index + 1) full from local DL \(img.pixelWidth)x\(img.pixelHeight)")
+                    rawImages[index] = img
+                    applyFiltersAsync(index: index, raw: img)
+                }
+                loadingPages.remove(index)
+                return
+            }
+
+            // 標準画質取得（ネットワーク）
             do {
                 let data = try await NhentaiClient.fetchPageImage(
                     galleryId: gallery.id, mediaId: gallery.media_id, page: index + 1, ext: page.ext, path: page.path
