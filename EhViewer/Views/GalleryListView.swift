@@ -41,6 +41,7 @@ struct GalleryListView: View {
     @State private var hasInitialized = false
     @State private var searchText = ""
     @State private var tabBarHidden = false
+    @State private var navPath = NavigationPath()
 
     private var currentVM: GalleryListViewModel {
         switch selectedTab {
@@ -56,7 +57,7 @@ struct GalleryListView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navPath) {
             VStack(spacing: 0) {
                 // ソース切替
                 Picker("ソース", selection: $selectedSource) {
@@ -161,11 +162,11 @@ struct GalleryListView: View {
 
             switch selectedTab {
             case .all:
-                GalleryScrollList(viewModel: allVM, authVM: authVM, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
+                GalleryScrollList(viewModel: allVM, authVM: authVM, navPath: $navPath, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
             case .doujinshi:
-                GalleryScrollList(viewModel: doujinshiVM, authVM: authVM, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
+                GalleryScrollList(viewModel: doujinshiVM, authVM: authVM, navPath: $navPath, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
             case .manga:
-                GalleryScrollList(viewModel: mangaVM, authVM: authVM, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
+                GalleryScrollList(viewModel: mangaVM, authVM: authVM, navPath: $navPath, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
             }
         }
         .overlay {
@@ -294,7 +295,10 @@ struct GalleryListView: View {
 struct GalleryScrollList: View {
     @ObservedObject var viewModel: GalleryListViewModel
     @ObservedObject var authVM: AuthViewModel
+    @Binding var navPath: NavigationPath
     @State private var scrollPosition: Int?
+    @State private var previewGallery: Gallery?
+    @State private var previewReaderRequest: GalleryPreviewReaderRequest?
     var onScrollDown: (() -> Void)?
     var onScrollUp: (() -> Void)?
 
@@ -302,13 +306,21 @@ struct GalleryScrollList: View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 ForEach(Array(viewModel.galleries.enumerated()), id: \.element.gid) { index, gallery in
-                    NavigationLink(value: gallery) {
-                        GalleryCardView(gallery: gallery)
-                            .padding(.horizontal)
-                            .padding(.vertical, 4)
-                    }
-                    .buttonStyle(.plain)
-                    .id(gallery.gid)
+                    // onTapGesture + onLongPressGesture: 長押し発火時は tap を抑制するSwiftUI標準動作
+                    GalleryCardView(gallery: gallery)
+                        .padding(.horizontal)
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            navPath.append(gallery)
+                        }
+                        .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 15) {
+                            #if canImport(UIKit)
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                            #endif
+                            previewGallery = gallery
+                        }
+                        .id(gallery.gid)
                     .onAppear {
                         // 次の3〜5件のカバー画像をバックグラウンドでプリフェッチ
                         let prefetchRange = (index + 1)...(index + 4)
@@ -387,6 +399,172 @@ struct GalleryScrollList: View {
         }
         .scrollPosition(id: $scrollPosition, anchor: .top)
         .refreshable { await viewModel.refresh() }
+        .overlay {
+            if let gallery = previewGallery {
+                GalleryPreviewOverlay(
+                    gallery: gallery,
+                    host: viewModel.host,
+                    onDismiss: { previewGallery = nil },
+                    onTapPage: { page in
+                        previewReaderRequest = GalleryPreviewReaderRequest(gallery: gallery, page: page)
+                    }
+                )
+                .transition(.opacity)
+            }
+        }
+        #if os(iOS)
+        .fullScreenCover(item: $previewReaderRequest) { req in
+            GalleryReaderView(
+                gallery: req.gallery,
+                host: viewModel.host,
+                initialPage: req.page,
+                thumbnails: []
+            )
+            .onAppear {
+                HistoryManager.shared.record(gallery: req.gallery, page: req.page)
+                previewGallery = nil
+            }
+        }
+        #endif
+    }
+}
+
+/// プレビューから直接リーダーを開く用
+private struct GalleryPreviewReaderRequest: Identifiable {
+    let id = UUID()
+    let gallery: Gallery
+    let page: Int
+}
+
+/// 長押しで表示される小窓プレビュー（背景タップで閉じる）
+struct GalleryPreviewOverlay: View {
+    let gallery: Gallery
+    let host: GalleryHost
+    let onDismiss: () -> Void
+    let onTapPage: (Int) -> Void
+
+    @State private var thumbnails: [ThumbnailInfo] = []
+    @State private var isLoading = true
+    @State private var errorMessage: String?
+    @State private var visibleCount = 20
+
+    private let columns = [GridItem(.adaptive(minimum: 80, maximum: 120), spacing: 6)]
+    private let thumbsPerPage = 20
+
+    var body: some View {
+        ZStack {
+            // 背景: タップで閉じる
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture { onDismiss() }
+
+            // 小窓本体
+            VStack(spacing: 0) {
+                // ヘッダー
+                HStack {
+                    Text(gallery.title)
+                        .font(.caption.bold())
+                        .lineLimit(2)
+                    Spacer()
+                    Button(action: onDismiss) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding()
+
+                Divider()
+
+                // サムネグリッド
+                ScrollView {
+                    if isLoading && thumbnails.isEmpty {
+                        ProgressView().padding(.vertical, 40)
+                    } else if let err = errorMessage {
+                        VStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .font(.largeTitle)
+                                .foregroundStyle(.orange)
+                            Text(err).font(.caption).foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 40)
+                    } else {
+                        LazyVGrid(columns: columns, spacing: 6) {
+                            ForEach(0..<min(visibleCount, gallery.pageCount), id: \.self) { index in
+                                ThumbnailCellView(
+                                    index: index,
+                                    coverURL: gallery.coverURL,
+                                    host: host,
+                                    info: index < thumbnails.count ? thumbnails[index] : nil,
+                                    cellHeight: 120,
+                                    onTap: { onTapPage(index) },
+                                    gid: gallery.gid
+                                )
+                                .onAppear {
+                                    // スクロールで末尾付近→追加ページ取得
+                                    if index >= thumbnails.count {
+                                        let neededPage = index / thumbsPerPage
+                                        loadThumbPageIfNeeded(page: neededPage)
+                                    }
+                                    if index >= visibleCount - 6 && visibleCount < gallery.pageCount {
+                                        visibleCount = min(visibleCount + 20, gallery.pageCount)
+                                    }
+                                }
+                            }
+                        }
+                        .padding()
+                    }
+                }
+            }
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .shadow(radius: 20)
+            .frame(maxWidth: 600, maxHeight: 600)
+            .padding()
+        }
+        .task {
+            await loadInitial()
+        }
+    }
+
+    private func loadInitial() async {
+        isLoading = true
+        errorMessage = nil
+        do {
+            let infos = try await EhClient.shared.fetchThumbnailInfos(host: host, gallery: gallery, page: 0)
+            thumbnails = infos
+            isLoading = false
+        } catch {
+            errorMessage = error.localizedDescription
+            isLoading = false
+        }
+    }
+
+    @State private var loadingPages: Set<Int> = []
+
+    private func loadThumbPageIfNeeded(page: Int) {
+        guard !loadingPages.contains(page), page > 0 else { return }
+        loadingPages.insert(page)
+        Task {
+            do {
+                let infos = try await EhClient.shared.fetchThumbnailInfos(host: host, gallery: gallery, page: page)
+                let offset = page * thumbsPerPage
+                let reindexed = infos.enumerated().map { (i, info) in
+                    ThumbnailInfo(index: offset + i, spriteURL: info.spriteURL, offsetX: info.offsetX, width: info.width, height: info.height)
+                }
+                var current = thumbnails
+                while current.count < offset + reindexed.count {
+                    current.append(ThumbnailInfo(index: current.count, spriteURL: URL(string: "about:blank")!, offsetX: 0, width: 0, height: 0))
+                }
+                for info in reindexed where info.index < current.count {
+                    current[info.index] = info
+                }
+                thumbnails = current
+            } catch {
+                loadingPages.remove(page)
+            }
+        }
     }
 }
 
