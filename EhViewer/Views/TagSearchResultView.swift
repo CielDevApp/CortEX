@@ -8,13 +8,24 @@ struct TagSearchResultView: View {
     let title: String
 
     @StateObject private var viewModel = GalleryListViewModel()
+    @Environment(\.navPathBox) private var navPathBox
+    @State private var previewGallery: Gallery?
+    @State private var previewReaderRequest: GalleryPreviewReaderRequest?
 
     var body: some View {
         List {
             ForEach(viewModel.galleries) { gallery in
-                NavigationLink(value: gallery) {
-                    GalleryCardView(gallery: gallery)
-                }
+                GalleryCardView(gallery: gallery)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        navPathBox?.path.append(gallery)
+                    }
+                    .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 15) {
+                        #if canImport(UIKit)
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        #endif
+                        previewGallery = gallery
+                    }
             }
 
             if viewModel.hasMore {
@@ -39,26 +50,52 @@ struct TagSearchResultView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .navigationDestination(for: Gallery.self) { gallery in
-            GalleryDetailView(gallery: gallery, host: host)
-        }
-        .navigationDestination(for: TagSearch.self) { search in
-            TagSearchResultView(searchQuery: search.query, host: host, title: search.displayTitle)
-        }
-        .navigationDestination(for: UploaderSearch.self) { search in
-            TagSearchResultView(searchQuery: search.query, host: host, title: search.displayTitle)
-        }
-        .navigationDestination(for: CategoryFilter.self) { filter in
-            TagSearchResultView(searchQuery: filter.query, host: host, title: filter.displayTitle)
-        }
         .overlay {
             if viewModel.isLoading && viewModel.galleries.isEmpty {
                 ProgressView("検索中...")
             }
+            if let g = previewGallery {
+                GalleryPreviewOverlay(
+                    gallery: g,
+                    host: host,
+                    onDismiss: { previewGallery = nil },
+                    onTapPage: { thumbnails, page in
+                        previewReaderRequest = GalleryPreviewReaderRequest(gallery: g, page: page, thumbnails: thumbnails)
+                    }
+                )
+            }
         }
+        #if os(iOS)
+        .fullScreenCover(item: $previewReaderRequest) { req in
+            GalleryReaderView(gallery: req.gallery, host: host, initialPage: req.page, thumbnails: req.thumbnails)
+                .onAppear {
+                    HistoryManager.shared.record(gallery: req.gallery, page: req.page)
+                    previewGallery = nil
+                }
+        }
+        #endif
         .task {
+            // 既に読み込み済みならスキップ（戻るたびのリセット防止）
+            guard viewModel.galleries.isEmpty else { return }
             viewModel.searchText = searchQuery
             await viewModel.search()
         }
+    }
+}
+
+/// NavigationPathへの参照を子Viewに渡すためのEnvironment
+/// @ObservableObjectラッパーでBindingせずpathを共有
+final class NavigationPathBox: ObservableObject {
+    @Published var path = NavigationPath()
+}
+
+private struct NavPathBoxKey: EnvironmentKey {
+    static let defaultValue: NavigationPathBox? = nil
+}
+
+extension EnvironmentValues {
+    var navPathBox: NavigationPathBox? {
+        get { self[NavPathBoxKey.self] }
+        set { self[NavPathBoxKey.self] = newValue }
     }
 }

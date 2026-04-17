@@ -41,7 +41,7 @@ struct GalleryListView: View {
     @State private var hasInitialized = false
     @State private var searchText = ""
     @State private var tabBarHidden = false
-    @State private var navPath = NavigationPath()
+    @StateObject private var navPathBox = NavigationPathBox()
 
     private var currentVM: GalleryListViewModel {
         switch selectedTab {
@@ -57,7 +57,7 @@ struct GalleryListView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $navPath) {
+        NavigationStack(path: $navPathBox.path) {
             VStack(spacing: 0) {
                 // ソース切替
                 Picker("ソース", selection: $selectedSource) {
@@ -124,6 +124,7 @@ struct GalleryListView: View {
                 searchText = ""
             }
         }
+        .environment(\.navPathBox, navPathBox)
     }
 
     // MARK: - E-Hentai
@@ -162,11 +163,11 @@ struct GalleryListView: View {
 
             switch selectedTab {
             case .all:
-                GalleryScrollList(viewModel: allVM, authVM: authVM, navPath: $navPath, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
+                GalleryScrollList(viewModel: allVM, authVM: authVM, navPath: $navPathBox.path, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
             case .doujinshi:
-                GalleryScrollList(viewModel: doujinshiVM, authVM: authVM, navPath: $navPath, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
+                GalleryScrollList(viewModel: doujinshiVM, authVM: authVM, navPath: $navPathBox.path, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
             case .manga:
-                GalleryScrollList(viewModel: mangaVM, authVM: authVM, navPath: $navPath, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
+                GalleryScrollList(viewModel: mangaVM, authVM: authVM, navPath: $navPathBox.path, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
             }
         }
         .overlay {
@@ -247,7 +248,7 @@ struct GalleryListView: View {
             TipView(NhentaiSearchTip(), arrowEdge: .top)
                 .padding(.horizontal)
 
-            NhentaiScrollList(viewModel: nhVM, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
+            NhentaiScrollList(viewModel: nhVM, navPath: $navPathBox.path, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
         }
         .overlay {
             if nhVM.isLoading && nhVM.galleries.isEmpty {
@@ -405,8 +406,8 @@ struct GalleryScrollList: View {
                     gallery: gallery,
                     host: viewModel.host,
                     onDismiss: { previewGallery = nil },
-                    onTapPage: { page in
-                        previewReaderRequest = GalleryPreviewReaderRequest(gallery: gallery, page: page)
+                    onTapPage: { thumbnails, page in
+                        previewReaderRequest = GalleryPreviewReaderRequest(gallery: gallery, page: page, thumbnails: thumbnails)
                     }
                 )
                 .transition(.opacity)
@@ -418,7 +419,7 @@ struct GalleryScrollList: View {
                 gallery: req.gallery,
                 host: viewModel.host,
                 initialPage: req.page,
-                thumbnails: []
+                thumbnails: req.thumbnails
             )
             .onAppear {
                 HistoryManager.shared.record(gallery: req.gallery, page: req.page)
@@ -430,10 +431,11 @@ struct GalleryScrollList: View {
 }
 
 /// プレビューから直接リーダーを開く用
-private struct GalleryPreviewReaderRequest: Identifiable {
+struct GalleryPreviewReaderRequest: Identifiable {
     let id = UUID()
     let gallery: Gallery
     let page: Int
+    var thumbnails: [ThumbnailInfo] = []
 }
 
 /// 長押しで表示される小窓プレビュー（背景タップで閉じる）
@@ -441,7 +443,8 @@ struct GalleryPreviewOverlay: View {
     let gallery: Gallery
     let host: GalleryHost
     let onDismiss: () -> Void
-    let onTapPage: (Int) -> Void
+    /// (thumbnails, page) を返す。リーダーでサムネ再利用用
+    let onTapPage: ([ThumbnailInfo], Int) -> Void
 
     @State private var thumbnails: [ThumbnailInfo] = []
     @State private var isLoading = true
@@ -498,7 +501,7 @@ struct GalleryPreviewOverlay: View {
                                     host: host,
                                     info: index < thumbnails.count ? thumbnails[index] : nil,
                                     cellHeight: 120,
-                                    onTap: { onTapPage(index) },
+                                    onTap: { onTapPage(thumbnails, index) },
                                     gid: gallery.gid
                                 )
                                 .onAppear {
@@ -572,6 +575,9 @@ struct GalleryPreviewOverlay: View {
 
 struct NhentaiScrollList: View {
     @ObservedObject var viewModel: NhentaiListViewModel
+    @Binding var navPath: NavigationPath
+    @State private var previewGallery: NhentaiClient.NhGallery?
+    @State private var previewReaderRequest: NhentaiPreviewReaderRequest?
     var onScrollDown: (() -> Void)?
     var onScrollUp: (() -> Void)?
 
@@ -579,12 +585,19 @@ struct NhentaiScrollList: View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 ForEach(viewModel.galleries) { nh in
-                    NavigationLink(value: nh) {
-                        NhentaiCardView(gallery: nh)
-                            .padding(.horizontal)
-                            .padding(.vertical, 4)
-                    }
-                    .buttonStyle(.plain)
+                    NhentaiCardView(gallery: nh)
+                        .padding(.horizontal)
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            navPath.append(nh)
+                        }
+                        .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 15) {
+                            #if canImport(UIKit)
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                            #endif
+                            previewGallery = nh
+                        }
 
                     Divider().padding(.leading)
                 }
@@ -615,6 +628,129 @@ struct NhentaiScrollList: View {
             else if delta < -15 { onScrollUp?() }
         }
         .refreshable { await viewModel.refresh() }
+        .overlay {
+            if let nh = previewGallery {
+                NhentaiPreviewOverlay(
+                    gallery: nh,
+                    onDismiss: { previewGallery = nil },
+                    onTapPage: { loadedGallery, page in
+                        previewReaderRequest = NhentaiPreviewReaderRequest(gallery: loadedGallery, page: page)
+                    }
+                )
+                .transition(.opacity)
+            }
+        }
+        #if os(iOS)
+        .fullScreenCover(item: $previewReaderRequest) { req in
+            NhentaiReaderView(gallery: req.gallery, initialPage: req.page)
+                .onAppear {
+                    HistoryManager.shared.recordNhentai(gallery: req.gallery, page: req.page)
+                    previewGallery = nil
+                }
+        }
+        #endif
+    }
+}
+
+/// nhentaiプレビューから直接リーダー起動用
+struct NhentaiPreviewReaderRequest: Identifiable {
+    let id = UUID()
+    let gallery: NhentaiClient.NhGallery
+    let page: Int
+}
+
+/// nhentai長押しプレビュー
+struct NhentaiPreviewOverlay: View {
+    let initialGallery: NhentaiClient.NhGallery
+    let onDismiss: () -> Void
+    /// loaded gallery (pages入り)とpage indexを返す
+    let onTapPage: (NhentaiClient.NhGallery, Int) -> Void
+
+    init(gallery: NhentaiClient.NhGallery, onDismiss: @escaping () -> Void, onTapPage: @escaping (NhentaiClient.NhGallery, Int) -> Void) {
+        self.initialGallery = gallery
+        self.onDismiss = onDismiss
+        self.onTapPage = onTapPage
+    }
+
+    @State private var coverImage: PlatformImage?
+    @State private var loadedGallery: NhentaiClient.NhGallery?
+    @State private var isLoadingDetail = false
+
+    private var gallery: NhentaiClient.NhGallery { loadedGallery ?? initialGallery }
+    private let columns = [GridItem(.adaptive(minimum: 80, maximum: 120), spacing: 6)]
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture { onDismiss() }
+
+            VStack(spacing: 0) {
+                HStack {
+                    Text(gallery.displayTitle)
+                        .font(.caption.bold())
+                        .lineLimit(2)
+                    Spacer()
+                    Button(action: onDismiss) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding()
+
+                Divider()
+
+                ScrollView {
+                    let pagesReady = (gallery.images?.pages.isEmpty == false)
+                    if !pagesReady {
+                        VStack(spacing: 8) {
+                            ProgressView()
+                            Text("ページ情報取得中…")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 40)
+                    } else {
+                        LazyVGrid(columns: columns, spacing: 6) {
+                            ForEach(0..<gallery.num_pages, id: \.self) { index in
+                                NhThumbCell(
+                                    gallery: gallery,
+                                    index: index,
+                                    coverImage: coverImage
+                                ) {
+                                    onTapPage(gallery, index)
+                                }
+                            }
+                        }
+                        .padding()
+                    }
+                }
+            }
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .shadow(radius: 20)
+            .frame(maxWidth: 600, maxHeight: 600)
+            .padding()
+        }
+        .task {
+            await ensureDetailLoaded()
+        }
+    }
+
+    private func ensureDetailLoaded() async {
+        if (initialGallery.images?.pages.isEmpty == false) { return }
+        guard !isLoadingDetail else { return }
+        isLoadingDetail = true
+        LogManager.shared.log("nhentai", "preview: loading detail id=\(initialGallery.id)")
+        do {
+            let full = try await NhentaiClient.fetchGallery(id: initialGallery.id)
+            loadedGallery = full
+            LogManager.shared.log("nhentai", "preview: detail loaded pages=\(full.num_pages)")
+        } catch {
+            LogManager.shared.log("nhentai", "preview: detail failed: \(error.localizedDescription)")
+        }
+        isLoadingDetail = false
     }
 }
 
