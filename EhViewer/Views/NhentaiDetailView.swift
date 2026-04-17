@@ -520,7 +520,7 @@ private struct NhReaderRequest: Identifiable {
 }
 
 /// サムネセル（拡張子フォールバック付き取得）
-private struct NhThumbCell: View {
+struct NhThumbCell: View {
     let gallery: NhentaiClient.NhGallery
     let index: Int
     let coverImage: PlatformImage?
@@ -660,17 +660,27 @@ struct NhTagSearchResultView: View {
     @State private var isLoading = false
     @State private var hasMore = true
     @State private var currentPage = 1
+    @Environment(\.navPathBox) private var navPathBox
+    @State private var previewGallery: NhentaiClient.NhGallery?
+    @State private var previewReaderRequest: NhentaiPreviewReaderRequest?
 
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 ForEach(galleries) { nh in
-                    NavigationLink(value: nh) {
-                        NhentaiCardView(gallery: nh)
-                            .padding(.horizontal)
-                            .padding(.vertical, 4)
-                    }
-                    .buttonStyle(.plain)
+                    NhentaiCardView(gallery: nh)
+                        .padding(.horizontal)
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            navPathBox?.path.append(nh)
+                        }
+                        .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 15) {
+                            #if canImport(UIKit)
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                            #endif
+                            previewGallery = nh
+                        }
                     Divider().padding(.leading)
                 }
 
@@ -692,15 +702,33 @@ struct NhTagSearchResultView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .navigationDestination(for: NhentaiClient.NhGallery.self) { nh in
-            NhentaiDetailView(gallery: nh)
-        }
         .overlay {
             if isLoading && galleries.isEmpty {
                 ProgressView("検索中...")
             }
+            if let nh = previewGallery {
+                NhentaiPreviewOverlay(
+                    gallery: nh,
+                    onDismiss: { previewGallery = nil },
+                    onTapPage: { loadedGallery, page in
+                        previewReaderRequest = NhentaiPreviewReaderRequest(gallery: loadedGallery, page: page)
+                    }
+                )
+            }
         }
-        .task { await loadFirst() }
+        #if os(iOS)
+        .fullScreenCover(item: $previewReaderRequest) { req in
+            NhentaiReaderView(gallery: req.gallery, initialPage: req.page)
+                .onAppear {
+                    HistoryManager.shared.recordNhentai(gallery: req.gallery, page: req.page)
+                    previewGallery = nil
+                }
+        }
+        #endif
+        .task {
+            guard galleries.isEmpty else { return }
+            await loadFirst()
+        }
     }
 
     private func loadFirst() async {

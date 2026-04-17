@@ -16,9 +16,14 @@ struct FavoritesView: View {
     @State private var tabBarHidden = false
     /// サーバー側と同期成功したIDsのセット（緑チェックマーク表示用）
     @State private var nhSyncedIds: Set<Int> = []
+    @StateObject private var navPathBox = NavigationPathBox()
+    @State private var previewEhGallery: Gallery?
+    @State private var previewNhGallery: NhentaiClient.NhGallery?
+    @State private var previewEhReader: GalleryPreviewReaderRequest?
+    @State private var previewNhReader: NhentaiPreviewReaderRequest?
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navPathBox.path) {
             VStack(spacing: 0) {
                 // ソース切替
                 Picker("ソース", selection: $favSource) {
@@ -94,9 +99,17 @@ struct FavoritesView: View {
                 // ギャラリーリスト
                 List {
                     ForEach(viewModel.galleries) { gallery in
-                        NavigationLink(value: gallery) {
-                            GalleryCardView(gallery: gallery)
-                        }
+                        GalleryCardView(gallery: gallery)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                navPathBox.path.append(gallery)
+                            }
+                            .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 15) {
+                                #if canImport(UIKit)
+                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                #endif
+                                previewEhGallery = gallery
+                            }
                     }
 
                     if viewModel.galleries.isEmpty && !viewModel.isLoading {
@@ -197,7 +210,44 @@ struct FavoritesView: View {
                 if viewModel.isLoading && viewModel.galleries.isEmpty {
                     ProgressView("サーバーから取得中...")
                 }
+                if let g = previewEhGallery {
+                    let host: GalleryHost = authVM.isLoggedIn ? .exhentai : .ehentai
+                    GalleryPreviewOverlay(
+                        gallery: g,
+                        host: host,
+                        onDismiss: { previewEhGallery = nil },
+                        onTapPage: { thumbnails, page in
+                            previewEhReader = GalleryPreviewReaderRequest(gallery: g, page: page, thumbnails: thumbnails)
+                        }
+                    )
+                }
+                if let nh = previewNhGallery {
+                    NhentaiPreviewOverlay(
+                        gallery: nh,
+                        onDismiss: { previewNhGallery = nil },
+                        onTapPage: { loadedGallery, page in
+                            previewNhReader = NhentaiPreviewReaderRequest(gallery: loadedGallery, page: page)
+                        }
+                    )
+                }
             }
+            #if os(iOS)
+            .fullScreenCover(item: $previewEhReader) { req in
+                let host: GalleryHost = authVM.isLoggedIn ? .exhentai : .ehentai
+                GalleryReaderView(gallery: req.gallery, host: host, initialPage: req.page, thumbnails: req.thumbnails)
+                    .onAppear {
+                        HistoryManager.shared.record(gallery: req.gallery, page: req.page)
+                        previewEhGallery = nil
+                    }
+            }
+            .fullScreenCover(item: $previewNhReader) { req in
+                NhentaiReaderView(gallery: req.gallery, initialPage: req.page)
+                    .onAppear {
+                        HistoryManager.shared.recordNhentai(gallery: req.gallery, page: req.page)
+                        previewNhGallery = nil
+                    }
+            }
+            #endif
             .onAppear {
                 viewModel.loadFromCacheOnly()
             }
@@ -211,6 +261,7 @@ struct FavoritesView: View {
                 }
             }
         }
+        .environment(\.navPathBox, navPathBox)
     }
 
     // MARK: - nhentaiお気に入り
@@ -313,17 +364,25 @@ struct FavoritesView: View {
             } else {
                 List {
                     ForEach(filteredNhFavorites) { nh in
-                        NavigationLink(value: nh) {
-                            NhentaiCardView(gallery: nh)
-                                .overlay(alignment: .topTrailing) {
-                                    if nhSyncedIds.contains(nh.id) {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .font(.caption)
-                                            .foregroundStyle(.white, .green)
-                                            .padding(6)
-                                    }
+                        NhentaiCardView(gallery: nh)
+                            .overlay(alignment: .topTrailing) {
+                                if nhSyncedIds.contains(nh.id) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.caption)
+                                        .foregroundStyle(.white, .green)
+                                        .padding(6)
                                 }
-                        }
+                            }
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                navPathBox.path.append(nh)
+                            }
+                            .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 15) {
+                                #if canImport(UIKit)
+                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                #endif
+                                previewNhGallery = nh
+                            }
                     }
                 }
                 #if os(iOS)
