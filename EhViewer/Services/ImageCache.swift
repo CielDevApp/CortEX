@@ -259,8 +259,21 @@ final class ImageCache {
             #endif
             try? data.write(to: path)
         }
-        Task.detached(priority: .utility) {
-            await self.evictIfNeeded()
+        // evict は throttle（保存毎ではなく最大1分1回、cooperative pool占有を回避）
+        Self.scheduleEvictIfNeeded(self)
+    }
+
+    /// evict throttle 用
+    private static var lastEvictTime: TimeInterval = 0
+    private static let evictThrottleQueue = DispatchQueue(label: "imageCache-evictThrottle")
+    private static func scheduleEvictIfNeeded(_ cache: ImageCache) {
+        evictThrottleQueue.async {
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - lastEvictTime < 60 { return }
+            lastEvictTime = now
+            Task.detached(priority: .background) {
+                await cache.evictIfNeeded()
+            }
         }
     }
 

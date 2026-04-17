@@ -349,7 +349,13 @@ final class EhClient: Sendable {
         }
 
         if statusCode == 503 || statusCode == 429 {
-            throw EhError.banned(remaining: nil)
+            // 503/429のbodyからban残り時間を探す
+            var remaining = Self.extractBanRemaining(from: data)
+            // bodyに無ければトップページを別途fetchして探す
+            if remaining == nil {
+                remaining = try? await fetchBanRemaining(host: host)
+            }
+            throw EhError.banned(remaining: remaining)
         }
 
         guard let html = String(data: data, encoding: .utf8)
@@ -365,15 +371,8 @@ final class EhClient: Sendable {
             throw EhError.notLoggedIn
         }
 
-        if html.contains("The ban expires in") {
-            // 残り時間を抽出: "The ban expires in X minutes" or "The ban expires in X hours and Y minutes"
-            var remaining: String?
-            if let range = html.range(of: "The ban expires in ") {
-                let after = String(html[range.upperBound...])
-                if let dotRange = after.range(of: ".") {
-                    remaining = String(after[..<dotRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-                }
-            }
+        if html.contains("The ban expires in") || html.contains("temporarily banned") {
+            let remaining = Self.extractBanRemaining(from: data)
             throw EhError.banned(remaining: remaining)
         }
         if html.contains("This gallery has been removed") || html.contains("Gallery not found") {
@@ -381,6 +380,46 @@ final class EhClient: Sendable {
         }
 
         return html
+    }
+
+    // MARK: - Ban残り時間抽出
+
+    /// レスポンスbodyからban残り時間を抽出
+    private static func extractBanRemaining(from data: Data) -> String? {
+        guard let body = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .ascii) else { return nil }
+        LogManager.shared.log("EhBan", "body(\(data.count)B): \(body.prefix(500))")
+        // "The ban expires in 2 minutes and 23 seconds" パターン
+        // ピリオドではなく、直接 "expires in" 以降の時間部分を正規表現で抽出
+        let pattern = #"The ban expires in (.+?)(?:\.|<|$)"#
+        if let match = body.range(of: pattern, options: .regularExpression) {
+            let matched = String(body[match])
+            // "The ban expires in " を除去して時間部分だけ取得
+            let timeStr = matched
+                .replacingOccurrences(of: "The ban expires in ", with: "")
+                .replacingOccurrences(of: ".", with: "")
+                .replacingOccurrences(of: "<", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !timeStr.isEmpty {
+                return timeStr
+            }
+        }
+        return nil
+    }
+
+    /// トップページを別途fetchしてban残り時間を取得
+    nonisolated private func fetchBanRemaining(host: GalleryHost) async throws -> String? {
+        let topURL = host.baseURL + "/"
+        guard let url = URL(string: topURL) else { return nil }
+        var request = URLRequest(url: url)
+        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(Self.buildCookieHeader(for: host), forHTTPHeaderField: "Cookie")
+        request.timeoutInterval = 5
+
+        // インスタンスのsessionを使う（Cookie手動管理と同じ設定）
+        let (data, response) = try await session.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        LogManager.shared.log("EhBan", "topPage status=\(status) size=\(data.count)")
+        return Self.extractBanRemaining(from: data)
     }
 }
 

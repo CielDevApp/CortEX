@@ -522,22 +522,12 @@ struct NhentaiCardView: View {
                 let mediaId = gallery.media_id
                 let capturedURL = url
 
-                // ネットワーク取得 + GPUデコードを MainActor から外して並列実行
-                // (CachedImageView と同じパターン: CIImage → CIContext(GPU) → CGImage)
+                // nhentaiカバーは小画像なのでCPUデコード（GPU dispatchオーバーヘッド回避）
                 let decoded: PlatformImage? = await Task.detached(priority: .userInitiated) {
                     guard let data = try? await NhentaiClient.fetchCoverImage(
                         galleryId: galleryId, mediaId: mediaId,
                         ext: coverExt, path: coverPath
                     ) else { return nil }
-                    #if canImport(UIKit)
-                    // GPU経由デコード
-                    let ciCtx = SpriteCache.ciContext
-                    if let ciImage = CIImage(data: data),
-                       let cgImage = ciCtx.createCGImage(ciImage, from: ciImage.extent) {
-                        return UIImage(cgImage: cgImage)
-                    }
-                    #endif
-                    // GPU失敗時のCPUフォールバック
                     return PlatformImage(data: data)
                 }.value
 
