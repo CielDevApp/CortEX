@@ -20,12 +20,16 @@ struct TagSearchResultView: View {
                     .onTapGesture {
                         navPathBox?.path.append(gallery)
                     }
-                    .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 15) {
-                        #if canImport(UIKit)
-                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                        #endif
-                        previewGallery = gallery
-                    }
+                    // iPadでGalleryCardView内のNavigationLinkが長押しを奪うので highPriorityGesture
+                    .highPriorityGesture(
+                        LongPressGesture(minimumDuration: 0.4, maximumDistance: 15)
+                            .onEnded { _ in
+                                #if canImport(UIKit)
+                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                #endif
+                                previewGallery = gallery
+                            }
+                    )
             }
 
             if viewModel.hasMore {
