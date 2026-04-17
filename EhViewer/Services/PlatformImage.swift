@@ -20,6 +20,38 @@ extension PlatformImage {
 
     var pixelWidth: Int { cgImage?.width ?? Int(size.width) }
     var pixelHeight: Int { cgImage?.height ?? Int(size.height) }
+
+    /// ピクセルを強制デコード（SwiftUI render時の遅延デコードを回避）
+    /// maxDim指定で縮小も同時に行う
+    /// Task.detached内で呼ぶこと
+    func preDecoded(maxDim: CGFloat? = nil) -> PlatformImage {
+        guard let cg = self.cgImage else { return self }
+        let origW = cg.width
+        let origH = cg.height
+        let (newW, newH): (Int, Int)
+        if let maxDim, CGFloat(max(origW, origH)) > maxDim {
+            let scale = maxDim / CGFloat(max(origW, origH))
+            newW = Int(CGFloat(origW) * scale)
+            newH = Int(CGFloat(origH) * scale)
+        } else {
+            newW = origW
+            newH = origH
+        }
+        let colorSpace = cg.colorSpace ?? CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(
+            data: nil,
+            width: newW,
+            height: newH,
+            bitsPerComponent: 8,
+            bytesPerRow: newW * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return self }
+        ctx.interpolationQuality = .medium
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: newW, height: newH))
+        guard let decoded = ctx.makeImage() else { return self }
+        return PlatformImage(cgImage: decoded, scale: self.scale, orientation: self.imageOrientation)
+    }
 }
 
 #elseif canImport(AppKit)

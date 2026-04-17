@@ -369,10 +369,12 @@ struct NhentaiDetailView: View {
     // MARK: - Thumbnail Grid
 
     /// サムネグリッドに表示するページ数（順次追加）
-    @State private var visibleThumbCount = 50
+    @State private var visibleThumbCount = 15
+    @State private var lastThumbExpand = Date.distantPast
 
     private var thumbnailGrid: some View {
-        GroupBox("ページ一覧（\(gallery.num_pages)ページ）") {
+        let _ = LogManager.shared.log("nhDbg", "thumbnailGrid body eval pages=\(gallery.num_pages) visible=\(visibleThumbCount) hasImages=\(gallery.images != nil)")
+        return GroupBox("ページ一覧（\(gallery.num_pages)ページ）") {
             LazyVGrid(columns: columns, spacing: 4) {
                 ForEach(0..<min(visibleThumbCount, gallery.num_pages), id: \.self) { index in
                     NhThumbCell(gallery: gallery, index: index, coverImage: coverImage) {
@@ -380,73 +382,118 @@ struct NhentaiDetailView: View {
                         readerRequest = NhReaderRequest(page: index)
                     }
                     .onAppear {
-                        // 末尾付近に到達したら次の50枚を追加
-                        if index >= visibleThumbCount - 10 && visibleThumbCount < gallery.num_pages {
-                            visibleThumbCount = min(visibleThumbCount + 50, gallery.num_pages)
-                        }
+                        // ★ 本当に最後のセルが表示された時だけ追加（連鎖防止）
+                        // LazyVGridのprefetchは先回りで.onAppearを発火させるので、
+                        // 末尾5個判定だと連鎖反応で暴走する（15→45→75→...）
+                        guard index == visibleThumbCount - 1,
+                              visibleThumbCount < gallery.num_pages else { return }
+                        // デバウンス: 前回増加から1秒以上経過してから
+                        let now = Date()
+                        if now.timeIntervalSince(lastThumbExpand) < 1.0 { return }
+                        lastThumbExpand = now
+                        visibleThumbCount = min(visibleThumbCount + 15, gallery.num_pages)
                     }
                 }
             }
         }
-        .task { await prefetchAllNhThumbs() }
+        .task(id: gallery.images?.pages.count ?? 0) {
+            // detailロード後にgallery.imagesが入る → このtaskが再起動
+            guard let pages = gallery.images?.pages, !pages.isEmpty else { return }
+            let mediaId = gallery.media_id
+            LogManager.shared.log("nhentai", "prefetch triggered: mediaId=\(mediaId) pages=\(pages.count)")
+            // regular Task: view消失時にキャンセル伝播 → 蓄積防止
+            await NhentaiDetailView.prefetchNhThumbsStatic(pages: pages, mediaId: mediaId)
+        }
     }
 
-    /// サムネを先行取得（最大100件。残りはスクロールでオンデマンド取得）
-    /// リーダー表示中も Task が生存するため、読みながらサムネが埋まっていく
-    private func prefetchAllNhThumbs() async {
-        guard let pages = gallery.images?.pages, !pages.isEmpty else { return }
-        let mediaId = gallery.media_id
-        let totalPages = pages.count
-        let maxPrefetch = min(100, totalPages) // 最大100件（235ページで3.8秒フリーズ防止）
+    /// E-H SpriteCache.imageQueue準拠: cooperative pool非占有の専用thread
+    static let thumbProcessQueue = DispatchQueue(label: "nh-thumb-process", qos: .userInitiated)
 
-        // Phase 1: 1-10 を高優先で取得（20枚一括はMainActorブロックの原因）
-        let priorityEnd = min(10, maxPrefetch)
-        await fetchNhThumbBatch(pages: pages, mediaId: mediaId, range: 0..<priorityEnd, priority: .userInitiated)
-
-        // Phase 2: 21-100 をバックグラウンドで取得（3枚ずつバッチ、UIに譲歩）
-        if maxPrefetch > 20 {
-            let batchSize = 3
-            for batchStart in stride(from: 20, to: maxPrefetch, by: batchSize) {
-                let batchEnd = min(batchStart + batchSize, maxPrefetch)
-                await fetchNhThumbBatch(pages: pages, mediaId: mediaId, range: batchStart..<batchEnd, priority: .utility)
-                try? await Task.sleep(nanoseconds: 500_000_000)
+    /// 専用DispatchQueueでpreDecode実行（cooperative pool競合回避）
+    nonisolated static func decodeOnDedicatedQueue(_ data: Data, maxDim: CGFloat) async -> PlatformImage? {
+        await withCheckedContinuation { cont in
+            thumbProcessQueue.async {
+                if let img = PlatformImage(data: data) {
+                    cont.resume(returning: img.preDecoded(maxDim: maxDim))
+                } else {
+                    cont.resume(returning: nil)
+                }
             }
         }
-        LogManager.shared.log("nhentai", "prefetchNhThumbs: \(maxPrefetch)/\(totalPages) done (remaining on-demand)")
     }
 
-    private func fetchNhThumbBatch(
-        pages: [NhentaiClient.NhPage],
-        mediaId: String,
-        range: Range<Int>,
-        priority: TaskPriority
+    /// キャンセル伝播を受けない独立prefetch（static = MainActor非隔離）
+    nonisolated private static func prefetchNhThumbsStatic(
+        pages: [NhentaiClient.NhPage], mediaId: String
     ) async {
-        await withTaskGroup(of: Void.self) { group in
-            for idx in range {
-                let cacheKey = NhThumbCell.thumbCacheURL(mediaId: mediaId, page: idx + 1)
-                // 既にキャッシュ済みならスキップ
-                guard ImageCache.shared.image(for: cacheKey) == nil else { continue }
-                let page = pages[idx]
-                let pageNum = idx + 1
+        // 全ページprefetch（スクロール時の個別fetch回避、ただし長すぎる場合は100上限）
+        let maxPrefetch = min(100, pages.count)
 
-                group.addTask(priority: priority) {
-                    guard let data = try? await NhentaiClient.fetchThumbImage(
-                        mediaId: mediaId, page: pageNum, ext: page.ext, path: page.thumbPath
-                    ) else { return }
-                    #if canImport(UIKit)
-                    let ciCtx = SpriteCache.ciContext
-                    if let ciImage = CIImage(data: data),
-                       let cgImage = ciCtx.createCGImage(ciImage, from: ciImage.extent) {
-                        ImageCache.shared.setThumb(UIImage(cgImage: cgImage), for: cacheKey)
-                        return
+        // Phase 0: 即座に全範囲をisLoading=trueにマーク（cellsの個別I/Oを防ぐ）
+        for idx in 0..<maxPrefetch {
+            let cacheKey = NhThumbCell.thumbCacheURL(mediaId: mediaId, page: idx + 1)
+            if ImageCache.shared.memoryImage(for: cacheKey) == nil {
+                ImageCache.shared.setLoading(cacheKey)
+            }
+        }
+
+        // View初期化を阻害しない程度の短い待機
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        var networkNeeded = 0
+        var diskHits = 0
+
+        // Phase 1: ディスクキャッシュから一括ロード（メモリへ格納、isLoading解除）
+        for idx in 0..<maxPrefetch {
+            let cacheKey = NhThumbCell.thumbCacheURL(mediaId: mediaId, page: idx + 1)
+            if ImageCache.shared.memoryImage(for: cacheKey) != nil {
+                ImageCache.shared.removeLoading(cacheKey)
+                continue
+            }
+            if ImageCache.shared.image(for: cacheKey) != nil {
+                // image()内でメモリ格納される。preDecodeは重いので避ける
+                ImageCache.shared.removeLoading(cacheKey)
+                diskHits += 1
+            } else {
+                networkNeeded += 1
+            }
+        }
+        LogManager.shared.log("nhentai", "prefetch phase1: \(diskHits) disk hits, \(networkNeeded) network needed")
+
+        // Phase 2: 3並列DL + 縮小300px + バッチ間300msスリープ
+        let batchSize = 3
+        var idx = 0
+        while idx < maxPrefetch {
+            // view消失時のキャンセル伝播でループ終了（蓄積防止）
+            if Task.isCancelled { break }
+            let batchEnd = min(idx + batchSize, maxPrefetch)
+            await withTaskGroup(of: Void.self) { group in
+                for i in idx..<batchEnd {
+                    let cacheKey = NhThumbCell.thumbCacheURL(mediaId: mediaId, page: i + 1)
+                    if ImageCache.shared.memoryImage(for: cacheKey) != nil {
+                        ImageCache.shared.removeLoading(cacheKey)
+                        continue
                     }
-                    #endif
-                    if let img = PlatformImage(data: data) {
-                        ImageCache.shared.setThumb(img, for: cacheKey)
+                    let page = pages[i]
+                    let pageNum = i + 1
+                    group.addTask {
+                        if Task.isCancelled {
+                            ImageCache.shared.removeLoading(cacheKey)
+                            return
+                        }
+                        if let data = try? await NhentaiClient.fetchThumbImage(
+                            mediaId: mediaId, page: pageNum, ext: page.ext, path: page.thumbPath
+                        ), let decoded = await NhentaiDetailView.decodeOnDedicatedQueue(data, maxDim: 300) {
+                            ImageCache.shared.setThumb(decoded, for: cacheKey)
+                        }
+                        ImageCache.shared.removeLoading(cacheKey)
                     }
                 }
             }
+            idx = batchEnd
+            try? await Task.sleep(nanoseconds: 300_000_000)
         }
+        LogManager.shared.log("nhentai", "prefetchNhThumbs: \(maxPrefetch)/\(pages.count) done")
     }
 
     // MARK: - Detail Loading
@@ -492,108 +539,124 @@ private struct NhReaderRequest: Identifiable {
 private struct NhThumbCell: View {
     let gallery: NhentaiClient.NhGallery
     let index: Int
-    /// 1ページ目のプレースホルダーとしてカバー画像を流用（E-Hと同じ設計）
     let coverImage: PlatformImage?
     let onTap: () -> Void
 
     @State private var thumbImage: PlatformImage?
     @State private var failed = false
-    @State private var isLoading = false
 
     /// prefetch と共有するキャッシュキー（安定した URL 形式）
     static func thumbCacheURL(mediaId: String, page: Int) -> URL {
         URL(string: "nhthumb://\(mediaId)/\(page)")!
     }
 
+    /// task(id:) 用の安定キー
+    private var cacheKey: URL {
+        Self.thumbCacheURL(mediaId: gallery.media_id, page: index + 1)
+    }
+
     var body: some View {
-        Button(action: onTap) {
+        // E-H ThumbnailCellView準拠: ButtonではなくonTapGesture
+        ZStack(alignment: .bottomTrailing) {
             Group {
                 if let img = thumbImage {
                     Image(platformImage: img)
                         .resizable()
-                        .aspectRatio(contentMode: .fit)
+                        .aspectRatio(contentMode: .fill)
+                        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 150, maxHeight: 150)
+                        .clipped()
                 } else if index == 0, let coverImage {
-                    // カバー画像を1ページ目のプレースホルダーに流用（追加コスト0）
                     Image(platformImage: coverImage)
                         .resizable()
-                        .aspectRatio(contentMode: .fit)
+                        .aspectRatio(contentMode: .fill)
+                        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 150, maxHeight: 150)
+                        .clipped()
                 } else if failed {
                     Color.gray.opacity(0.2)
+                        .frame(height: 150)
                         .overlay {
                             Image(systemName: "photo")
                                 .foregroundStyle(.secondary)
                         }
                 } else {
                     Color.gray.opacity(0.1)
+                        .frame(height: 150)
                         .overlay { ProgressView().scaleEffect(0.6) }
                 }
             }
-            .frame(maxWidth: .infinity)
-            .frame(height: 150)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
-            .overlay(alignment: .bottomTrailing) {
-                Text("\(index + 1)")
-                    .font(.system(size: 10, weight: .bold))
-                    .padding(2)
-                    .background(.black.opacity(0.6))
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 2))
-                    .padding(2)
-            }
         }
-        .buttonStyle(.plain)
-        .onChange(of: gallery.num_pages) { _, newCount in
-            if thumbImage == nil && !isLoading && newCount > 0 {
-                if let pages = gallery.images?.pages, index < pages.count {
-                    failed = false
-                    loadThumb()
-                }
-            }
+        .frame(maxWidth: .infinity, minHeight: 150, maxHeight: 150)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .contentShape(Rectangle())
+        .onTapGesture { onTap() }
+        .overlay(alignment: .bottomTrailing) {
+            Text("\(index + 1)")
+                .font(.system(size: 10, weight: .bold))
+                .padding(2)
+                .background(.black.opacity(0.6))
+                .foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 2))
+                .padding(2)
         }
-        .onAppear { loadThumb() }
+        // E-H準拠: cacheKeyが変わらない限り1回だけ実行
+        .task(id: cacheKey) {
+            await loadThumb()
+        }
     }
 
-    private func loadThumb() {
-        guard thumbImage == nil, !failed, !isLoading else { return }
+    /// MainActorから完全分離したサムネ取得（E-H ThumbnailCellView準拠）
+    private func loadThumb() async {
+        guard thumbImage == nil, !failed else { return }
         guard let pages = gallery.images?.pages, index < pages.count else { return }
 
-        // ★ prefetch 済みキャッシュをチェック（ImageCache 経由）
-        let cacheKey = Self.thumbCacheURL(mediaId: gallery.media_id, page: index + 1)
-        if let cached = ImageCache.shared.image(for: cacheKey) {
+        // 1. メモリキャッシュ（即座、I/Oなし）
+        if let cached = ImageCache.shared.memoryImage(for: cacheKey) {
             thumbImage = cached
             return
         }
 
-        isLoading = true
+        // 2-4 を全てTask.detachedで実行（MainActorディスクI/O完全排除）
         let mediaId = gallery.media_id
         let page = pages[index]
-        let ext = page.ext
         let pageNum = index + 1
-        let thumbPath = page.thumbPath
-        Task.detached(priority: .userInitiated) {
+        let key = cacheKey
+        let isLoading = ImageCache.shared.isLoading(key)
+
+        let result: PlatformImage? = await Task.detached(priority: .utility) {
+            // 2. ディスクキャッシュ
+            if let cached = ImageCache.shared.image(for: key) {
+                return cached
+            }
+
+            // 3. prefetch進行中なら完了を待つ
+            if isLoading {
+                for _ in 0..<40 {
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    if let cached = ImageCache.shared.memoryImage(for: key) {
+                        return cached
+                    }
+                    if !ImageCache.shared.isLoading(key) { break }
+                }
+                if let cached = ImageCache.shared.image(for: key) {
+                    return cached
+                }
+            }
+
+            // 4. ネットワーク取得
             guard let data = try? await NhentaiClient.fetchThumbImage(
-                mediaId: mediaId, page: pageNum, ext: ext, path: thumbPath
-            ) else {
-                await MainActor.run { failed = true; isLoading = false }
-                return
+                mediaId: mediaId, page: pageNum, ext: page.ext, path: page.thumbPath
+            ) else { return nil }
+            if let decoded = await NhentaiDetailView.decodeOnDedicatedQueue(data, maxDim: 300) {
+                ImageCache.shared.setThumb(decoded, for: key)
+                return decoded
             }
-            #if canImport(UIKit)
-            // GPU 経由デコード
-            let ciCtx = SpriteCache.ciContext
-            if let ciImage = CIImage(data: data),
-               let cgImage = ciCtx.createCGImage(ciImage, from: ciImage.extent) {
-                let img = UIImage(cgImage: cgImage)
-                ImageCache.shared.setThumb(img, for: cacheKey)
-                await MainActor.run { thumbImage = img; isLoading = false }
-                return
-            }
-            #endif
-            if let img = PlatformImage(data: data) {
-                ImageCache.shared.setThumb(img, for: cacheKey)
-                await MainActor.run { thumbImage = img; isLoading = false }
-            } else {
-                await MainActor.run { failed = true; isLoading = false }
-            }
+            return nil
+        }.value
+
+        if let result {
+            thumbImage = result
+        } else {
+            failed = true
         }
     }
 }

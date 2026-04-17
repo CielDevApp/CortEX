@@ -52,6 +52,8 @@ class DownloadManager: ObservableObject {
     private let client = EhClient.shared
     private let fileManager = FileManager.default
     private let requestDelay: UInt64 = 2_000_000_000
+    /// URL解決フェーズの直列化（複数DLが同時にページURL取得→ネットワーク飽和防止）
+    private let urlResolveSemaphore = AsyncSemaphore(limit: 1)
 
     /// Live Activity管理
     private var liveActivities: [Int: String] = [:] // gid → activityID
@@ -738,7 +740,7 @@ class DownloadManager: ObservableObject {
             }
         }
 
-        // 画像ページURL一覧を取得（pageCountが0でもURLが返る限り続行）
+        // 画像ページURL一覧を取得（1件ずつ直列化でネットワーク飽和防止）
         var allPageURLs: [URL] = []
         var page = 0
 
@@ -748,6 +750,9 @@ class DownloadManager: ObservableObject {
             activeDownloads.removeValue(forKey: gid)
             return
         }
+
+        await urlResolveSemaphore.wait()
+        defer { urlResolveSemaphore.signal() }
 
         while true {
             do {
