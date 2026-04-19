@@ -350,7 +350,11 @@ enum WebPToMP4Converter {
                 if percent != lastProgressReported {
                     lastProgressReported = percent
                     let p = Double(i + 1) / Double(totalForProgress)
-                    await MainActor.run { progress(p) }
+                    // await MainActor.run は毎回 suspension + thread hop で重い
+                    // fire-and-forget で main queue に投げて即座に次の decode/encode へ
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated { progress(p) }
+                    }
                 }
             }
         }
@@ -528,72 +532,94 @@ enum WebPToMP4Converter {
         VTSessionSetProperty(vtSession, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanTrue)
         VTCompressionSessionPrepareToEncodeFrames(vtSession)
 
-        // 逐次 decode → encode ループ（libwebp は順次アクセス + 高速なので buffer 不要）
+        // 逐次 decode → encode ループ
+        // 注意: Task.detached でも main に isolation が漏れるケースあり（実測済み isMain=true）
+        // → DispatchQueue.global に明示的に逃がして main スレッドを解放する
         let t0 = CFAbsoluteTimeGetCurrent()
-        LogManager.shared.log("Convert", "decode+encode loop start")
-        var accumulatedMs: Int64 = 0
-        let timeScale: CMTimeScale = 1000
-        var lastProgressReported = 0
-        var totalDecodeMs: Double = 0
-        var totalEncodeMs: Double = 0
+        let decoderCapture = decoder
+        let vtSessionCapture = vtSession
+        let vtContextCapture = vtContext
+        let widthCapture = width
+        let heightCapture = height
+        let frameCountCapture = frameCount
+        let progressCapture = progress
 
-        for i in 0..<frameCount {
-            try autoreleasepool {
-                let decodeStart = CFAbsoluteTimeGetCurrent()
-                guard let frame = decoder.nextFrame() else {
-                    LogManager.shared.log("Convert", "FAILED libwebp nextFrame returned nil at frame \(i)")
-                    throw ConverterError.decodeFailed
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                LogManager.shared.log("Convert", "decode+encode loop start isMain=\(Thread.isMainThread) thread=\(Thread.current.description)")
+                var accumulatedMs: Int64 = 0
+                let timeScale: CMTimeScale = 1000
+                var lastProgressReported = 0
+                var totalDecodeMs: Double = 0
+                var totalEncodeMs: Double = 0
+
+                for i in 0..<frameCountCapture {
+                    do {
+                        try autoreleasepool {
+                            let decodeStart = CFAbsoluteTimeGetCurrent()
+                            guard let frame = decoderCapture.nextFrame() else {
+                                LogManager.shared.log("Convert", "FAILED libwebp nextFrame returned nil at frame \(i)")
+                                throw ConverterError.decodeFailed
+                            }
+                            let decodeMs = (CFAbsoluteTimeGetCurrent() - decodeStart) * 1000
+                            totalDecodeMs += decodeMs
+
+                            let pbStart = CFAbsoluteTimeGetCurrent()
+                            guard let pb = makeStandalonePixelBuffer(cgImage: frame.image, width: widthCapture, height: heightCapture) else {
+                                throw ConverterError.pixelBufferFailed
+                            }
+                            let pbMs = (CFAbsoluteTimeGetCurrent() - pbStart) * 1000
+
+                            let pts = CMTime(value: accumulatedMs, timescale: timeScale)
+                            let dur = CMTime(value: Int64(frame.delayMs), timescale: timeScale)
+                            accumulatedMs += Int64(frame.delayMs)
+
+                            let encStart = CFAbsoluteTimeGetCurrent()
+                            let encStatus = VTCompressionSessionEncodeFrame(
+                                vtSessionCapture,
+                                imageBuffer: pb,
+                                presentationTimeStamp: pts,
+                                duration: dur,
+                                frameProperties: nil,
+                                sourceFrameRefcon: nil,
+                                infoFlagsOut: nil
+                            )
+                            let encMs = (CFAbsoluteTimeGetCurrent() - encStart) * 1000
+                            totalEncodeMs += encMs
+
+                            if i < 3 || i % 10 == 0 || i == frameCountCapture - 1 {
+                                LogManager.shared.log("Convert", "frame[\(i)] decode=\(Int(decodeMs))ms pb=\(Int(pbMs))ms enc=\(Int(encMs))ms delay=\(frame.delayMs)ms")
+                            }
+
+                            if encStatus != noErr {
+                                LogManager.shared.log("Convert", "FAILED libwebp VT encode at frame \(i) status=\(encStatus)")
+                                throw ConverterError.appendFailed("VT encode \(encStatus)")
+                            }
+                            if let err = vtContextCapture.error {
+                                throw ConverterError.appendFailed(err)
+                            }
+                        }
+                    } catch {
+                        cont.resume(throwing: error)
+                        return
+                    }
+
+                    // 進捗報告: fire-and-forget で main に投げて即座に次のフレームへ
+                    if let progressCB = progressCapture {
+                        let percent = Int(Double(i + 1) / Double(frameCountCapture) * 100)
+                        if percent != lastProgressReported {
+                            lastProgressReported = percent
+                            let p = Double(i + 1) / Double(frameCountCapture)
+                            DispatchQueue.main.async {
+                                MainActor.assumeIsolated { progressCB(p) }
+                            }
+                        }
+                    }
                 }
-                let decodeMs = (CFAbsoluteTimeGetCurrent() - decodeStart) * 1000
-                totalDecodeMs += decodeMs
-
-                let pbStart = CFAbsoluteTimeGetCurrent()
-                guard let pb = makeStandalonePixelBuffer(cgImage: frame.image, width: width, height: height) else {
-                    throw ConverterError.pixelBufferFailed
-                }
-                let pbMs = (CFAbsoluteTimeGetCurrent() - pbStart) * 1000
-
-                let pts = CMTime(value: accumulatedMs, timescale: timeScale)
-                let dur = CMTime(value: Int64(frame.delayMs), timescale: timeScale)
-                accumulatedMs += Int64(frame.delayMs)
-
-                let encStart = CFAbsoluteTimeGetCurrent()
-                let encStatus = VTCompressionSessionEncodeFrame(
-                    vtSession,
-                    imageBuffer: pb,
-                    presentationTimeStamp: pts,
-                    duration: dur,
-                    frameProperties: nil,
-                    sourceFrameRefcon: nil,
-                    infoFlagsOut: nil
-                )
-                let encMs = (CFAbsoluteTimeGetCurrent() - encStart) * 1000
-                totalEncodeMs += encMs
-
-                // 最初の3フレームと10フレーム毎にログ
-                if i < 3 || i % 10 == 0 || i == frameCount - 1 {
-                    LogManager.shared.log("Convert", "frame[\(i)] decode=\(Int(decodeMs))ms pb=\(Int(pbMs))ms enc=\(Int(encMs))ms delay=\(frame.delayMs)ms")
-                }
-
-                if encStatus != noErr {
-                    LogManager.shared.log("Convert", "FAILED libwebp VT encode at frame \(i) status=\(encStatus)")
-                    throw ConverterError.appendFailed("VT encode \(encStatus)")
-                }
-                if let err = vtContext.error {
-                    throw ConverterError.appendFailed(err)
-                }
-            }
-
-            if let progress {
-                let percent = Int(Double(i + 1) / Double(frameCount) * 100)
-                if percent != lastProgressReported {
-                    lastProgressReported = percent
-                    let p = Double(i + 1) / Double(frameCount)
-                    await MainActor.run { progress(p) }
-                }
+                LogManager.shared.log("Convert", "libwebp totals: decode=\(Int(totalDecodeMs))ms encode=\(Int(totalEncodeMs))ms avgDecodePerFrame=\(Int(totalDecodeMs / Double(frameCountCapture)))ms")
+                cont.resume()
             }
         }
-        LogManager.shared.log("Convert", "libwebp totals: decode=\(Int(totalDecodeMs))ms encode=\(Int(totalEncodeMs))ms avgDecodePerFrame=\(Int(totalDecodeMs / Double(frameCount)))ms")
 
         VTCompressionSessionCompleteFrames(vtSession, untilPresentationTimeStamp: .invalid)
         VTCompressionSessionInvalidate(vtSession)
