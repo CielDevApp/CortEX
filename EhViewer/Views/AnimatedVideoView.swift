@@ -32,19 +32,8 @@ struct AnimatedVideoView: View {
         case failed(String)
     }
 
-    enum Quality {
-        case fast       // 1080px、ジャギ抑制目的で引き上げ（以前は 360）
-        case standard   // 540px（convert 側 maxOutputPixelSize デフォルト）
-        case original   // 縮小なし
-
-        var maxPixelSize: CGFloat? {
-            switch self {
-            case .fast: return 1080
-            case .standard: return nil  // convert 側の maxOutputPixelSize 使用
-            case .original: return .greatestFiniteMagnitude
-            }
-        }
-    }
+    // 変換は単一モード（オリジナル画質）。libwebp 化で解像度違いによる速度差が
+    // 消えたため画質選択不要。
 
     var body: some View {
         ZStack {
@@ -60,7 +49,7 @@ struct AnimatedVideoView: View {
             case .notConverted:
                 Button {
                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                    showReconvertDialog = true
+                    startConvert()
                 } label: {
                     ZStack {
                         Circle().fill(.black.opacity(0.55)).frame(width: 72, height: 72)
@@ -118,25 +107,23 @@ struct AnimatedVideoView: View {
             if onToggleControls != nil {
                 Button("ツールバー表示切替") { onToggleControls?() }
             }
-            Button("ファスト（低画質・最速）") { reconvert(quality: .fast) }
-            Button("標準画質") { reconvert(quality: .standard) }
-            Button("オリジナル画質") { reconvert(quality: .original) }
+            Button("再変換") { reconvert() }
             Button("キャンセル", role: .cancel) { }
         } message: {
-            Text("MP4変換またはツールバー表示切替")
+            Text("再変換またはツールバー表示切替")
         }
     }
 
-    /// 既存 MP4 削除 → 指定画質で再変換
-    private func reconvert(quality: Quality) {
+    /// 既存 MP4 削除 → 再変換
+    private func reconvert() {
         let url = WebPToMP4Converter.mp4Path(gid: gid, page: page)
         let ok = WebPToMP4Converter.okMarkerURL(for: url)
         try? FileManager.default.removeItem(at: url)
         try? FileManager.default.removeItem(at: ok)
         convertedURL = nil
         status = .notConverted
-        LogManager.shared.log("Convert", "reconvert triggered gid=\(gid) page=\(page) quality=\(quality)")
-        startConvert(quality: quality)
+        LogManager.shared.log("Convert", "reconvert triggered gid=\(gid) page=\(page)")
+        startConvert()
     }
 
     private func loadPoster() {
@@ -155,17 +142,18 @@ struct AnimatedVideoView: View {
         }
     }
 
-    private func startConvert(quality: Quality = .standard) {
+    private func startConvert() {
         switch status {
         case .notConverted, .failed: break
         default: return
         }
-        LogManager.shared.log("Convert", "startConvert tapped gid=\(gid) page=\(page) quality=\(quality)")
+        LogManager.shared.log("Convert", "startConvert tapped gid=\(gid) page=\(page)")
         status = .converting
         progress = 0
         let url = WebPToMP4Converter.mp4Path(gid: gid, page: page)
         let srcURL = sourceURL
-        let maxDim = quality.maxPixelSize
+        // オリジナル画質固定
+        let maxDim: CGFloat? = .greatestFiniteMagnitude
         Task.detached(priority: .userInitiated) {
             do {
                 try await WebPToMP4Converter.convert(sourceURL: srcURL, outputURL: url, maxPixelSize: maxDim) { p in
