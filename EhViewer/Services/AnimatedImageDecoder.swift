@@ -178,4 +178,10 @@ enum AnimatedImageDecoder {
         guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return false }
         return CGImageSourceGetCount(src) > 1
     }
+
+    /// URL 版（ディスク mmap 経由、メモリ負荷軽い）
+    static func isAnimatedFile(url: URL) -> Bool {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return false }
+        return CGImageSourceGetCount(src) > 1
+    }
 }

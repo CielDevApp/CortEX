@@ -2999,6 +2999,9 @@
         }
       }
     },
+    "MP4に変換して再生します" : {
+
+    },
     "Neural Engineで画像を高解像度化。究極画質モードで適用。" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -4472,6 +4475,9 @@
           }
         }
       }
+    },
+    "オリジナル画質" : {
+
     },
     "オンにするとアプリ起動時・復帰時にFace ID/Touch IDで認証が必要になります。" : {
       "extractionState" : "stale",
@@ -12370,7 +12376,6 @@
       }
     },
     "標準画質" : {
-      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -13117,6 +13122,9 @@
           }
         }
       }
+    },
+    "画質を選択" : {
+
     },
     "画質設定" : {
       "comment" : "A label for the quality settings section in the gallery reader view.",

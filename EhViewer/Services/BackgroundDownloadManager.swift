@@ -69,6 +69,24 @@ final class BackgroundDownloadManager: NSObject {
 
     private override init() {
         super.init()
+        // 起動時に前回の残骸 task をクリーンアップ
+        Task.detached(priority: .utility) { [weak self] in
+            await self?.cleanupStaleTasks()
+        }
+    }
+
+    /// 前回の session に残ってるタスクをキャンセル（registry に対応なしの実行中 task）
+    private func cleanupStaleTasks() async {
+        for session in [nhSession, ehSession] {
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                session.getAllTasks { tasks in
+                    let ids = tasks.map { $0.taskIdentifier }
+                    for task in tasks { task.cancel() }
+                    LogManager.shared.log("bgdl", "cleanup stale tasks: \(ids.count) in \(session.configuration.identifier ?? "?")")
+                    cont.resume()
+                }
+            }
+        }
     }
 
     // MARK: - Single-task API (互換性用)

@@ -10,9 +10,9 @@ final class PageImageHolder: ObservableObject {
     @Published var isPlaceholder = false
     /// 翻訳処理中フラグ
     @Published var isTranslating = false
-    /// アニメGIF/WebP用: CGImageSource保持ソース（on-demand decodeでメモリ節約）
+    /// アニメGIF/WebP用: ディスク上のファイルパス（rawDataはメモリに持たない）
     /// nilなら静止画として扱う
-    @Published var animatedSource: AnimatedImageSource?
+    @Published var animatedFileURL: URL?
 
     /// 翻訳焼き込み前の元画像
     var originalImage: PlatformImage?
