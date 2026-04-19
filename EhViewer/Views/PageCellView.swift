@@ -11,6 +11,13 @@ struct PageCellView: View {
     let onRetry: () -> Void
 
     var isHorizontalMode: Bool = false
+    /// アニメ再生する（現在表示ページ/currentIndex == index）
+    var isActiveAnimation: Bool = false
+    /// MP4 変換用の gid（アニメ画像検知時のみ利用）
+    var mp4Gid: Int = 0
+    #if canImport(UIKit)
+    var onTapAnimated: ((AnimatedImageSource) -> Void)? = nil
+    #endif
 
     var body: some View {
         if isHorizontalMode {
@@ -32,6 +39,22 @@ struct PageCellView: View {
 
     private var horizontalBody: some View {
         ZStack {
+            #if canImport(UIKit)
+            if let animSrc = holder.animatedSource {
+                AnimatedVideoView(sourceData: animSrc.rawData, gid: mp4Gid, page: index, autoStart: false)
+                    .aspectRatio(animSrc.pixelSize, contentMode: .fit)
+                    .frame(width: Self.screenSize.width, height: Self.screenSize.height)
+            } else if let image = holder.image {
+                Image(platformImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: Self.screenSize.width, height: Self.screenSize.height)
+            } else if holder.isFailed {
+                failedView
+            } else {
+                loadingView
+            }
+            #else
             if let image = holder.image {
                 Image(platformImage: image)
                     .resizable()
@@ -42,6 +65,7 @@ struct PageCellView: View {
             } else {
                 loadingView
             }
+            #endif
 
             if isPlaceholder && qualityMode >= 2 && holder.image != nil {
                 VStack {
@@ -68,7 +92,19 @@ struct PageCellView: View {
 
     private var verticalBody: some View {
         Group {
-            if let image = holder.image {
+            #if canImport(UIKit)
+            if let animSrc = holder.animatedSource {
+                AnimatedVideoView(sourceData: animSrc.rawData, gid: mp4Gid, page: index, autoStart: false)
+                    .aspectRatio(animSrc.pixelSize, contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if verticalSizeClass == .regular {
+                            if let cb = onTapAnimated { cb(animSrc) }
+                            else if let img = holder.image { onTap(img) }
+                        }
+                    }
+            } else if let image = holder.image {
                 ZStack(alignment: .top) {
                     Image(platformImage: image)
                         .resizable()
@@ -97,6 +133,24 @@ struct PageCellView: View {
             } else {
                 loadingView
             }
+            #else
+            if let image = holder.image {
+                ZStack(alignment: .top) {
+                    Image(platformImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: .infinity)
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    if verticalSizeClass == .regular { onTap(image) }
+                }
+            } else if holder.isFailed {
+                failedView
+            } else {
+                loadingView
+            }
+            #endif
         }
     }
 

@@ -66,6 +66,16 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     ) {
         completionHandler([.banner, .sound])
     }
+
+    /// バックグラウンドURLSession完了通知 → BackgroundDownloadManagerへ転送
+    func application(_ application: UIApplication,
+                     handleEventsForBackgroundURLSession identifier: String,
+                     completionHandler: @escaping () -> Void) {
+        BackgroundDownloadManager.shared.handleEventsForBackgroundURLSession(
+            identifier: identifier,
+            completionHandler: completionHandler
+        )
+    }
 }
 
 /// プライバシー保護画面のViewController

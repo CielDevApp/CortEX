@@ -396,6 +396,24 @@ struct LocalReaderView: View {
 
     @ViewBuilder
     private func localPageCell(index: Int) -> some View {
+        #if canImport(UIKit)
+        // アニメGIF/WebPはMP4変換→AVPlayerで再生
+        if let data = DownloadManager.shared.loadLocalImageData(gid: meta.gid, page: index),
+           AnimatedImageDecoder.isAnimated(data: data),
+           let animSrc = AnimatedImageSource.make(data: data) {
+            AnimatedVideoView(sourceData: data, gid: meta.gid, page: index, autoStart: false)
+                .aspectRatio(animSrc.pixelSize, contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: isHorizontal ? .infinity : nil, alignment: isHorizontal ? .center : .top)
+        } else {
+            animatedOrStaticBody(index: index)
+        }
+        #else
+        animatedOrStaticBody(index: index)
+        #endif
+    }
+
+    @ViewBuilder
+    private func animatedOrStaticBody(index: Int) -> some View {
         let displayImage = enhancedImages[index] ?? DownloadManager.shared.loadLocalImage(gid: meta.gid, page: index)
         if let displayImage {
             Image(platformImage: displayImage)

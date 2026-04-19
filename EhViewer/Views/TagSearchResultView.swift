@@ -13,42 +13,47 @@ struct TagSearchResultView: View {
     @State private var previewReaderRequest: GalleryPreviewReaderRequest?
 
     var body: some View {
-        List {
-            ForEach(viewModel.galleries) { gallery in
-                GalleryCardView(gallery: gallery)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        navPathBox?.path.append(gallery)
-                    }
-                    // iPadでGalleryCardView内のNavigationLinkが長押しを奪うので highPriorityGesture
-                    .highPriorityGesture(
-                        LongPressGesture(minimumDuration: 0.4, maximumDistance: 15)
-                            .onEnded { _ in
-                                #if canImport(UIKit)
-                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                #endif
-                                previewGallery = gallery
-                            }
-                    )
-            }
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(viewModel.galleries) { gallery in
+                    GalleryCardView(gallery: gallery)
+                        .padding(.horizontal)
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            navPathBox?.path.append(gallery)
+                        }
+                        .highPriorityGesture(
+                            LongPressGesture(minimumDuration: 0.4, maximumDistance: 15)
+                                .onEnded { _ in
+                                    #if canImport(UIKit)
+                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                    #endif
+                                    previewGallery = gallery
+                                }
+                        )
 
-            if viewModel.hasMore {
-                HStack {
-                    Spacer()
-                    ProgressView()
-                        .task { await viewModel.loadNextPage() }
-                    Spacer()
+                    Divider().padding(.leading)
                 }
-                .listRowSeparator(.hidden)
-            }
 
-            if viewModel.galleries.isEmpty && !viewModel.isLoading {
-                ContentUnavailableView {
-                    Label("結果がありません", systemImage: "magnifyingglass")
+                if viewModel.hasMore {
+                    HStack {
+                        Spacer()
+                        ProgressView()
+                            .padding()
+                            .task { await viewModel.loadNextPage() }
+                        Spacer()
+                    }
+                }
+
+                if viewModel.galleries.isEmpty && !viewModel.isLoading {
+                    ContentUnavailableView {
+                        Label("結果がありません", systemImage: "magnifyingglass")
+                    }
+                    .padding(.top, 100)
                 }
             }
         }
-        .listStyle(.plain)
         .refreshable { await viewModel.refresh() }
         .navigationTitle(title)
         #if os(iOS)

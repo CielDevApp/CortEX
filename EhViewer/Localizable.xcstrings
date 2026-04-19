@@ -528,6 +528,9 @@
         }
       }
     },
+    "%lld%%" : {
+
+    },
     "%lld×%lld" : {
       "localizations" : {
         "ja" : {
@@ -11048,6 +11051,9 @@
           }
         }
       }
+    },
+    "変換失敗" : {
+
     },
     "大画像: %lld×%lld" : {
       "comment" : "A label that indicates whether a large image is available.",

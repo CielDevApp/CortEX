@@ -439,6 +439,29 @@ enum NhentaiClient {
     }
 
     /// ページ画像取得（CDN動的解決 + フォールバック）
+    /// ページ画像URLの候補を全て返す（background URLSession用）
+    /// 発見済みCDN → fallbackCDN の順で並べる
+    nonisolated static func candidateImageURLs(galleryId: Int, mediaId: String, page: Int, ext: String, path: String? = nil) async -> [URL] {
+        var urls: [URL] = []
+        if let path {
+            for cdn in fallbackImageCDNs {
+                if let url = URL(string: "https://\(cdn).nhentai.net/\(path)") {
+                    urls.append(url)
+                }
+            }
+        }
+        if let cdn = await discoverCDN(galleryId: galleryId),
+           let url = URL(string: "https://\(cdn.image).nhentai.net/galleries/\(mediaId)/\(page).\(ext)") {
+            urls.append(url)
+        }
+        for cdn in fallbackImageCDNs {
+            if let url = URL(string: "https://\(cdn).nhentai.net/galleries/\(mediaId)/\(page).\(ext)") {
+                urls.append(url)
+            }
+        }
+        return urls
+    }
+
     static func fetchPageImage(galleryId: Int, mediaId: String, page: Int, ext: String, path: String? = nil) async throws -> Data {
         // 0. v2 path直接アクセス
         if let path {
