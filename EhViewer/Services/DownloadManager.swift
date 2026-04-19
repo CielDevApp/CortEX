@@ -1036,12 +1036,22 @@ class DownloadManager: ObservableObject {
         LogManager.shared.log("Download", "gid=\(gid) fetched \(allPageURLs.count) page URLs (expected: \(pageCount))")
 
         // URL取得0件 = notLoggedIn/banned/ネットワーク不通 等の致命的エラー
-        // watchdog 53秒待たずに即座に失敗通知、ゴミメタデータを完全削除してリストから消す
+        // watchdog 53秒待たずに即座に失敗通知する
         if allPageURLs.isEmpty {
-            LogManager.shared.log("Download", "gid=\(gid) ABORT: zero page URLs fetched (auth/network error) - deleting metadata")
-            await MainActor.run {
-                // meta + ディレクトリ + activeDownloads + liveActivity まで削除
-                self.deleteDownload(gid: gid)
+            let downloadedCount = meta.downloadedPages.count
+            if downloadedCount > 0 {
+                // 部分DL済みあり → meta と画像は保持 (再起動/retry で再開可能)
+                LogManager.shared.log("Download", "gid=\(gid) ABORT: zero URLs but keeping \(downloadedCount)/\(pageCount) partial pages for retry")
+                await MainActor.run {
+                    self.activeDownloads.removeValue(forKey: gid)
+                    self.endLiveActivity(gid: gid, success: false)
+                }
+            } else {
+                // ゼロ進行 + URL取得失敗 → ゴミなので削除
+                LogManager.shared.log("Download", "gid=\(gid) ABORT: zero URLs and zero progress - deleting trash metadata")
+                await MainActor.run {
+                    self.deleteDownload(gid: gid)
+                }
             }
             return
         }
@@ -1202,9 +1212,12 @@ class DownloadManager: ObservableObject {
 
                 let filePath = imageFilePath(gid: gid, page: index)
                 LogManager.shared.log("Download", "gid=\(gid) 2ndpass page \(index + 1) start url=\(pageURL.absoluteString.suffix(60))")
+                // 2ndpass は 1stpass で死んだ mirror が判明済み → 最初から別 mirror 要求
+                // attempt 1 の 120秒 timeout × 全ページ分を回避（32ページ × 2分 = 64分削減）
                 let success = await downloadSinglePage(
                     gid: gid, index: index, pageURL: pageURL,
-                    filePath: filePath, host: host, maxRetries: 3
+                    filePath: filePath, host: host, maxRetries: 3,
+                    forceMirror: true
                 )
                 if success {
                     state.downloadedSet.insert(index)
@@ -1297,11 +1310,14 @@ class DownloadManager: ObservableObject {
     // MARK: - 単一ページダウンロード（リトライ付き）
 
     /// 1ページをダウンロード。最大maxRetries回リトライ。成功でtrue。
+    /// - forceMirror: true なら attempt 1 から `?nl=` mirror request を使う
+    ///   (1stpass で既に死んだ mirror が判明してる 2ndpass 用。毎回 2分 timeout を回避)
     private func downloadSinglePage(
         gid: Int, index: Int, pageURL: URL,
-        filePath: URL, host: GalleryHost, maxRetries: Int
+        filePath: URL, host: GalleryHost, maxRetries: Int,
+        forceMirror: Bool = false
     ) async -> Bool {
-        var usedMirror = false
+        var usedMirror = forceMirror
 
         for attempt in 1...maxRetries {
             do {
