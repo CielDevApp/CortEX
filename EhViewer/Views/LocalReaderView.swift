@@ -147,15 +147,48 @@ struct LocalReaderView: View {
         .onChange(of: storedAI) { _, _ in reprocessVisiblePages() }
         .onChange(of: storedDenoise) { _, _ in reprocessVisiblePages() }
         .onChange(of: storedNoFilter) { _, _ in reprocessVisiblePages() }
+        .onChange(of: currentIndex) { _, newIndex in
+            // 視聴中のidle時間を使って前方Nページのアニメを先行変換
+            // semaphore=1 なので現ページの変換が終わってから順次走る → UIブロックしない
+            prefetchAnimatedPages(around: newIndex)
+        }
         .onAppear {
             if isLiveDownload {
                 scanAvailablePages()
                 startPageCheckTimer()
             }
+            // 初期ページ周辺も先行変換対象
+            prefetchAnimatedPages(around: currentIndex)
         }
         .onDisappear {
             pageCheckTimer?.invalidate()
             pageCheckTimer = nil
+        }
+    }
+
+    /// 指定中心インデックスの前方5ページのアニメWebPをバックグラウンド変換
+    /// - fire-and-forget: Task.detached で起動、現ページ変換の邪魔にならない
+    /// - WebPToMP4Converter.convert() の冪等化済みなので重複起動OK (即returnする)
+    /// - semaphore=1 で自然とqueueされ、現ページ完了→prefetch の順で走る
+    private func prefetchAnimatedPages(around center: Int) {
+        for offset in 1...5 {
+            let page = center + offset
+            guard page < meta.pageCount else { break }
+            let fileURL = DownloadManager.shared.imageFilePath(gid: meta.gid, page: page)
+            guard FileManager.default.fileExists(atPath: fileURL.path) else { continue }
+            guard AnimatedImageDecoder.isAnimatedFile(url: fileURL) else { continue }
+            if WebPToMP4Converter.isFullyConverted(gid: meta.gid, page: page) { continue }
+            WebPToMP4Converter.cleanupStaleIfNeeded(gid: meta.gid, page: page)
+            let mp4URL = WebPToMP4Converter.mp4Path(gid: meta.gid, page: page)
+            Task.detached(priority: .utility) {
+                try? await WebPToMP4Converter.convert(
+                    sourceURL: fileURL,
+                    outputURL: mp4URL,
+                    maxPixelSize: .greatestFiniteMagnitude,
+                    progress: nil,
+                    frameCallback: nil
+                )
+            }
         }
     }
 
