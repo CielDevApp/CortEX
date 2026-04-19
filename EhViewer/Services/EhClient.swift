@@ -318,6 +318,11 @@ final class EhClient: Sendable {
         }
         // コンテンツ警告スキップ
         parts.append("nw=1")
+        // 画像サイズを強制的に 1280px（スタンダード）にする
+        // EH の account 設定が Original だと xres=org が配信され、動画WebP等で
+        // 配信できないページが出る。スタンダード強制で安定性優先
+        parts.append("uh=1280")
+        parts.append("iir=3")  // 3=1280 in EH inline image resolution table
         return parts.joined(separator: "; ")
     }
 

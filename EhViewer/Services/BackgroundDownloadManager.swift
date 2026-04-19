@@ -22,7 +22,9 @@ final class BackgroundDownloadManager: NSObject {
         config.httpCookieStorage = HTTPCookieStorage.shared
         config.httpCookieAcceptPolicy = .always
         config.httpShouldSetCookies = true
-        config.waitsForConnectivity = true
+        config.waitsForConnectivity = false  // connectivity 待機で詰まるケース回避
+        config.timeoutIntervalForRequest = 30   // 個別リクエスト 30s でタイムアウト
+        config.timeoutIntervalForResource = 120  // リソース全体 2分（デフォ7日は長すぎ）
         let s = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         _nhSession = s
         return s
@@ -36,7 +38,9 @@ final class BackgroundDownloadManager: NSObject {
         config.httpCookieStorage = HTTPCookieStorage.shared
         config.httpCookieAcceptPolicy = .always
         config.httpShouldSetCookies = true
-        config.waitsForConnectivity = true
+        config.waitsForConnectivity = false
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 120
         let s = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         _ehSession = s
         return s
@@ -63,6 +67,14 @@ final class BackgroundDownloadManager: NSObject {
     /// gid → AsyncStream（batch DL用）
     private var gidStreams: [Int: AsyncStream<PageCompletion>.Continuation] = [:]
     private let stateQueue = DispatchQueue(label: "bgdl.state", qos: .userInitiated)
+
+    /// 速度計測用: gid → 前回サンプル以降の受信バイト累積
+    /// 専用NSLockで保護: stateQueueと分離→delegate queue/main の競合を切断
+    private var bytesAccumulator: [Int: Int64] = [:]
+    private var bytesSampleTime: [Int: CFAbsoluteTime] = [:]
+    /// リアルタイム表示用: gid → セッション開始以降の受信累計（非リセット）
+    private var cumulativeBytesReceived: [Int: Int64] = [:]
+    private let bytesLock = NSLock()
 
     /// アプリ復帰時にシステムから受け取るcompletionHandler
     var systemCompletionHandlers: [String: () -> Void] = [:]
@@ -132,11 +144,14 @@ final class BackgroundDownloadManager: NSObject {
     }
 
     /// gidのストリームを強制終了（watchdogからfor-awaitを抜けさせる用）
+    /// finish() が onTermination を同期発火→stateQueue 再入で deadlock trap するため、
+    /// gidStreams から先に取り出して、finish() は lock 外で呼ぶ
     func finishStream(for gid: Int) {
-        stateQueue.sync {
-            gidStreams[gid]?.finish()
-            gidStreams.removeValue(forKey: gid)
+        let continuation: AsyncStream<PageCompletion>.Continuation? = stateQueue.sync {
+            let c = gidStreams.removeValue(forKey: gid)
+            return c
         }
+        continuation?.finish()
     }
 
     /// gidの全タスクをキャンセル
@@ -184,6 +199,50 @@ final class BackgroundDownloadManager: NSObject {
 }
 
 extension BackgroundDownloadManager: URLSessionDownloadDelegate {
+    /// 進捗通知（foreground時のみ呼ばれる）: 速度計測用にバイトを累積
+    /// registry 参照だけ stateQueue、増分は専用 NSLock でdelegate queue競合回避
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64,
+                    totalBytesWritten: Int64,
+                    totalBytesExpectedToWrite: Int64) {
+        let taskId = downloadTask.taskIdentifier
+        let gidOpt: Int? = stateQueue.sync { registry[taskId]?.gid }
+        guard let gid = gidOpt else { return }
+        bytesLock.lock()
+        bytesAccumulator[gid, default: 0] += bytesWritten
+        cumulativeBytesReceived[gid, default: 0] += bytesWritten
+        bytesLock.unlock()
+    }
+
+    /// リアルタイム表示用: DL開始以降に受信した累計バイト
+    func totalBytesReceivedThisSession(for gid: Int) -> Int64 {
+        bytesLock.lock()
+        defer { bytesLock.unlock() }
+        return cumulativeBytesReceived[gid, default: 0]
+    }
+
+    /// ギャラリー DL 開始時に呼ぶ: 累計バイトをリセット
+    func resetCumulativeBytes(for gid: Int) {
+        bytesLock.lock()
+        cumulativeBytesReceived[gid] = 0
+        bytesSampleTime[gid] = nil
+        bytesLock.unlock()
+    }
+
+    /// gid の前回サンプル以降の受信バイト/秒を返し、累積をリセット
+    /// 専用 NSLock のみで stateQueue を触らない→main thread が delegate queue と競合しない
+    func sampleBytesPerSecond(for gid: Int) -> Int64 {
+        bytesLock.lock()
+        defer { bytesLock.unlock() }
+        let now = CFAbsoluteTimeGetCurrent()
+        let bytes = bytesAccumulator[gid, default: 0]
+        let last = bytesSampleTime[gid] ?? now
+        let elapsed = max(now - last, 0.001)
+        bytesAccumulator[gid] = 0
+        bytesSampleTime[gid] = now
+        return Int64(Double(bytes) / elapsed)
+    }
+
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
         let taskId = downloadTask.taskIdentifier
 
@@ -272,6 +331,9 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
     private func emitCompletion(gid: Int, pageIndex: Int, success: Bool, retriable: Bool) {
         let continuation: AsyncStream<PageCompletion>.Continuation? = stateQueue.sync {
             return gidStreams[gid]
+        }
+        if continuation == nil {
+            LogManager.shared.log("bgdl", "DROPPED completion: no stream for gid=\(gid) page=\(pageIndex) success=\(success)")
         }
         continuation?.yield(PageCompletion(pageIndex: pageIndex, success: success, retriable: retriable))
     }

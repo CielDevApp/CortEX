@@ -541,6 +541,9 @@
         }
       }
     },
+    "%lldDL" : {
+
+    },
     "%lldMB" : {
       "localizations" : {
         "de" : {
@@ -583,6 +586,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lldMB"
+          }
+        }
+      }
+    },
+    "%lldMB (peak %lld)" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lldMB (peak %2$lld)"
           }
         }
       }
@@ -12593,6 +12606,12 @@
           }
         }
       }
+    },
+    "残り ~%@" : {
+
+    },
+    "残り%lld枚" : {
+
     },
     "残りもダウンロード" : {
       "localizations" : {

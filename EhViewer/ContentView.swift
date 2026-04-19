@@ -67,6 +67,12 @@ struct ContentView: View {
                     .allowsHitTesting(false)
             }
         }
+        .overlay(alignment: .topTrailing) {
+            DebugVitalsHUD()
+                .padding(.top, 48)
+                .padding(.trailing, 8)
+                .allowsHitTesting(false)
+        }
         .onChange(of: extremeMode.isEnabled) { old, new in
             if old && !new {
                 // OFF時: 緑フラッシュ2回
