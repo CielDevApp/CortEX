@@ -71,11 +71,13 @@ enum WebPToMP4Converter {
     /// ディスク上の WebP/GIF ファイルを直接読んで MP4 変換（メモリに全データ展開しない）
     /// maxPixelSize: nil = 標準画質（720）、大きい値 = オリジナル画質（縮小なし）
     /// libwebp 利用可能 + アニメWebP なら高速 decode 経路へ分岐
+    /// frameCallback: ストリーミング再生用。decode 成功ごとにフレームを UI に転送する
     static func convert(
         sourceURL: URL,
         outputURL: URL,
         maxPixelSize: CGFloat? = nil,
-        progress: (@MainActor (Double) -> Void)? = nil
+        progress: (@MainActor (Double) -> Void)? = nil,
+        frameCallback: (@Sendable (CGImage) -> Void)? = nil
     ) async throws {
         // 同時変換1本に絞る: 2ページ目開始時のOOM回避
         await Self.concurrencyLimit.wait()
@@ -93,7 +95,8 @@ enum WebPToMP4Converter {
                 sourceURL: sourceURL,
                 outputURL: outputURL,
                 maxPixelSize: maxPixelSize,
-                progress: progress
+                progress: progress,
+                frameCallback: frameCallback
             )
             return
         }
@@ -404,7 +407,8 @@ enum WebPToMP4Converter {
         sourceURL: URL,
         outputURL: URL,
         maxPixelSize: CGFloat?,
-        progress: (@MainActor (Double) -> Void)?
+        progress: (@MainActor (Double) -> Void)?,
+        frameCallback: (@Sendable (CGImage) -> Void)? = nil
     ) async throws {
         let effectiveMaxDim = maxPixelSize ?? Self.maxOutputPixelSize
         let isOriginal = (maxPixelSize ?? 0) > 1400
@@ -412,12 +416,39 @@ enum WebPToMP4Converter {
         let fileSize = (try? FileManager.default.attributesOfItem(atPath: sourceURL.path)[.size] as? Int) ?? 0
         LogManager.shared.log("Convert", "start mem=\(memoryFootprintMB())MB src=\(fileSize)B → \(outputURL.lastPathComponent) original=\(isOriginal) backend=libwebp")
 
-        guard let decoder = WebPAnimatedDecoder(url: sourceURL) else {
-            LogManager.shared.log("Convert", "FAILED libwebp decoder init")
-            throw ConverterError.invalidSource
+        // フレームレベル並列 decode の適合判定
+        // 全フレームが dispose=NONE / blend=NO_BLEND / full-canvas offset ならフレーム間依存ゼロ
+        // → N コア並列で decode 可能（A17 Pro / M系で 4-6倍のスループット期待）
+        let parallelDecoder = WebPParallelDecoder(url: sourceURL)
+        let useParallel = (parallelDecoder?.isFullyIndependent ?? false)
+
+        // 逐次 fallback 用（並列不適合時のみ init）
+        let seqDecoder: WebPAnimatedDecoder?
+        let canvasW: Int
+        let canvasH: Int
+        let frameCount: Int
+
+        if useParallel, let pd = parallelDecoder {
+            seqDecoder = nil
+            canvasW = pd.canvasWidth
+            canvasH = pd.canvasHeight
+            frameCount = pd.frameCount
+            LogManager.shared.log("Convert", "parallel eligible: frameCount=\(frameCount) canvas=\(canvasW)x\(canvasH) cores=\(ProcessInfo.processInfo.activeProcessorCount)")
+        } else {
+            guard let d = WebPAnimatedDecoder(url: sourceURL) else {
+                LogManager.shared.log("Convert", "FAILED libwebp decoder init")
+                throw ConverterError.invalidSource
+            }
+            seqDecoder = d
+            canvasW = d.canvasWidth
+            canvasH = d.canvasHeight
+            frameCount = d.frameCount
+            if parallelDecoder != nil {
+                LogManager.shared.log("Convert", "parallel ineligible (non-full-canvas/blend/dispose), seq fallback: frameCount=\(frameCount) canvas=\(canvasW)x\(canvasH)")
+            } else {
+                LogManager.shared.log("Convert", "seq only (demux failed): frameCount=\(frameCount) canvas=\(canvasW)x\(canvasH)")
+            }
         }
-        let frameCount = decoder.frameCount
-        LogManager.shared.log("Convert", "frameCount=\(frameCount) canvas=\(decoder.canvasWidth)x\(decoder.canvasHeight)")
         guard frameCount > 1 else { throw ConverterError.notAnimated }
 
         // mp4 と .ok 両方クリア
@@ -428,11 +459,11 @@ enum WebPToMP4Converter {
         let width: Int
         let height: Int
         if isOriginal {
-            width = decoder.canvasWidth
-            height = decoder.canvasHeight
+            width = canvasW
+            height = canvasH
         } else {
-            let srcW = CGFloat(decoder.canvasWidth)
-            let srcH = CGFloat(decoder.canvasHeight)
+            let srcW = CGFloat(canvasW)
+            let srcH = CGFloat(canvasH)
             let scale = min(effectiveMaxDim / max(srcW, srcH), 1.0)
             width = Int(srcW * scale)
             height = Int(srcH * scale)
@@ -532,37 +563,89 @@ enum WebPToMP4Converter {
         VTSessionSetProperty(vtSession, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanTrue)
         VTCompressionSessionPrepareToEncodeFrames(vtSession)
 
-        // 逐次 decode → encode ループ
+        // decode → encode ループ
         // 注意: Task.detached でも main に isolation が漏れるケースあり（実測済み isMain=true）
         // → DispatchQueue.global に明示的に逃がして main スレッドを解放する
+        // 並列パス: チャンク先読みで N フレーム並列 decode → キャッシュ → 順次 encode
         let t0 = CFAbsoluteTimeGetCurrent()
-        let decoderCapture = decoder
+        let seqDecoderCapture = seqDecoder
+        let parallelDecoderCapture = useParallel ? parallelDecoder : nil
         let vtSessionCapture = vtSession
         let vtContextCapture = vtContext
         let widthCapture = width
         let heightCapture = height
         let frameCountCapture = frameCount
         let progressCapture = progress
+        let frameCallbackCapture = frameCallback
+        let useParallelCapture = useParallel
+        let chunkSizeCapture = ProcessInfo.processInfo.activeProcessorCount
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
-                LogManager.shared.log("Convert", "decode+encode loop start isMain=\(Thread.isMainThread) thread=\(Thread.current.description)")
+                LogManager.shared.log("Convert", "decode+encode loop start mode=\(useParallelCapture ? "parallel(chunk=\(chunkSizeCapture))" : "sequential") isMain=\(Thread.isMainThread)")
                 var accumulatedMs: Int64 = 0
                 let timeScale: CMTimeScale = 1000
                 var lastProgressReported = 0
                 var totalDecodeMs: Double = 0
                 var totalEncodeMs: Double = 0
 
+                // 並列 decode キャッシュ（チャンク単位で先読み）
+                var decodedChunkStart: Int = -1
+                var decodedChunkBGRA: [Data?] = []
+
+                // 1 フレーム取得: 並列なら cache-hit、逐次なら nextFrame()
+                func fetchFrame(_ i: Int) -> (image: CGImage, delayMs: Int32, decodeMs: Double)? {
+                    if useParallelCapture, let pd = parallelDecoderCapture {
+                        // キャッシュ miss なら次チャンクを並列 decode
+                        if i < decodedChunkStart || i >= decodedChunkStart + decodedChunkBGRA.count {
+                            let start = (i / chunkSizeCapture) * chunkSizeCapture
+                            let end = min(start + chunkSizeCapture, frameCountCapture)
+                            let cnt = end - start
+                            let chunkStart = CFAbsoluteTimeGetCurrent()
+                            var outs: [Data?] = Array(repeating: nil, count: cnt)
+                            let lock = NSLock()
+                            let frames = pd.frames
+                            DispatchQueue.concurrentPerform(iterations: cnt) { offset in
+                                let d = pd.decodeFrame(frames[start + offset])
+                                lock.lock(); outs[offset] = d; lock.unlock()
+                            }
+                            let chunkMs = (CFAbsoluteTimeGetCurrent() - chunkStart) * 1000
+                            LogManager.shared.log("Convert", "parallel chunk[\(start)..<\(end)] decoded in \(Int(chunkMs))ms (\(Int(chunkMs) / max(cnt,1))ms/frame wall, \(cnt) frames / \(chunkSizeCapture) cores)")
+                            decodedChunkStart = start
+                            decodedChunkBGRA = outs
+                            totalDecodeMs += chunkMs
+                        }
+                        let localIdx = i - decodedChunkStart
+                        guard let bgra = decodedChunkBGRA[localIdx],
+                              let cg = pd.makeCGImage(from: bgra) else {
+                            return nil
+                        }
+                        // メモリ解放: このフレーム分の BGRA は以降不要
+                        decodedChunkBGRA[localIdx] = nil
+                        let delay = Int32(max(pd.frames[i].durationMs, 10))
+                        return (cg, delay, 0) // 並列 decode の per-frame 計測は chunk 集計に含む
+                    } else if let sd = seqDecoderCapture {
+                        let t = CFAbsoluteTimeGetCurrent()
+                        guard let f = sd.nextFrame() else { return nil }
+                        let ms = (CFAbsoluteTimeGetCurrent() - t) * 1000
+                        return (f.image, f.delayMs, ms)
+                    }
+                    return nil
+                }
+
                 for i in 0..<frameCountCapture {
                     do {
                         try autoreleasepool {
-                            let decodeStart = CFAbsoluteTimeGetCurrent()
-                            guard let frame = decoderCapture.nextFrame() else {
-                                LogManager.shared.log("Convert", "FAILED libwebp nextFrame returned nil at frame \(i)")
+                            guard let frame = fetchFrame(i) else {
+                                LogManager.shared.log("Convert", "FAILED fetchFrame nil at frame \(i)")
                                 throw ConverterError.decodeFailed
                             }
-                            let decodeMs = (CFAbsoluteTimeGetCurrent() - decodeStart) * 1000
-                            totalDecodeMs += decodeMs
+                            if !useParallelCapture { totalDecodeMs += frame.decodeMs }
+
+                            // ストリーミング再生: decode 直後に UI へフレーム転送
+                            if let cb = frameCallbackCapture {
+                                cb(frame.image)
+                            }
 
                             let pbStart = CFAbsoluteTimeGetCurrent()
                             guard let pb = makeStandalonePixelBuffer(cgImage: frame.image, width: widthCapture, height: heightCapture) else {
@@ -588,7 +671,7 @@ enum WebPToMP4Converter {
                             totalEncodeMs += encMs
 
                             if i < 3 || i % 10 == 0 || i == frameCountCapture - 1 {
-                                LogManager.shared.log("Convert", "frame[\(i)] decode=\(Int(decodeMs))ms pb=\(Int(pbMs))ms enc=\(Int(encMs))ms delay=\(frame.delayMs)ms")
+                                LogManager.shared.log("Convert", "frame[\(i)] decode=\(Int(frame.decodeMs))ms pb=\(Int(pbMs))ms enc=\(Int(encMs))ms delay=\(frame.delayMs)ms")
                             }
 
                             if encStatus != noErr {

@@ -1,6 +1,7 @@
-import ActivityKit
 import WidgetKit
 import SwiftUI
+#if os(iOS) && !targetEnvironment(macCatalyst)
+import ActivityKit
 
 struct EhViewerWidgetsLiveActivity: Widget {
     var body: some WidgetConfiguration {
@@ -110,3 +111,4 @@ struct EhViewerWidgetsLiveActivity: Widget {
         .padding()
     }
 }
+#endif
