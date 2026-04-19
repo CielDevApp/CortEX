@@ -401,8 +401,16 @@ struct LocalReaderView: View {
         let fileURL = DownloadManager.shared.imageFilePath(gid: meta.gid, page: index)
         if FileManager.default.fileExists(atPath: fileURL.path),
            AnimatedImageDecoder.isAnimatedFile(url: fileURL) {
-            AnimatedVideoView(sourceURL: fileURL, gid: meta.gid, page: index, autoStart: false)
-                .frame(maxWidth: .infinity, maxHeight: isHorizontal ? .infinity : nil, alignment: isHorizontal ? .center : .top)
+            AnimatedVideoView(
+                sourceURL: fileURL,
+                gid: meta.gid,
+                page: index,
+                autoStart: false,
+                onToggleControls: {
+                    withAnimation(.easeInOut(duration: 0.2)) { showControls.toggle() }
+                }
+            )
+            .frame(maxWidth: .infinity, maxHeight: isHorizontal ? .infinity : nil, alignment: isHorizontal ? .center : .top)
         } else {
             animatedOrStaticBody(index: index)
         }

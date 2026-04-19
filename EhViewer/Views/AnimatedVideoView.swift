@@ -3,13 +3,6 @@ import AVFoundation
 #if canImport(UIKit)
 import UIKit
 
-extension Notification.Name {
-    /// 変換開始時に全 AVPlayer を停止させる通知
-    static let webpConvertDidStart = Notification.Name("WebPConvertDidStart")
-    /// 変換終了時に再生再開させる通知
-    static let webpConvertDidEnd = Notification.Name("WebPConvertDidEnd")
-}
-
 /// ダウンロード済み WebP アニメ → MP4 変換 + AVPlayer ループ再生ビュー。
 ///
 /// 状態遷移:
@@ -23,6 +16,8 @@ struct AnimatedVideoView: View {
     let page: Int
     /// タップで自動変換する（false なら再生ボタンのタップで開始）
     var autoStart: Bool = false
+    /// 親ビューのツールバー/コントロール表示切替（長押し競合回避: 変換メニューから呼ぶ）
+    var onToggleControls: (() -> Void)? = nil
 
     @State private var status: Status = .notConverted
     @State private var progress: Double = 0
@@ -35,6 +30,20 @@ struct AnimatedVideoView: View {
         case converting
         case ready
         case failed(String)
+    }
+
+    enum Quality {
+        case fast       // 360px、最速低画質
+        case standard   // 720px（デフォルト）
+        case original   // 縮小なし
+
+        var maxPixelSize: CGFloat? {
+            switch self {
+            case .fast: return 360
+            case .standard: return nil  // convert 側の maxOutputPixelSize 使用（720）
+            case .original: return .greatestFiniteMagnitude
+            }
+        }
     }
 
     var body: some View {
@@ -105,25 +114,29 @@ struct AnimatedVideoView: View {
                 if autoStart { startConvert() }
             }
         }
-        .confirmationDialog("画質を選択", isPresented: $showReconvertDialog, titleVisibility: .visible) {
-            Button("標準画質") { reconvert(original: false) }
-            Button("オリジナル画質") { reconvert(original: true) }
+        .confirmationDialog("メニュー", isPresented: $showReconvertDialog, titleVisibility: .visible) {
+            if onToggleControls != nil {
+                Button("ツールバー表示切替") { onToggleControls?() }
+            }
+            Button("ファスト（低画質・最速）") { reconvert(quality: .fast) }
+            Button("標準画質") { reconvert(quality: .standard) }
+            Button("オリジナル画質") { reconvert(quality: .original) }
             Button("キャンセル", role: .cancel) { }
         } message: {
-            Text("MP4に変換して再生します")
+            Text("MP4変換またはツールバー表示切替")
         }
     }
 
     /// 既存 MP4 削除 → 指定画質で再変換
-    private func reconvert(original: Bool) {
+    private func reconvert(quality: Quality) {
         let url = WebPToMP4Converter.mp4Path(gid: gid, page: page)
         let ok = WebPToMP4Converter.okMarkerURL(for: url)
         try? FileManager.default.removeItem(at: url)
         try? FileManager.default.removeItem(at: ok)
         convertedURL = nil
         status = .notConverted
-        LogManager.shared.log("Convert", "reconvert triggered gid=\(gid) page=\(page) original=\(original)")
-        startConvert(forceOriginal: original)
+        LogManager.shared.log("Convert", "reconvert triggered gid=\(gid) page=\(page) quality=\(quality)")
+        startConvert(quality: quality)
     }
 
     private func loadPoster() {
@@ -142,21 +155,19 @@ struct AnimatedVideoView: View {
         }
     }
 
-    private func startConvert(forceOriginal: Bool = false) {
+    private func startConvert(quality: Quality = .standard) {
         switch status {
         case .notConverted, .failed: break
         default: return
         }
-        LogManager.shared.log("Convert", "startConvert tapped gid=\(gid) page=\(page)")
+        LogManager.shared.log("Convert", "startConvert tapped gid=\(gid) page=\(page) quality=\(quality)")
         status = .converting
         progress = 0
-        // 変換中は他の AVPlayer を停止させる（メモリ圧回避）
-        NotificationCenter.default.post(name: .webpConvertDidStart, object: nil)
         let url = WebPToMP4Converter.mp4Path(gid: gid, page: page)
         let srcURL = sourceURL
+        let maxDim = quality.maxPixelSize
         Task.detached(priority: .userInitiated) {
             do {
-                let maxDim: CGFloat? = forceOriginal ? .greatestFiniteMagnitude : nil
                 try await WebPToMP4Converter.convert(sourceURL: srcURL, outputURL: url, maxPixelSize: maxDim) { p in
                     progress = p
                 }
@@ -164,13 +175,11 @@ struct AnimatedVideoView: View {
                     convertedURL = url
                     status = .ready
                     progress = 1
-                    NotificationCenter.default.post(name: .webpConvertDidEnd, object: nil)
                 }
             } catch {
                 LogManager.shared.log("Convert", "THROWN: \(error)")
                 await MainActor.run {
                     status = .failed(String(describing: error))
-                    NotificationCenter.default.post(name: .webpConvertDidEnd, object: nil)
                 }
             }
         }
@@ -197,43 +206,11 @@ final class PlayerContainerView: UIView {
     private var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
     private var player: AVPlayer?
     private var endObserver: Any?
-    private var convertStartObserver: Any?
-    private var convertEndObserver: Any?
     private var statusObserver: NSKeyValueObservation?
     private var currentURL: URL?
-    private var isSuspendedForConvert: Bool = false
 
     override var intrinsicContentSize: CGSize {
         CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
-    }
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        attachConvertObservers()
-    }
-
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        attachConvertObservers()
-    }
-
-    private func attachConvertObservers() {
-        convertStartObserver = NotificationCenter.default.addObserver(
-            forName: .webpConvertDidStart, object: nil, queue: .main
-        ) { [weak self] _ in
-            guard let self, self.player != nil else { return }
-            self.isSuspendedForConvert = true
-            self.stop()  // 完全に解放してメモリ返却
-        }
-        convertEndObserver = NotificationCenter.default.addObserver(
-            forName: .webpConvertDidEnd, object: nil, queue: .main
-        ) { [weak self] _ in
-            guard let self, self.isSuspendedForConvert else { return }
-            self.isSuspendedForConvert = false
-            if let url = self.currentURL, self.window != nil {
-                self.rebuildPlayer(url: url)
-            }
-        }
     }
 
     func setURL(_ url: URL) {
@@ -297,14 +274,12 @@ final class PlayerContainerView: UIView {
         super.willMove(toWindow: newWindow)
         if newWindow == nil {
             player?.pause()
-        } else if !isSuspendedForConvert {
+        } else {
             player?.play()
         }
     }
 
     deinit {
-        if let obs = convertStartObserver { NotificationCenter.default.removeObserver(obs) }
-        if let obs = convertEndObserver { NotificationCenter.default.removeObserver(obs) }
         stopInternal()
     }
 }

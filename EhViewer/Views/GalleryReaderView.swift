@@ -364,7 +364,10 @@ struct GalleryReaderView: View {
             onRetry: { viewModel.retry(index: index) },
             isHorizontalMode: readerDirection == 1,
             isActiveAnimation: index == viewModel.currentIndex,
-            mp4Gid: gallery.gid
+            mp4Gid: gallery.gid,
+            onToggleControls: {
+                withAnimation(.easeInOut(duration: 0.2)) { showControls.toggle() }
+            }
         )
         #else
         PageCellView(
