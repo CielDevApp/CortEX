@@ -6,6 +6,8 @@ struct SettingsView: View {
     @ObservedObject var authVM: AuthViewModel
     @State private var readerCacheMB: Int = 0
     @State private var thumbsCacheMB: Int = 0
+    @State private var animatedCacheMB: Int = 0
+    @State private var showClearAnimatedConfirm = false
     @AppStorage("onlineQualityMode") private var onlineQualityMode = 2
     @AppStorage("downloadQualityMode") private var downloadQualityMode = 2
     @AppStorage("aiImageProcessing") private var aiImageProcessing = false
@@ -369,6 +371,9 @@ struct SettingsView: View {
                     HStack { Text("サムネキャッシュ"); Spacer()
                         Text("\(thumbsCacheMB)MB").foregroundStyle(.secondary)
                     }
+                    HStack { Text("動画キャッシュ"); Spacer()
+                        Text("\(animatedCacheMB)MB").foregroundStyle(.secondary)
+                    }
                     if isOverLimit {
                         HStack {
                             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
@@ -377,6 +382,7 @@ struct SettingsView: View {
                     }
                     Button("リーダーキャッシュを削除", role: .destructive) { showClearConfirm = true }
                     Button("サムネキャッシュも削除", role: .destructive) { ImageCache.shared.clearThumbsCache(); updateCacheSize() }
+                    Button("動画キャッシュを削除", role: .destructive) { showClearAnimatedConfirm = true }
                     let dlCount = DownloadManager.shared.downloads.count
                     HStack { Text("保存済みギャラリー"); Spacer(); Text("\(dlCount)件").foregroundStyle(.secondary) }
                     Button("全ダウンロードデータを削除", role: .destructive) { showClearDownloads = true }
@@ -444,6 +450,15 @@ struct SettingsView: View {
                 Button("キャンセル", role: .cancel) {}
             } message: {
                 Text("リーダーキャッシュ(\(readerCacheMB)MB)を削除しますか？サムネキャッシュは残ります。")
+            }
+            .alert("動画キャッシュを削除", isPresented: $showClearAnimatedConfirm) {
+                Button("削除", role: .destructive) {
+                    WebPToMP4Converter.clearAnimatedCache()
+                    updateCacheSize()
+                }
+                Button("キャンセル", role: .cancel) {}
+            } message: {
+                Text("変換済みMP4キャッシュ(\(animatedCacheMB)MB)を削除しますか？次回リーダー表示時に再変換されます。")
             }
             .alert("ダウンロードデータを削除", isPresented: $showClearDownloads) {
                 Button("全て削除", role: .destructive) {
@@ -527,6 +542,7 @@ struct SettingsView: View {
     private func updateCacheSize() {
         readerCacheMB = ImageCache.shared.readerCacheSize() / 1_048_576
         thumbsCacheMB = ImageCache.shared.thumbsCacheSize() / 1_048_576
+        animatedCacheMB = Int(WebPToMP4Converter.animatedCacheSize() / 1_048_576)
     }
 
     @ViewBuilder

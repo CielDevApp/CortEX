@@ -68,6 +68,29 @@ enum WebPToMP4Converter {
         }
     }
 
+    /// 変換済みMP4キャッシュのサイズ (bytes)
+    static func animatedCacheSize() -> Int64 {
+        guard let contents = try? FileManager.default.contentsOfDirectory(atPath: cacheDir.path) else {
+            return 0
+        }
+        var total: Int64 = 0
+        for name in contents {
+            let path = cacheDir.appendingPathComponent(name).path
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+               let size = attrs[.size] as? Int64 {
+                total += size
+            }
+        }
+        return total
+    }
+
+    /// 変換済みMP4キャッシュを全削除（リーダー初回表示時に再変換が走る）
+    static func clearAnimatedCache() {
+        try? FileManager.default.removeItem(at: cacheDir)
+        // 再作成（以降の cacheDir アクセスでエラー回避）
+        try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+    }
+
     /// ディスク上の WebP/GIF ファイルを直接読んで MP4 変換（メモリに全データ展開しない）
     /// maxPixelSize: nil = 標準画質（720）、大きい値 = オリジナル画質（縮小なし）
     /// libwebp 利用可能 + アニメWebP なら高速 decode 経路へ分岐
