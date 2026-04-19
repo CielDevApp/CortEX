@@ -33,14 +33,14 @@ struct AnimatedVideoView: View {
     }
 
     enum Quality {
-        case fast       // 360px、最速低画質
-        case standard   // 720px（デフォルト）
+        case fast       // 1080px、ジャギ抑制目的で引き上げ（以前は 360）
+        case standard   // 540px（convert 側 maxOutputPixelSize デフォルト）
         case original   // 縮小なし
 
         var maxPixelSize: CGFloat? {
             switch self {
-            case .fast: return 360
-            case .standard: return nil  // convert 側の maxOutputPixelSize 使用（720）
+            case .fast: return 1080
+            case .standard: return nil  // convert 側の maxOutputPixelSize 使用
             case .original: return .greatestFiniteMagnitude
             }
         }

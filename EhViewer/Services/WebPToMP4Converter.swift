@@ -70,6 +70,7 @@ enum WebPToMP4Converter {
 
     /// ディスク上の WebP/GIF ファイルを直接読んで MP4 変換（メモリに全データ展開しない）
     /// maxPixelSize: nil = 標準画質（720）、大きい値 = オリジナル画質（縮小なし）
+    /// libwebp 利用可能 + アニメWebP なら高速 decode 経路へ分岐
     static func convert(
         sourceURL: URL,
         outputURL: URL,
@@ -80,12 +81,44 @@ enum WebPToMP4Converter {
         await Self.concurrencyLimit.wait()
         defer { Self.concurrencyLimit.signal() }
 
+        // 診断: libwebp 利用可否 + WebP 検知結果を明示ログ
+        let libwebpAvailable = WebPLibSupport.isAvailable
+        let isAnimatedWebP = WebPFileDetector.isAnimatedWebP(url: sourceURL)
+        LogManager.shared.log("Convert", "dispatch: libwebpAvailable=\(libwebpAvailable) isAnimatedWebP=\(isAnimatedWebP) file=\(sourceURL.lastPathComponent)")
+
+        // libwebp が利用可能 + アニメWebP → 高速経路
+        #if canImport(libwebp)
+        if isAnimatedWebP {
+            try await convertAnimatedWebPUsingLibWebP(
+                sourceURL: sourceURL,
+                outputURL: outputURL,
+                maxPixelSize: maxPixelSize,
+                progress: progress
+            )
+            return
+        }
+        #endif
+
+        try await convertUsingCGImageSource(
+            sourceURL: sourceURL,
+            outputURL: outputURL,
+            maxPixelSize: maxPixelSize,
+            progress: progress
+        )
+    }
+
+    /// CGImageSource 経由の既存変換経路（GIF/APNG/アニメWebP fallback）
+    private static func convertUsingCGImageSource(
+        sourceURL: URL,
+        outputURL: URL,
+        maxPixelSize: CGFloat?,
+        progress: (@MainActor (Double) -> Void)?
+    ) async throws {
         let effectiveMaxDim = maxPixelSize ?? Self.maxOutputPixelSize
         let isOriginal = (maxPixelSize ?? 0) > 1400
 
         let fileSize = (try? FileManager.default.attributesOfItem(atPath: sourceURL.path)[.size] as? Int) ?? 0
-        LogManager.shared.log("Convert", "start mem=\(memoryFootprintMB())MB src=\(fileSize)B → \(outputURL.lastPathComponent) original=\(isOriginal)")
-        // URL ベースで CGImageSource 作成 → ImageIO が必要時だけディスク読み
+        LogManager.shared.log("Convert", "start mem=\(memoryFootprintMB())MB src=\(fileSize)B → \(outputURL.lastPathComponent) original=\(isOriginal) backend=CGImageSource")
         guard let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil) else {
             LogManager.shared.log("Convert", "FAILED invalidSource")
             throw ConverterError.invalidSource
@@ -357,6 +390,241 @@ enum WebPToMP4Converter {
             LogManager.shared.log("Mem", "convert+5s: \(memoryFootprintMB())MB")
         }
     }
+
+    // MARK: - libwebp 経路
+
+    #if canImport(libwebp)
+    /// libwebp の WebPAnimDecoder で高速 decode する変換経路
+    /// CGImageSource に比べて WebP アニメの decode が圧倒的に速い（Chromium と同等速度）
+    private static func convertAnimatedWebPUsingLibWebP(
+        sourceURL: URL,
+        outputURL: URL,
+        maxPixelSize: CGFloat?,
+        progress: (@MainActor (Double) -> Void)?
+    ) async throws {
+        let effectiveMaxDim = maxPixelSize ?? Self.maxOutputPixelSize
+        let isOriginal = (maxPixelSize ?? 0) > 1400
+
+        let fileSize = (try? FileManager.default.attributesOfItem(atPath: sourceURL.path)[.size] as? Int) ?? 0
+        LogManager.shared.log("Convert", "start mem=\(memoryFootprintMB())MB src=\(fileSize)B → \(outputURL.lastPathComponent) original=\(isOriginal) backend=libwebp")
+
+        guard let decoder = WebPAnimatedDecoder(url: sourceURL) else {
+            LogManager.shared.log("Convert", "FAILED libwebp decoder init")
+            throw ConverterError.invalidSource
+        }
+        let frameCount = decoder.frameCount
+        LogManager.shared.log("Convert", "frameCount=\(frameCount) canvas=\(decoder.canvasWidth)x\(decoder.canvasHeight)")
+        guard frameCount > 1 else { throw ConverterError.notAnimated }
+
+        // mp4 と .ok 両方クリア
+        try? FileManager.default.removeItem(at: outputURL)
+        try? FileManager.default.removeItem(at: Self.okMarkerURL(for: outputURL))
+
+        // 出力サイズ決定
+        let width: Int
+        let height: Int
+        if isOriginal {
+            width = decoder.canvasWidth
+            height = decoder.canvasHeight
+        } else {
+            let srcW = CGFloat(decoder.canvasWidth)
+            let srcH = CGFloat(decoder.canvasHeight)
+            let scale = min(effectiveMaxDim / max(srcW, srcH), 1.0)
+            width = Int(srcW * scale)
+            height = Int(srcH * scale)
+        }
+        LogManager.shared.log("Convert", "output size=\(width)x\(height)")
+
+        // VTCompressionSession + AVAssetWriter セットアップ（CGImageSource 経路と同じ）
+        let encoderSpec: [CFString: Any] = [
+            kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true,
+            kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder: true
+        ]
+        let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
+        var formatDescOpt: CMVideoFormatDescription?
+        let fdStatus = CMVideoFormatDescriptionCreate(
+            allocator: kCFAllocatorDefault,
+            codecType: kCMVideoCodecType_HEVC,
+            width: Int32(width),
+            height: Int32(height),
+            extensions: nil,
+            formatDescriptionOut: &formatDescOpt
+        )
+        guard fdStatus == noErr, let formatDesc = formatDescOpt else {
+            throw ConverterError.writerCannotAdd
+        }
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: nil, sourceFormatHint: formatDesc)
+        input.expectsMediaDataInRealTime = false
+        guard writer.canAdd(input) else { throw ConverterError.writerCannotAdd }
+        writer.add(input)
+
+        final class VTContext {
+            let input: AVAssetWriterInput
+            let writer: AVAssetWriter
+            var firstBufferHandled: Bool = false
+            var error: String?
+            init(input: AVAssetWriterInput, writer: AVAssetWriter) {
+                self.input = input
+                self.writer = writer
+            }
+        }
+        let vtContext = VTContext(input: input, writer: writer)
+        let refCon = Unmanaged.passUnretained(vtContext).toOpaque()
+
+        let vtCallback: VTCompressionOutputCallback = { (outRefCon, _, status, _, sampleBuffer) in
+            guard status == noErr, let sampleBuffer, let outRefCon else {
+                if let outRefCon {
+                    let ctx = Unmanaged<VTContext>.fromOpaque(outRefCon).takeUnretainedValue()
+                    ctx.error = "VT status=\(status)"
+                }
+                return
+            }
+            let ctx = Unmanaged<VTContext>.fromOpaque(outRefCon).takeUnretainedValue()
+            if !ctx.firstBufferHandled {
+                ctx.firstBufferHandled = true
+                if ctx.writer.status == .unknown {
+                    if !ctx.writer.startWriting() {
+                        ctx.error = "writer.startWriting failed"
+                        return
+                    }
+                    let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+                    ctx.writer.startSession(atSourceTime: pts)
+                }
+            }
+            while !ctx.input.isReadyForMoreMediaData { Thread.sleep(forTimeInterval: 0.002) }
+            if !ctx.input.append(sampleBuffer) {
+                ctx.error = ctx.writer.error?.localizedDescription ?? "append failed"
+            }
+        }
+
+        var vtSessionOut: VTCompressionSession?
+        let createStatus = VTCompressionSessionCreate(
+            allocator: nil,
+            width: Int32(width),
+            height: Int32(height),
+            codecType: kCMVideoCodecType_HEVC,
+            encoderSpecification: encoderSpec as CFDictionary,
+            imageBufferAttributes: nil,
+            compressedDataAllocator: nil,
+            outputCallback: vtCallback,
+            refcon: refCon,
+            compressionSessionOut: &vtSessionOut
+        )
+        guard createStatus == noErr, let vtSession = vtSessionOut else {
+            throw ConverterError.writerStartFailed("VT session create \(createStatus)")
+        }
+
+        var hwAcceleratedCF: CFBoolean?
+        VTSessionCopyProperty(vtSession,
+                              key: kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder,
+                              allocator: nil,
+                              valueOut: &hwAcceleratedCF)
+        LogManager.shared.log("Convert", "VT session created HW=\(hwAcceleratedCF == kCFBooleanTrue)")
+
+        let bitrate = bitrateFor(width: width, height: height)
+        VTSessionSetProperty(vtSession, key: kVTCompressionPropertyKey_AverageBitRate, value: NSNumber(value: bitrate))
+        VTSessionSetProperty(vtSession, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: NSNumber(value: 30))
+        VTSessionSetProperty(vtSession, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanFalse)
+        VTSessionSetProperty(vtSession, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanTrue)
+        VTCompressionSessionPrepareToEncodeFrames(vtSession)
+
+        // 逐次 decode → encode ループ（libwebp は順次アクセス + 高速なので buffer 不要）
+        let t0 = CFAbsoluteTimeGetCurrent()
+        LogManager.shared.log("Convert", "decode+encode loop start")
+        var accumulatedMs: Int64 = 0
+        let timeScale: CMTimeScale = 1000
+        var lastProgressReported = 0
+        var totalDecodeMs: Double = 0
+        var totalEncodeMs: Double = 0
+
+        for i in 0..<frameCount {
+            try autoreleasepool {
+                let decodeStart = CFAbsoluteTimeGetCurrent()
+                guard let frame = decoder.nextFrame() else {
+                    LogManager.shared.log("Convert", "FAILED libwebp nextFrame returned nil at frame \(i)")
+                    throw ConverterError.decodeFailed
+                }
+                let decodeMs = (CFAbsoluteTimeGetCurrent() - decodeStart) * 1000
+                totalDecodeMs += decodeMs
+
+                let pbStart = CFAbsoluteTimeGetCurrent()
+                guard let pb = makeStandalonePixelBuffer(cgImage: frame.image, width: width, height: height) else {
+                    throw ConverterError.pixelBufferFailed
+                }
+                let pbMs = (CFAbsoluteTimeGetCurrent() - pbStart) * 1000
+
+                let pts = CMTime(value: accumulatedMs, timescale: timeScale)
+                let dur = CMTime(value: Int64(frame.delayMs), timescale: timeScale)
+                accumulatedMs += Int64(frame.delayMs)
+
+                let encStart = CFAbsoluteTimeGetCurrent()
+                let encStatus = VTCompressionSessionEncodeFrame(
+                    vtSession,
+                    imageBuffer: pb,
+                    presentationTimeStamp: pts,
+                    duration: dur,
+                    frameProperties: nil,
+                    sourceFrameRefcon: nil,
+                    infoFlagsOut: nil
+                )
+                let encMs = (CFAbsoluteTimeGetCurrent() - encStart) * 1000
+                totalEncodeMs += encMs
+
+                // 最初の3フレームと10フレーム毎にログ
+                if i < 3 || i % 10 == 0 || i == frameCount - 1 {
+                    LogManager.shared.log("Convert", "frame[\(i)] decode=\(Int(decodeMs))ms pb=\(Int(pbMs))ms enc=\(Int(encMs))ms delay=\(frame.delayMs)ms")
+                }
+
+                if encStatus != noErr {
+                    LogManager.shared.log("Convert", "FAILED libwebp VT encode at frame \(i) status=\(encStatus)")
+                    throw ConverterError.appendFailed("VT encode \(encStatus)")
+                }
+                if let err = vtContext.error {
+                    throw ConverterError.appendFailed(err)
+                }
+            }
+
+            if let progress {
+                let percent = Int(Double(i + 1) / Double(frameCount) * 100)
+                if percent != lastProgressReported {
+                    lastProgressReported = percent
+                    let p = Double(i + 1) / Double(frameCount)
+                    await MainActor.run { progress(p) }
+                }
+            }
+        }
+        LogManager.shared.log("Convert", "libwebp totals: decode=\(Int(totalDecodeMs))ms encode=\(Int(totalEncodeMs))ms avgDecodePerFrame=\(Int(totalDecodeMs / Double(frameCount)))ms")
+
+        VTCompressionSessionCompleteFrames(vtSession, untilPresentationTimeStamp: .invalid)
+        VTCompressionSessionInvalidate(vtSession)
+        LogManager.shared.log("Convert", "pipeline done \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms")
+
+        input.markAsFinished()
+        await writer.finishWriting()
+        if writer.status != .completed {
+            try? FileManager.default.removeItem(at: outputURL)
+            throw ConverterError.finishFailed(writer.error?.localizedDescription ?? "unknown")
+        }
+        let outFileSize = (try? FileManager.default.attributesOfItem(atPath: outputURL.path)[.size] as? Int) ?? 0
+        if outFileSize < 10_000 {
+            try? FileManager.default.removeItem(at: outputURL)
+            throw ConverterError.finishFailed("output too small: \(outFileSize)B")
+        }
+        FileManager.default.createFile(atPath: Self.okMarkerURL(for: outputURL).path, contents: Data())
+        LogManager.shared.log("Convert", "DONE total=\(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms mp4=\(outFileSize)B mem=\(memoryFootprintMB())MB backend=libwebp")
+
+        Task.detached(priority: .utility) {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            LogManager.shared.log("Mem", "convert+500ms: \(memoryFootprintMB())MB")
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            LogManager.shared.log("Mem", "convert+1s: \(memoryFootprintMB())MB")
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            LogManager.shared.log("Mem", "convert+3s: \(memoryFootprintMB())MB")
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            LogManager.shared.log("Mem", "convert+5s: \(memoryFootprintMB())MB")
+        }
+    }
+    #endif
 
     // MARK: - Helpers
 

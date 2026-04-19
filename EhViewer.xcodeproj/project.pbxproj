@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		5DA5A9EC2F95181A003A18D4 /* libwebp in Frameworks */ = {isa = PBXBuildFile; productRef = 5DA5A9EB2F95181A003A18D4 /* libwebp */; };
 		5DD765D82F6C318E00FDA262 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5DD765D72F6C318E00FDA262 /* WidgetKit.framework */; };
 		5DD765DA2F6C318E00FDA262 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5DD765D92F6C318E00FDA262 /* SwiftUI.framework */; };
 		5DD765E52F6C318F00FDA262 /* EhViewerWidgetsExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 5DD765D52F6C318E00FDA262 /* EhViewerWidgetsExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -74,6 +75,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5DA5A9EC2F95181A003A18D4 /* libwebp in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -139,6 +141,7 @@
 			);
 			name = EhViewer;
 			packageProductDependencies = (
+				5DA5A9EB2F95181A003A18D4 /* libwebp */,
 			);
 			productName = EhViewer;
 			productReference = 5D6D99DB2F6A0F6D00DD8547 /* EhViewer.app */;
@@ -200,6 +203,9 @@
 			);
 			mainGroup = 5D6D99D22F6A0F6D00DD8547;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				5DA5A9EA2F9512CB003A18D4 /* XCRemoteSwiftPackageReference "libwebp-Xcode" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 5D6D99DC2F6A0F6D00DD8547 /* Products */;
 			projectDirPath = "";
@@ -566,6 +572,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		5DA5A9EA2F9512CB003A18D4 /* XCRemoteSwiftPackageReference "libwebp-Xcode" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/SDWebImage/libwebp-Xcode";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.5.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		5DA5A9EB2F95181A003A18D4 /* libwebp */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5DA5A9EA2F9512CB003A18D4 /* XCRemoteSwiftPackageReference "libwebp-Xcode" */;
+			productName = libwebp;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 5D6D99D32F6A0F6D00DD8547 /* Project object */;
 }
