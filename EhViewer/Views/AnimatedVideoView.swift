@@ -24,6 +24,7 @@ struct AnimatedVideoView: View {
     @State private var convertedURL: URL?
     @State private var showReconvertDialog: Bool = false
     @State private var convertTask: Task<Void, Never>?
+    @State private var progress: Double = 0
     /// ポスター/プレイヤー共通のアスペクト比（黒帯回避）
     /// WebPヘッダから同期取得 → AVPlayer 生成前にすでに確定している
     @State private var aspectSize: CGSize = .zero
@@ -47,7 +48,14 @@ struct AnimatedVideoView: View {
 
             switch status {
             case .converting:
-                EmptyView()
+                // iPhone 等は 1-3 秒以上かかるため、ポスター上に白文字で進捗表示
+                // M系では瞬時に完了 → ほぼ見えない
+                if progress > 0 && progress < 1 {
+                    Text("\(Int(progress * 100))%")
+                        .font(.system(size: 36, weight: .bold, design: .rounded).monospacedDigit())
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.7), radius: 2, x: 0, y: 1)
+                }
 
             case .ready:
                 if let url = convertedURL {
@@ -140,6 +148,7 @@ struct AnimatedVideoView: View {
         if case .ready = status { return }
         LogManager.shared.log("Convert", "auto start gid=\(gid) page=\(page)")
         status = .converting
+        progress = 0
         let url = WebPToMP4Converter.mp4Path(gid: gid, page: page)
         let srcURL = sourceURL
         let maxDim: CGFloat? = .greatestFiniteMagnitude
@@ -149,7 +158,7 @@ struct AnimatedVideoView: View {
                     sourceURL: srcURL,
                     outputURL: url,
                     maxPixelSize: maxDim,
-                    progress: nil,
+                    progress: { p in progress = p },
                     frameCallback: nil
                 )
                 await MainActor.run {
