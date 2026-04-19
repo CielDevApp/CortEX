@@ -121,8 +121,21 @@ enum WebPToMP4Converter {
             kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder: true
         ]
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
-        // passthrough 入力（エンコード不要、VT 出力をそのまま書く）
-        let input = AVAssetWriterInput(mediaType: .video, outputSettings: nil)
+        // passthrough 入力には sourceFormatHint が必要（仮の HEVC format を事前作成）
+        var formatDescOpt: CMVideoFormatDescription?
+        let fdStatus = CMVideoFormatDescriptionCreate(
+            allocator: kCFAllocatorDefault,
+            codecType: kCMVideoCodecType_HEVC,
+            width: Int32(width),
+            height: Int32(height),
+            extensions: nil,
+            formatDescriptionOut: &formatDescOpt
+        )
+        guard fdStatus == noErr, let formatDesc = formatDescOpt else {
+            LogManager.shared.log("Convert", "FAILED formatDesc create status=\(fdStatus)")
+            throw ConverterError.writerCannotAdd
+        }
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: nil, sourceFormatHint: formatDesc)
         input.expectsMediaDataInRealTime = false
         guard writer.canAdd(input) else { throw ConverterError.writerCannotAdd }
         writer.add(input)
