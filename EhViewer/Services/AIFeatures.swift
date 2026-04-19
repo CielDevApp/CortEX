@@ -7,7 +7,7 @@ import FoundationModels
 // MARK: - @Generable 構造体（iOS 26+）
 
 #if canImport(FoundationModels)
-@available(iOS 26.0, *)
+@available(iOS 26.0, macCatalyst 26.0, macOS 26.0, *)
 @Generable
 struct GenreClassificationResult {
     /// 推定ジャンル（vanilla/ntr/femdom/yuri/yaoi/other）
@@ -16,7 +16,7 @@ struct GenreClassificationResult {
     var confidence: Double
 }
 
-@available(iOS 26.0, *)
+@available(iOS 26.0, macCatalyst 26.0, macOS 26.0, *)
 @Generable
 struct RecommendationResult {
     /// 提案するタグの組み合わせ（例: ["big_breasts, maid", "elf, fantasy"]）
@@ -47,14 +47,14 @@ final class AIFeatures: ObservableObject {
 
     private func checkAvailability() {
         #if canImport(FoundationModels)
-        if #available(iOS 26.0, *) {
+        if #available(iOS 26.0, macCatalyst 26.0, macOS 26.0, *) {
             Task { await checkModelAvailability() }
         }
         #endif
     }
 
     #if canImport(FoundationModels)
-    @available(iOS 26.0, *)
+    @available(iOS 26.0, macCatalyst 26.0, macOS 26.0, *)
     private func checkModelAvailability() async {
         let model = SystemLanguageModel.default
         switch model.availability {
@@ -75,7 +75,7 @@ final class AIFeatures: ObservableObject {
         if let cached = genreCache[gid] { return cached }
 
         #if canImport(FoundationModels)
-        if #available(iOS 26.0, *) {
+        if #available(iOS 26.0, macCatalyst 26.0, macOS 26.0, *) {
             return await performClassification(gid: gid, tags: tags)
         }
         #endif
@@ -83,7 +83,7 @@ final class AIFeatures: ObservableObject {
     }
 
     #if canImport(FoundationModels)
-    @available(iOS 26.0, *)
+    @available(iOS 26.0, macCatalyst 26.0, macOS 26.0, *)
     private func performClassification(gid: Int, tags: [String]) async -> String? {
         let instructions = """
         Given a list of E-Hentai tags, classify the genre of the work.
@@ -117,7 +117,7 @@ final class AIFeatures: ObservableObject {
         guard !EcoMode.shared.isEnabled else { return }
 
         #if canImport(FoundationModels)
-        if #available(iOS 26.0, *), isAvailable {
+        if #available(iOS 26.0, macCatalyst 26.0, macOS 26.0, *), isAvailable {
             await performSmartRecommendation(history: history)
             return
         }
@@ -142,7 +142,7 @@ final class AIFeatures: ObservableObject {
     }
 
     #if canImport(FoundationModels)
-    @available(iOS 26.0, *)
+    @available(iOS 26.0, macCatalyst 26.0, macOS 26.0, *)
     private func performSmartRecommendation(history: [(tags: [String], count: Int)]) async {
         let instructions = """
         Analyze the user's E-Hentai browsing history tag frequency data.

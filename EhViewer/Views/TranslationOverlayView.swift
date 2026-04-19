@@ -1,4 +1,17 @@
 import SwiftUI
+
+#if targetEnvironment(macCatalyst)
+// Mac Catalyst は Translation framework 非対応（Catalyst 26.0+ で利用可、現状未サポート）
+// スタブで consumer (GalleryReaderView) の参照を通す
+struct TranslationManagerView: View {
+    let viewModel: ReaderViewModel
+    let gid: Int
+    let targetLang: String
+    let sourceLang: String
+    let isActive: Bool
+    var body: some View { Color.clear.frame(width: 0, height: 0) }
+}
+#else
 import Translation
 
 /// リーダー全体で1つだけ配置する翻訳マネージャーView
@@ -391,3 +404,4 @@ struct TranslationManagerView: View {
         if isActive { holder.showTranslated() }
     }
 }
+#endif

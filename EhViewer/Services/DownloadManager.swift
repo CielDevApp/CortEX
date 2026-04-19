@@ -1,8 +1,10 @@
 import Foundation
 import Combine
 import UserNotifications
-import ActivityKit
 import ImageIO
+#if os(iOS) && !targetEnvironment(macCatalyst)
+import ActivityKit
+#endif
 #if canImport(UIKit)
 import UIKit
 #elseif canImport(AppKit)
@@ -107,6 +109,7 @@ class DownloadManager: ObservableObject {
     private init() {
         loadAllMetadata()
         repairBrokenDownloads()
+        cleanupTrashDownloads()
         // Live Activityクリーンアップ→ダウンロード再開を順序保証
         Task {
             await cleanupStaleLiveActivities()
@@ -118,6 +121,7 @@ class DownloadManager: ObservableObject {
 
     /// 前回の強制終了等で残った古いLive Activityを全て終了
     private func cleanupStaleLiveActivities() async {
+        #if os(iOS) && !targetEnvironment(macCatalyst)
         let staleActivities = Activity<DownloadActivityAttributes>.activities
         if !staleActivities.isEmpty {
             LogManager.shared.log("LiveActivity", "cleaning up \(staleActivities.count) stale activities")
@@ -130,6 +134,7 @@ class DownloadManager: ObservableObject {
             await activity.end(.init(state: state, staleDate: nil), dismissalPolicy: .immediate)
         }
         liveActivities.removeAll()
+        #endif
     }
 
     /// 未完了ダウンロードを自動再開（キャンセル済みはスキップ）
@@ -379,6 +384,22 @@ class DownloadManager: ObservableObject {
         }
     }
 
+    /// 0/0 ゴミダウンロード（pageCount=0 または token空）を自動削除
+    /// notLoggedIn 等で allPageURLs.isEmpty → ABORT 前に作られていた残骸を掃除する
+    func cleanupTrashDownloads() {
+        let trash = downloads.filter { (_, meta) in
+            guard !meta.isComplete else { return false }
+            // pageCount=0 or 空token = 再開しても再取得不可 = ゴミ
+            return meta.pageCount == 0 || meta.token.isEmpty
+        }
+        if trash.isEmpty { return }
+        LogManager.shared.log("Download", "cleanupTrashDownloads: removing \(trash.count) trash entries")
+        for (gid, meta) in trash {
+            LogManager.shared.log("Download", "  trash: gid=\(gid) pageCount=\(meta.pageCount) token='\(meta.token)' title=\(meta.title)")
+            deleteDownload(gid: gid)
+        }
+    }
+
     func isDownloading(gid: Int) -> Bool {
         activeDownloads[gid] != nil
     }
@@ -386,6 +407,7 @@ class DownloadManager: ObservableObject {
     // MARK: - Live Activity
 
     private func startLiveActivity(gid: Int, title: String, totalPages: Int, initialPage: Int = 0) {
+        #if os(iOS) && !targetEnvironment(macCatalyst)
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             LogManager.shared.log("LiveActivity", "activities not enabled")
             return
@@ -415,9 +437,11 @@ class DownloadManager: ObservableObject {
         } catch {
             LogManager.shared.log("LiveActivity", "failed to start: \(error)")
         }
+        #endif
     }
 
     private func updateLiveActivity(gid: Int, current: Int, total: Int) {
+        #if os(iOS) && !targetEnvironment(macCatalyst)
         guard let activityID = liveActivities[gid] else { return }
         let progress = total > 0 ? Double(current) / Double(total) : 0
         LogManager.shared.log("LiveActivity", "update: gid=\(gid) page=\(current)/\(total) progress=\(Int(progress * 100))%")
@@ -434,9 +458,11 @@ class DownloadManager: ObservableObject {
                 await activity.update(.init(state: state, staleDate: nil))
             }
         }
+        #endif
     }
 
     private func endLiveActivity(gid: Int, success: Bool) {
+        #if os(iOS) && !targetEnvironment(macCatalyst)
         guard let activityID = liveActivities.removeValue(forKey: gid) else { return }
         let state = DownloadActivityAttributes.ContentState(
             currentPage: 0,
@@ -451,6 +477,7 @@ class DownloadManager: ObservableObject {
                 LogManager.shared.log("LiveActivity", "ended: gid=\(gid) success=\(success)")
             }
         }
+        #endif
     }
 
     // MARK: - ダウンロード操作
@@ -764,21 +791,54 @@ class DownloadManager: ObservableObject {
     }
 
     /// 未完了ダウンロードをすべて手動再開（キャンセル済みも含めてリセット）
+    /// nhentai と E-Hentai で再開経路が違うので分岐する
     func resumeAllIncomplete() {
-        let incomplete = downloads.filter { !$0.value.isComplete && !$0.value.token.isEmpty && activeDownloads[$0.key] == nil }
+        // ゴミ（0/0 や token空）は先に掃除して対象から外す
+        cleanupTrashDownloads()
+        let incomplete = downloads.filter {
+            !$0.value.isComplete && !$0.value.token.isEmpty && activeDownloads[$0.key] == nil
+        }
         LogManager.shared.log("Download", "resumeAllIncomplete: \(incomplete.count) items")
+        if incomplete.isEmpty {
+            LogManager.shared.log("Download", "resumeAllIncomplete: no resumable items (check: not complete, has token, not already active)")
+            return
+        }
         for (gid, var meta) in incomplete {
             if meta.isCancelled == true {
                 meta.isCancelled = false
                 saveMetadata(meta)
             }
-            let gallery = Gallery(
-                gid: gid, token: meta.token,
-                title: meta.title, category: nil, coverURL: nil,
-                rating: 0, pageCount: meta.pageCount,
-                postedDate: "", uploader: nil, tags: []
-            )
-            startDownload(gallery: gallery, host: .exhentai)
+            if meta.isNhentai {
+                guard let nhId = meta.nhentaiId else {
+                    LogManager.shared.log("Download", "resumeAllIncomplete: skip nhentai gid=\(gid) (no nhentaiId)")
+                    continue
+                }
+                let total = max(meta.pageCount, 1)
+                let current = meta.downloadedPages.count
+                LogManager.shared.log("Download", "resumeAllIncomplete: nhentai gid=\(gid) nhId=\(nhId) \(current)/\(total)")
+                activeDownloads[gid] = DownloadProgress(current: current, total: total)
+                startLiveActivity(gid: gid, title: meta.title, totalPages: total, initialPage: current)
+                Task(priority: .high) {
+                    if let nhGallery = try? await NhentaiClient.fetchGallery(id: nhId) {
+                        await performNhentaiDownload(nhGallery: nhGallery)
+                    } else {
+                        LogManager.shared.log("Download", "nhentai resume failed: fetchGallery(\(nhId))")
+                        await MainActor.run {
+                            self.activeDownloads.removeValue(forKey: gid)
+                            self.endLiveActivity(gid: gid, success: false)
+                        }
+                    }
+                }
+            } else {
+                LogManager.shared.log("Download", "resumeAllIncomplete: ehentai gid=\(gid) token=\(meta.token)")
+                let gallery = Gallery(
+                    gid: gid, token: meta.token,
+                    title: meta.title, category: nil, coverURL: nil,
+                    rating: 0, pageCount: meta.pageCount,
+                    postedDate: "", uploader: nil, tags: []
+                )
+                startDownload(gallery: gallery, host: .exhentai)
+            }
         }
     }
 
@@ -975,6 +1035,17 @@ class DownloadManager: ObservableObject {
 
         LogManager.shared.log("Download", "gid=\(gid) fetched \(allPageURLs.count) page URLs (expected: \(pageCount))")
 
+        // URL取得0件 = notLoggedIn/banned/ネットワーク不通 等の致命的エラー
+        // watchdog 53秒待たずに即座に失敗通知、ゴミメタデータを完全削除してリストから消す
+        if allPageURLs.isEmpty {
+            LogManager.shared.log("Download", "gid=\(gid) ABORT: zero page URLs fetched (auth/network error) - deleting metadata")
+            await MainActor.run {
+                // meta + ディレクトリ + activeDownloads + liveActivity まで削除
+                self.deleteDownload(gid: gid)
+            }
+            return
+        }
+
         let totalPages = allPageURLs.count
         meta.pageCount = totalPages
         saveMetadata(meta)
@@ -1059,19 +1130,20 @@ class DownloadManager: ObservableObject {
             }
         }
 
-        // 完了stream消費（stall watchdog付き: 45秒completion無ければsecondpassにフォールバック）
+        // 完了stream消費（stall watchdog付き: 20秒completion無ければsecondpassにフォールバック）
+        // 元は45s だったが「突っかかり時間」を短縮してユーザー体感を改善
         var pendingCount = pendingIndices.count
-        let stallThreshold: Double = 45.0
+        let stallThreshold: Double = 20.0
         let lastProgressBox = StallBox()
         lastProgressBox.update()
 
         let watchdog = Task {
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                try? await Task.sleep(nanoseconds: 5_000_000_000)  // 5秒毎チェック (元 10秒)
                 if Task.isCancelled { break }
                 let elapsed = CFAbsoluteTimeGetCurrent() - lastProgressBox.value
                 if elapsed > stallThreshold {
-                    LogManager.shared.log("Download", "gid=\(gid) BG stream stall \(Int(elapsed))s - forcing finish")
+                    LogManager.shared.log("Download", "gid=\(gid) BG stream stall \(Int(elapsed))s - forcing finish (threshold=\(Int(stallThreshold))s)")
                     BackgroundDownloadManager.shared.finishStream(for: gid)
                     break
                 }

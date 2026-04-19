@@ -1,5 +1,5 @@
 import Foundation
-#if canImport(UIKit)
+#if canImport(WebKit)
 import WebKit
 
 /// WKWebView経由でnhentai APIを叩くブリッジ

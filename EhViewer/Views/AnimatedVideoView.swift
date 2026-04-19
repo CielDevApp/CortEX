@@ -24,10 +24,11 @@ struct AnimatedVideoView: View {
     @State private var posterImage: UIImage?
     @State private var convertedURL: URL?
     @State private var showReconvertDialog: Bool = false
+    @State private var streamingFrameHolder = StreamingFrameHolder()
 
     enum Status {
         case notConverted
-        case converting
+        case converting   // = ストリーミング再生 + 裏で MP4 変換（フレームが来るまでポスター）
         case ready
         case failed(String)
     }
@@ -62,16 +63,29 @@ struct AnimatedVideoView: View {
                 .buttonStyle(.plain)
 
             case .converting:
-                ZStack {
-                    Circle().fill(.black.opacity(0.55)).frame(width: 72, height: 72)
-                    VStack(spacing: 4) {
-                        ProgressView(value: progress)
-                            .progressViewStyle(.circular)
-                            .tint(.white)
-                        Text("\(Int(progress * 100))%")
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.white)
+                // ストリーミング再生: 変換中のフレームをリアルタイムで表示
+                StreamingFrameView(holder: streamingFrameHolder)
+                    .aspectRatio(contentMode: .fit)
+                // 変換進捗バー（右上小さく）
+                VStack {
+                    HStack {
+                        Spacer()
+                        HStack(spacing: 4) {
+                            ProgressView(value: progress)
+                                .progressViewStyle(.circular)
+                                .tint(.white)
+                                .scaleEffect(0.6)
+                            Text("\(Int(progress * 100))%")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.white)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.black.opacity(0.55))
+                        .clipShape(Capsule())
+                        .padding(8)
                     }
+                    Spacer()
                 }
 
             case .ready:
@@ -154,11 +168,19 @@ struct AnimatedVideoView: View {
         let srcURL = sourceURL
         // オリジナル画質固定
         let maxDim: CGFloat? = .greatestFiniteMagnitude
+        let holder = streamingFrameHolder
         Task.detached(priority: .userInitiated) {
             do {
-                try await WebPToMP4Converter.convert(sourceURL: srcURL, outputURL: url, maxPixelSize: maxDim) { p in
-                    progress = p
-                }
+                try await WebPToMP4Converter.convert(
+                    sourceURL: srcURL,
+                    outputURL: url,
+                    maxPixelSize: maxDim,
+                    progress: { p in progress = p },
+                    frameCallback: { cgImage in
+                        // decode 直後のフレームを UI に転送（メインスレッドで layer.contents 更新）
+                        holder.setFrame(cgImage)
+                    }
+                )
                 await MainActor.run {
                     convertedURL = url
                     status = .ready
@@ -171,6 +193,48 @@ struct AnimatedVideoView: View {
                 }
             }
         }
+    }
+}
+
+/// ストリーミング再生用: 変換中に decode されたフレームをリアルタイム表示
+/// Holder が UIView を保持し、decode スレッドから setFrame → main dispatch → layer.contents 更新
+final class StreamingFrameHolder: @unchecked Sendable {
+    weak var view: StreamingFrameUIView?
+
+    func setFrame(_ cgImage: CGImage) {
+        // decode スレッドから呼ばれる → main で layer 更新
+        DispatchQueue.main.async { [weak self] in
+            self?.view?.applyFrame(cgImage)
+        }
+    }
+}
+
+final class StreamingFrameUIView: UIView {
+    override class var layerClass: AnyClass { CALayer.self }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        layer.contentsGravity = .resizeAspect
+        backgroundColor = .black
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func applyFrame(_ cgImage: CGImage) {
+        layer.contents = cgImage
+    }
+}
+
+struct StreamingFrameView: UIViewRepresentable {
+    let holder: StreamingFrameHolder
+
+    func makeUIView(context: Context) -> StreamingFrameUIView {
+        let v = StreamingFrameUIView()
+        holder.view = v
+        return v
+    }
+
+    func updateUIView(_ uiView: StreamingFrameUIView, context: Context) {
+        holder.view = uiView
     }
 }
 

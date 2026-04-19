@@ -10,7 +10,7 @@
 		5DA5A9EC2F95181A003A18D4 /* libwebp in Frameworks */ = {isa = PBXBuildFile; productRef = 5DA5A9EB2F95181A003A18D4 /* libwebp */; };
 		5DD765D82F6C318E00FDA262 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5DD765D72F6C318E00FDA262 /* WidgetKit.framework */; };
 		5DD765DA2F6C318E00FDA262 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5DD765D92F6C318E00FDA262 /* SwiftUI.framework */; };
-		5DD765E52F6C318F00FDA262 /* EhViewerWidgetsExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 5DD765D52F6C318E00FDA262 /* EhViewerWidgetsExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		5DD765E52F6C318F00FDA262 /* EhViewerWidgetsExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 5DD765D52F6C318E00FDA262 /* EhViewerWidgetsExtension.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -254,6 +254,7 @@
 /* Begin PBXTargetDependency section */
 		5DD765E42F6C318F00FDA262 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
+			platformFilter = ios;
 			target = 5DD765D42F6C318E00FDA262 /* EhViewerWidgetsExtension */;
 			targetProxy = 5DD765E32F6C318F00FDA262 /* PBXContainerItemProxy */;
 		};
@@ -415,6 +416,7 @@
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SUPPORTS_MACCATALYST = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -466,6 +468,7 @@
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SUPPORTS_MACCATALYST = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;

@@ -29,9 +29,42 @@ final class LogManager: ObservableObject {
     private let maxEntries = 1000
     private var deviceInfoLogged = false
 
+    /// ファイル書き出し用キュー + パス
+    private let fileQueue = DispatchQueue(label: "logmanager.file", qos: .utility)
+    private lazy var logFileURL: URL = {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let url = docs.appendingPathComponent("ehviewer.log")
+        // 起動時に前回ログをクリア（太りすぎ防止）
+        try? FileManager.default.removeItem(at: url)
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        return url
+    }()
+    /// 外部から log パス取得（デバッグ用）
+    static var currentLogPath: String { shared.logFileURL.path }
+
     var isEnabled: Bool {
         UserDefaults.standard.bool(forKey: "debugLogEnabled")
     }
+
+    /// フォーマット済み1行をファイル末尾に append
+    private func appendToFile(_ line: String) {
+        fileQueue.async { [weak self] in
+            guard let self else { return }
+            guard let data = (line + "\n").data(using: .utf8),
+                  let handle = try? FileHandle(forWritingTo: self.logFileURL) else {
+                return
+            }
+            defer { try? handle.close() }
+            handle.seekToEndOfFile()
+            handle.write(data)
+        }
+    }
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss.SSS"
+        return f
+    }()
 
     /// 実行端末情報を取得
     static var deviceSignature: String {
@@ -53,6 +86,8 @@ final class LogManager: ObservableObject {
             let sig = Self.deviceSignature
             print("[Device] \(sig)")
             print("[Build] \(BuildInfo.tag)")
+            appendToFile("[Device] \(sig)")
+            appendToFile("[Build] \(BuildInfo.tag)")
             if isEnabled {
                 let dev = LogEntry(timestamp: Date(), category: "Device", message: sig)
                 let build = LogEntry(timestamp: Date(), category: "Build", message: BuildInfo.tag)
@@ -64,6 +99,9 @@ final class LogManager: ObservableObject {
         }
         // 常にprint（Xcodeコンソール用）
         print("[\(category)] \(message)")
+        // ファイルにも書き出し（Mac Catalyst で stdout 消失しても確認可能）
+        let timeStr = Self.timeFormatter.string(from: Date())
+        appendToFile("[\(timeStr)] [\(category)] \(message)")
 
         guard isEnabled else { return }
 
