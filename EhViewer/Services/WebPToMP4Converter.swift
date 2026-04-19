@@ -314,7 +314,7 @@ enum WebPToMP4Converter {
 
             if let progress {
                 let percent = Int(Double(i + 1) / Double(totalForProgress) * 100)
-                if percent / 10 != lastProgressReported / 10 {
+                if percent != lastProgressReported {
                     lastProgressReported = percent
                     let p = Double(i + 1) / Double(totalForProgress)
                     await MainActor.run { progress(p) }

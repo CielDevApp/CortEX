@@ -94,6 +94,11 @@ struct DownloadsView: View {
                         ForEach(incompleteList) { meta in
                             incompleteRow(meta: meta)
                                 .contextMenu {
+                                    Button {
+                                        manager.markAsCompleteIgnoringMissing(gid: meta.gid)
+                                    } label: {
+                                        Label("強制完了（欠落ページを無視）", systemImage: "checkmark.circle")
+                                    }
                                     Button(role: .destructive) {
                                         manager.deleteDownload(gid: meta.gid)
                                     } label: {
@@ -223,9 +228,43 @@ struct DownloadsView: View {
                         ProgressView()
                             .scaleEffect(0.7)
                     }
-                    Text("\(progress.current) / \(progress.total) ページ")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text("\(progress.current) / \(progress.total) ページ")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            let remainingPages = max(progress.total - progress.current, 0)
+                            if remainingPages > 0 {
+                                Text("残り\(remainingPages)枚")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                        TimelineView(.periodic(from: .now, by: 0.5)) { _ in
+                            let live = manager.liveDownloadedBytes(gid: gid)
+                            let estimated = manager.estimatedTotalBytes(gid: gid, totalPages: progress.total, currentPages: progress.current)
+                            let bps = BackgroundDownloadManager.shared.sampleBytesPerSecond(for: gid)
+                            HStack(spacing: 6) {
+                                if let est = estimated, est > live {
+                                    let remaining = est - live
+                                    Text("残り ~\(formatByteSize(remaining))")
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.primary)
+                                    if bps > 0 {
+                                        let etaSec = Int(Double(remaining) / Double(bps))
+                                        Text(formatETA(etaSec))
+                                            .font(.caption.monospacedDigit())
+                                            .foregroundStyle(.green)
+                                    }
+                                }
+                                if bps > 0 {
+                                    Text(formatSpeed(bps))
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.blue)
+                                }
+                            }
+                        }
+                    }
                 }
                 Spacer()
                 Button {
@@ -252,6 +291,17 @@ struct DownloadsView: View {
         } label: {
             HStack(spacing: 10) {
                 coverThumbnail(gid: meta.gid)
+                    .overlay(alignment: .bottomTrailing) {
+                        if meta.isAnimatedGallery {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.white)
+                                .padding(4)
+                                .background(.black.opacity(0.65))
+                                .clipShape(Circle())
+                                .padding(2)
+                        }
+                    }
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(meta.title)
@@ -323,6 +373,37 @@ struct DownloadsView: View {
             .buttonStyle(.plain)
         }
         .padding(.vertical, 4)
+    }
+
+    // MARK: - 速度フォーマット
+
+    private func formatSpeed(_ bytesPerSec: Int64) -> String {
+        let b = Double(bytesPerSec)
+        if b >= 1_000_000 { return String(format: "%.1f MB/s", b / 1_000_000) }
+        if b >= 1_000 { return String(format: "%.0f KB/s", b / 1_000) }
+        return "\(bytesPerSec) B/s"
+    }
+
+    private func formatByteSize(_ bytes: Int64) -> String {
+        let b = Double(bytes)
+        if b >= 1_073_741_824 { return String(format: "%.2f GB", b / 1_073_741_824) }
+        if b >= 1_048_576 { return String(format: "%.1f MB", b / 1_048_576) }
+        if b >= 1_024 { return String(format: "%.0f KB", b / 1_024) }
+        return "\(bytes) B"
+    }
+
+    private func formatETA(_ seconds: Int) -> String {
+        if seconds >= 3600 {
+            let h = seconds / 3600
+            let m = (seconds % 3600) / 60
+            return "約\(h)h\(m)m"
+        }
+        if seconds >= 60 {
+            let m = seconds / 60
+            let s = seconds % 60
+            return "約\(m)分\(s)秒"
+        }
+        return "約\(seconds)秒"
     }
 
     // MARK: - カバーサムネイル

@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import UserNotifications
 import ActivityKit
+import ImageIO
 #if canImport(UIKit)
 import UIKit
 #elseif canImport(AppKit)
@@ -24,6 +25,11 @@ struct DownloadedGallery: Codable, Identifiable, Sendable {
     var id: Int { gid }
     nonisolated var directoryName: String { "\(gid)" }
     var isNhentai: Bool { source == "nhentai" || token.hasPrefix("nh") }
+    /// タイトル文字列から動画作品を推定（"Animated"/"GIF"/"🎥" を含むか）
+    var isAnimatedGallery: Bool {
+        let t = title
+        return t.contains("Animated") || t.contains("GIF") || t.contains("gif") || t.contains("🎥")
+    }
     /// nhentai用: 実際のnhentai IDを返す（gidは-nhIdで保存）
     var nhentaiId: Int? {
         guard isNhentai else { return nil }
@@ -34,6 +40,18 @@ struct DownloadedGallery: Codable, Identifiable, Sendable {
 
 class DownloadManager: ObservableObject {
     static let shared = DownloadManager()
+
+    /// カバー画像メモリキャッシュ（DownloadsView 再レンダー時 disk I/O 回避）
+    /// NSCache は iOS メモリプレッシャーで自動退避される
+    private let coverCache: NSCache<NSNumber, PlatformImage> = {
+        let c = NSCache<NSNumber, PlatformImage>()
+        c.countLimit = 100
+        return c
+    }()
+    /// gid ごとの DL 済みバイト累積（ページ完了単位。残り容量推定の平均計算用）
+    private var downloadedBytes: [Int: Int64] = [:]
+    /// gid ごとの DL 開始時点の on-disk バイト数（リアルタイム表示の基準値）
+    private var initialOnDiskBytes: [Int: Int64] = [:]
 
     @Published var downloads: [Int: DownloadedGallery] = [:] {
         didSet { activeDownloadCount = downloads.values.filter { !$0.isComplete }.count }
@@ -94,6 +112,8 @@ class DownloadManager: ObservableObject {
             await cleanupStaleLiveActivities()
             await resumeIncompleteDownloads()
         }
+        // 速度サンプラー撤去: activeDownloads mutation→DownloadsView全再レンダー
+        // で 150ms/秒 のメインスレッドハング。speed 表示は per-row TimelineView で取得。
     }
 
     /// 前回の強制終了等で残った古いLive Activityを全て終了
@@ -229,46 +249,57 @@ class DownloadManager: ObservableObject {
     }
 
     func loadCoverImage(gid: Int) -> PlatformImage? {
+        let key = NSNumber(value: gid)
+        if let cached = coverCache.object(forKey: key) {
+            return cached
+        }
         let path = coverFilePath(gid: gid)
         if fileManager.fileExists(atPath: path.path),
            let image = PlatformImage(contentsOfFile: path.path) {
+            coverCache.setObject(image, forKey: key)
             return image
         }
         // カバーが存在しない場合は1枚目をリサイズして代用 + cover.jpgに保存
-        return generateCoverFromFirstPage(gid: gid)
+        if let img = generateCoverFromFirstPage(gid: gid) {
+            coverCache.setObject(img, forKey: key)
+            return img
+        }
+        return nil
     }
 
     /// 1枚目の画像をリサイズしてcover.jpgとして保存、結果を返す
+    /// 動画WebPで UIImage(contentsOfFile:) が全フレーム展開→OOM するため
+    /// CGImageSource の mmap + サムネイルデコード（先頭フレームのみ）で読む
     private func generateCoverFromFirstPage(gid: Int) -> PlatformImage? {
-        // 1枚目(page 0)を探す。見つからなければ最初に存在するページを使う
-        var sourceImage: PlatformImage?
+        #if canImport(UIKit)
+        var srcFileURL: URL?
         for page in 0..<5 {
-            if let img = loadLocalImage(gid: gid, page: page) {
-                sourceImage = img
+            let p = imageFilePath(gid: gid, page: page)
+            if fileManager.fileExists(atPath: p.path) {
+                srcFileURL = p
                 break
             }
         }
-        guard let source = sourceImage else { return nil }
-
-        #if canImport(UIKit)
-        let maxEdge: CGFloat = 400
-        let srcW = CGFloat(source.pixelWidth)
-        let srcH = CGFloat(source.pixelHeight)
-        let scale = min(maxEdge / max(srcW, srcH), 1.0)
-        let newSize = CGSize(width: srcW * scale, height: srcH * scale)
-        let renderer = UIGraphicsImageRenderer(size: newSize)
-        let resized = renderer.image { _ in
-            source.draw(in: CGRect(origin: .zero, size: newSize))
+        guard let fileURL = srcFileURL,
+              let source = CGImageSourceCreateWithURL(fileURL as CFURL, nil) else {
+            return nil
         }
-        // cover.jpgに保存（次回以降高速化）
-        if let data = resized.jpegData(compressionQuality: 0.85) {
-            let path = coverFilePath(gid: gid)
-            try? data.write(to: path)
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: 400,
+            kCGImageSourceShouldCacheImmediately: false
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, opts as CFDictionary) else {
+            return nil
+        }
+        let img = UIImage(cgImage: cg)
+        if let data = img.jpegData(compressionQuality: 0.85) {
+            try? data.write(to: coverFilePath(gid: gid))
             LogManager.shared.log("Download", "generated cover from page 0 for gid=\(gid)")
         }
-        return resized
+        return img
         #else
-        return source
+        return nil
         #endif
     }
 
@@ -515,6 +546,9 @@ class DownloadManager: ObservableObject {
 
         LogManager.shared.log("Download", "nhentai download START: id=\(nhGallery.id) pages=\(totalPages)")
 
+        // 残り容量推定用バイト累計を初期化
+        initializeBytesCounter(gid: gid)
+
         #if canImport(UIKit)
         var bgTaskID: UIBackgroundTaskIdentifier = .invalid
         bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "NhDL-\(nhGallery.id)") {
@@ -620,6 +654,7 @@ class DownloadManager: ObservableObject {
             let index = completion.pageIndex
             if completion.success {
                 state.downloadedSet.insert(index)
+                addDownloadedBytes(gid: gid, page: index)
                 updateProgress(gid: gid, current: state.downloadedSet.count, total: totalPages)
                 pendingCount -= 1
             } else {
@@ -677,6 +712,7 @@ class DownloadManager: ObservableObject {
             let success = await downloadNhPage(gid: gid, galleryId: state.nhGalleryId, index: index, mediaId: state.nhMediaId ?? "", pageNum: index + 1, ext: nhPage3?.ext ?? "jpg", filePath: filePath, maxRetries: 3)
             if success {
                 state.downloadedSet.insert(index)
+                addDownloadedBytes(gid: gid, page: index)
                 updateProgress(gid: gid, current: state.downloadedSet.count, total: totalPages)
             } else {
                 state.failedPages.append((index: index, pageURL: state.allPageURLs[index]))
@@ -740,6 +776,21 @@ class DownloadManager: ObservableObject {
         }
     }
 
+    /// サーバー側の問題で永久 DL 失敗するページがある場合の救済:
+    /// 現在の downloadedPages だけで "完了" とマークし、auto-resume を停止
+    func markAsCompleteIgnoringMissing(gid: Int) {
+        guard var meta = downloads[gid] else { return }
+        meta.isComplete = true
+        meta.downloadDate = Date()
+        saveMetadata(meta)
+        if activeDownloads[gid] != nil {
+            activeDownloads[gid]?.isCancelled = true
+            activeDownloads.removeValue(forKey: gid)
+        }
+        endLiveActivity(gid: gid, success: true)
+        LogManager.shared.log("Download", "gid=\(gid) manually marked complete (missing \(meta.pageCount - meta.downloadedPages.count) pages)")
+    }
+
     func deleteDownload(gid: Int) {
         // 進行中タスクキャンセル + isCancelled 永続化（saveMetadata 経由で復活しない）
         if activeDownloads[gid] != nil {
@@ -751,14 +802,75 @@ class DownloadManager: ObservableObject {
         try? fileManager.removeItem(at: dir)
         downloads.removeValue(forKey: gid)
         activeDownloads.removeValue(forKey: gid)
+        coverCache.removeObject(forKey: NSNumber(value: gid))
     }
 
     /// @Published辞書のin-place mutationはSwiftUIに通知されないため、辞書を再代入して通知する
+    /// スロットルは cover cache 導入で再レンダーが安くなったので撤去（リアルタイム表示）
     private func updateProgress(gid: Int, current: Int, total: Int) {
         var updated = activeDownloads
         updated[gid] = DownloadProgress(current: current, total: total)
         activeDownloads = updated
         updateLiveActivity(gid: gid, current: current, total: total)
+    }
+
+    /// ギャラリーディレクトリ内の画像ファイル合計サイズをスキャンして初期化
+    /// auto-resume 時や performDownload 開始時に呼ぶ
+    func initializeBytesCounter(gid: Int) {
+        let dir = galleryDirectory(gid: gid)
+        guard let contents = try? fileManager.contentsOfDirectory(atPath: dir.path) else {
+            downloadedBytes[gid] = 0
+            initialOnDiskBytes[gid] = 0
+            BackgroundDownloadManager.shared.resetCumulativeBytes(for: gid)
+            return
+        }
+        var total: Int64 = 0
+        for name in contents where name != "meta.json" && name != "cover.jpg" {
+            let path = dir.appendingPathComponent(name).path
+            if let attrs = try? fileManager.attributesOfItem(atPath: path),
+               let size = attrs[.size] as? Int64 {
+                total += size
+            }
+        }
+        downloadedBytes[gid] = total
+        initialOnDiskBytes[gid] = total
+        BackgroundDownloadManager.shared.resetCumulativeBytes(for: gid)
+    }
+
+    /// リアルタイム表示用: 現在までに DL 済みのバイト総量
+    /// = 開始時点の on-disk 量 + 今セッション中に受信したバイト累計
+    func liveDownloadedBytes(gid: Int) -> Int64 {
+        let initial = initialOnDiskBytes[gid, default: 0]
+        let received = BackgroundDownloadManager.shared.totalBytesReceivedThisSession(for: gid)
+        return initial + received
+    }
+
+    /// 推定総容量: 完了ページの平均サイズ × 総ページ数
+    func estimatedTotalBytes(gid: Int, totalPages: Int, currentPages: Int) -> Int64? {
+        guard currentPages > 0 else { return nil }
+        let soFar = downloadedBytes[gid, default: 0]
+        guard soFar > 0 else { return nil }
+        let avg = soFar / Int64(currentPages)
+        return avg * Int64(totalPages)
+    }
+
+    /// ページ1枚DL完了時にバイト数加算
+    func addDownloadedBytes(gid: Int, page: Int) {
+        let path = imageFilePath(gid: gid, page: page)
+        if let attrs = try? fileManager.attributesOfItem(atPath: path.path),
+           let size = attrs[.size] as? Int64 {
+            downloadedBytes[gid, default: 0] += size
+        }
+    }
+
+    /// 残り容量推定（DL 済み平均サイズ × 残りページ数）
+    func estimatedRemainingBytes(gid: Int, totalPages: Int, currentPages: Int) -> Int64? {
+        guard currentPages > 0, currentPages < totalPages else { return nil }
+        let soFar = downloadedBytes[gid, default: 0]
+        guard soFar > 0 else { return nil }
+        let avg = soFar / Int64(currentPages)
+        let remaining = Int64(totalPages - currentPages)
+        return avg * remaining
     }
 
     // MARK: - ダウンロード実行
@@ -769,6 +881,9 @@ class DownloadManager: ObservableObject {
         galleryURLStr: String, host: GalleryHost
     ) async {
         LogManager.shared.log("Download", "performDownload START: gid=\(gid) pageCount=\(pageCount) url=\(galleryURLStr)")
+
+        // 残り容量推定用にバイト累計を初期化（既存ファイル込み）
+        initializeBytesCounter(gid: gid)
 
         // バックグラウンドタスクでアプリがバックグラウンドでも継続
         #if canImport(UIKit)
@@ -920,6 +1035,10 @@ class DownloadManager: ObservableObject {
                                 url: imageURL, gid: gid, pageIndex: index, finalPath: filePath,
                                 session: session, headers: ehHeaders
                             )
+                            // 末尾 5 ページは stuck 検知用にログ
+                            if index >= totalPages - 5 {
+                                LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) enqueue OK url=\(imageURL.absoluteString.suffix(80))")
+                            }
                         } catch {
                             LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) URL解決失敗: \(error.localizedDescription)")
                             // 失敗もstream経由で通知（mirror再試行はsecondpassで）
@@ -963,14 +1082,27 @@ class DownloadManager: ObservableObject {
             let index = completion.pageIndex
             if completion.success {
                 state.downloadedSet.insert(index)
+                addDownloadedBytes(gid: gid, page: index)
                 updateProgress(gid: gid, current: state.downloadedSet.count, total: totalPages)
             } else {
                 state.failedPages.append((index: index, pageURL: allPageURLs[index]))
+                LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) 1stpass FAIL (retriable=\(completion.retriable))")
             }
             pendingCount -= 1
+            // 残り5枚以下になったら詳細ログ（stuck 検知用）
+            if pendingCount > 0 && pendingCount <= 5 {
+                let missing = pendingIndices.filter { idx in
+                    !state.downloadedSet.contains(idx) &&
+                    !state.failedPages.contains(where: { $0.index == idx })
+                }
+                LogManager.shared.log("Download", "gid=\(gid) pending=\(pendingCount) stillMissing=\(missing.map { $0 + 1 })")
+            }
             if pendingCount <= 0 { break }
         }
         watchdog.cancel()
+        // stall で残ったURLSessionタスクを明示的 cancel（ghost completion 防止）
+        BackgroundDownloadManager.shared.cancelAllTasks(for: gid, session: session)
+        LogManager.shared.log("Download", "gid=\(gid) 1stpass exit: done=\(state.downloadedSet.count)/\(totalPages) failedPages=\(state.failedPages.map { $0.index + 1 })")
 
         // stall で強制finishした場合、未完了のpendingIndicesをfailedとしてsecondpassに回す
         for idx in pendingIndices where !state.downloadedSet.contains(idx) {
@@ -982,7 +1114,8 @@ class DownloadManager: ObservableObject {
         // セカンドパス: 失敗ページを再試行
         let allFailed = state.failedPages.filter { !state.downloadedSet.contains($0.index) }
         if !allFailed.isEmpty {
-            LogManager.shared.log("Download", "gid=\(gid) retrying \(allFailed.count) failed pages (2nd pass)")
+            let failedPageNums = allFailed.map { $0.index + 1 }
+            LogManager.shared.log("Download", "gid=\(gid) 2ndpass START retry=\(failedPageNums) (5s wait)")
             await ExtremeMode.shared.delay(nanoseconds: 5_000_000_000)
 
             for (index, pageURL) in allFailed {
@@ -990,18 +1123,22 @@ class DownloadManager: ObservableObject {
                 if state.downloadedSet.contains(index) { continue }
 
                 let filePath = imageFilePath(gid: gid, page: index)
+                LogManager.shared.log("Download", "gid=\(gid) 2ndpass page \(index + 1) start url=\(pageURL.absoluteString.suffix(60))")
                 let success = await downloadSinglePage(
                     gid: gid, index: index, pageURL: pageURL,
                     filePath: filePath, host: host, maxRetries: 3
                 )
                 if success {
                     state.downloadedSet.insert(index)
+                    addDownloadedBytes(gid: gid, page: index)
                     updateProgress(gid: gid, current: state.downloadedSet.count, total: totalPages)
+                    LogManager.shared.log("Download", "gid=\(gid) 2ndpass page \(index + 1) OK")
                 } else {
                     LogManager.shared.log("Download", "gid=\(gid) page \(index + 1)/\(totalPages) PERMANENTLY FAILED")
                 }
                 await ExtremeMode.shared.delay(nanoseconds: requestDelay)
             }
+            LogManager.shared.log("Download", "gid=\(gid) 2ndpass END: done=\(state.downloadedSet.count)/\(totalPages)")
         }
 
         // 完了処理
@@ -1054,6 +1191,7 @@ class DownloadManager: ObservableObject {
             )
             if success {
                 state.downloadedSet.insert(index)
+                addDownloadedBytes(gid: gid, page: index)
                 updateProgress(gid: gid, current: state.downloadedSet.count, total: totalPages)
             } else {
                 state.failedPages.append((index: index, pageURL: pageURL))
@@ -1081,6 +1219,7 @@ class DownloadManager: ObservableObject {
 
         for attempt in 1...maxRetries {
             do {
+                LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) attempt \(attempt): resolving URL")
                 // SSLエラーで失敗済みなら別ミラーを試す
                 let imageURL: URL
                 if usedMirror || attempt > 1 {
@@ -1089,6 +1228,7 @@ class DownloadManager: ObservableObject {
                 } else {
                     imageURL = try await client.fetchImageURL(pageURL: pageURL)
                 }
+                LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) attempt \(attempt): resolved → \(imageURL.absoluteString.suffix(80))")
 
                 await ExtremeMode.shared.delay(nanoseconds: requestDelay)
 
@@ -1097,12 +1237,14 @@ class DownloadManager: ObservableObject {
                     "Referer": host == .exhentai ? "https://exhentai.org/" : "https://e-hentai.org/",
                     "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
                 ]
+                LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) attempt \(attempt): downloadTask start")
                 let ok = await BackgroundDownloadManager.shared.downloadToFile(
                     url: imageURL,
                     session: BackgroundDownloadManager.shared.ehSession,
                     finalPath: filePath,
                     headers: headers
                 )
+                LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) attempt \(attempt): downloadTask done ok=\(ok)")
                 guard ok, BackgroundDownloadManager.isValidImageFile(at: filePath) else {
                     try? FileManager.default.removeItem(at: filePath)
                     LogManager.shared.log("Download", "gid=\(gid) page \(index + 1): invalid/empty (attempt \(attempt)/\(maxRetries))")
