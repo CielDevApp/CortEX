@@ -17,7 +17,8 @@ extension Notification.Name {
 /// - 変換中: ポスター + ProgressView
 /// - 変換済: AVPlayerLayer でループ再生
 struct AnimatedVideoView: View {
-    let sourceData: Data
+    /// WebP/GIFのファイルパス（ディスクベース、Dataメモリ保持しない）
+    let sourceURL: URL
     let gid: Int
     let page: Int
     /// タップで自動変換する（false なら再生ボタンのタップで開始）
@@ -27,6 +28,7 @@ struct AnimatedVideoView: View {
     @State private var progress: Double = 0
     @State private var posterImage: UIImage?
     @State private var convertedURL: URL?
+    @State private var showReconvertDialog: Bool = false
 
     enum Status {
         case notConverted
@@ -48,7 +50,8 @@ struct AnimatedVideoView: View {
             switch status {
             case .notConverted:
                 Button {
-                    startConvert()
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    showReconvertDialog = true
                 } label: {
                     ZStack {
                         Circle().fill(.black.opacity(0.55)).frame(width: 72, height: 72)
@@ -76,6 +79,10 @@ struct AnimatedVideoView: View {
             case .ready:
                 if let url = convertedURL {
                     LoopingPlayerView(url: url)
+                        .onLongPressGesture(minimumDuration: 0.6) {
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                            showReconvertDialog = true
+                        }
                 }
 
             case .failed(let msg):
@@ -90,30 +97,52 @@ struct AnimatedVideoView: View {
         }
         .onAppear {
             loadPoster()
-            // .ok マーカー有り = 正常変換済み
             if WebPToMP4Converter.isFullyConverted(gid: gid, page: page) {
                 convertedURL = WebPToMP4Converter.mp4Path(gid: gid, page: page)
                 status = .ready
             } else {
-                // 中途半端な mp4 があれば掃除（.ok なし）
                 WebPToMP4Converter.cleanupStaleIfNeeded(gid: gid, page: page)
                 if autoStart { startConvert() }
             }
         }
+        .confirmationDialog("画質を選択", isPresented: $showReconvertDialog, titleVisibility: .visible) {
+            Button("標準画質") { reconvert(original: false) }
+            Button("オリジナル画質") { reconvert(original: true) }
+            Button("キャンセル", role: .cancel) { }
+        } message: {
+            Text("MP4に変換して再生します")
+        }
+    }
+
+    /// 既存 MP4 削除 → 指定画質で再変換
+    private func reconvert(original: Bool) {
+        let url = WebPToMP4Converter.mp4Path(gid: gid, page: page)
+        let ok = WebPToMP4Converter.okMarkerURL(for: url)
+        try? FileManager.default.removeItem(at: url)
+        try? FileManager.default.removeItem(at: ok)
+        convertedURL = nil
+        status = .notConverted
+        LogManager.shared.log("Convert", "reconvert triggered gid=\(gid) page=\(page) original=\(original)")
+        startConvert(forceOriginal: original)
     }
 
     private func loadPoster() {
         guard posterImage == nil else { return }
-        let data = sourceData
+        let url = sourceURL
         Task.detached(priority: .userInitiated) {
-            guard let src = CGImageSourceCreateWithData(data as CFData, nil),
-                  let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return }
+            // URL ベース mmap 経由でポスター decode。サムネ縮小で小さく
+            let opts: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceThumbnailMaxPixelSize: 540
+            ]
+            guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return }
             let img = UIImage(cgImage: cg)
             await MainActor.run { self.posterImage = img }
         }
     }
 
-    private func startConvert() {
+    private func startConvert(forceOriginal: Bool = false) {
         switch status {
         case .notConverted, .failed: break
         default: return
@@ -124,10 +153,11 @@ struct AnimatedVideoView: View {
         // 変換中は他の AVPlayer を停止させる（メモリ圧回避）
         NotificationCenter.default.post(name: .webpConvertDidStart, object: nil)
         let url = WebPToMP4Converter.mp4Path(gid: gid, page: page)
-        let data = sourceData
+        let srcURL = sourceURL
         Task.detached(priority: .userInitiated) {
             do {
-                try await WebPToMP4Converter.convert(data: data, outputURL: url) { p in
+                let maxDim: CGFloat? = forceOriginal ? .greatestFiniteMagnitude : nil
+                try await WebPToMP4Converter.convert(sourceURL: srcURL, outputURL: url, maxPixelSize: maxDim) { p in
                     progress = p
                 }
                 await MainActor.run {

@@ -13,9 +13,6 @@ struct GalleryReaderView: View {
     @State private var jumpPageText = ""
     @State private var dragOffset: CGFloat = 0
     @State private var zoomImage: PlatformImage?
-    #if canImport(UIKit)
-    @State private var zoomAnimSource: AnimatedImageSource?
-    #endif
     @State private var sliderValue: Double = 0
     @State private var isSliding = false
     @State private var showPageOverlay = false
@@ -99,26 +96,11 @@ struct GalleryReaderView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
-            #if canImport(UIKit)
-            if let animSrc = zoomAnimSource {
-                ZoomableAnimatedOverlay(source: animSrc) {
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        zoomAnimSource = nil
-                        zoomImage = nil
-                    }
-                }
-            } else if let img = zoomImage {
-                ZoomableImageOverlay(image: img) {
-                    withAnimation(.easeOut(duration: 0.2)) { zoomImage = nil }
-                }
-            }
-            #else
             if let img = zoomImage {
                 ZoomableImageOverlay(image: img) {
                     withAnimation(.easeOut(duration: 0.2)) { zoomImage = nil }
                 }
             }
-            #endif
 
 
 
@@ -382,8 +364,7 @@ struct GalleryReaderView: View {
             onRetry: { viewModel.retry(index: index) },
             isHorizontalMode: readerDirection == 1,
             isActiveAnimation: index == viewModel.currentIndex,
-            mp4Gid: gallery.gid,
-            onTapAnimated: { src in zoomAnimSource = src; zoomImage = PlatformImage() }
+            mp4Gid: gallery.gid
         )
         #else
         PageCellView(

@@ -397,12 +397,11 @@ struct LocalReaderView: View {
     @ViewBuilder
     private func localPageCell(index: Int) -> some View {
         #if canImport(UIKit)
-        // アニメGIF/WebPはMP4変換→AVPlayerで再生
-        if let data = DownloadManager.shared.loadLocalImageData(gid: meta.gid, page: index),
-           AnimatedImageDecoder.isAnimated(data: data),
-           let animSrc = AnimatedImageSource.make(data: data) {
-            AnimatedVideoView(sourceData: data, gid: meta.gid, page: index, autoStart: false)
-                .aspectRatio(animSrc.pixelSize, contentMode: .fit)
+        // アニメGIF/WebPはMP4変換→AVPlayerで再生（ディスクベース、Dataメモリ持たない）
+        let fileURL = DownloadManager.shared.imageFilePath(gid: meta.gid, page: index)
+        if FileManager.default.fileExists(atPath: fileURL.path),
+           AnimatedImageDecoder.isAnimatedFile(url: fileURL) {
+            AnimatedVideoView(sourceURL: fileURL, gid: meta.gid, page: index, autoStart: false)
                 .frame(maxWidth: .infinity, maxHeight: isHorizontal ? .infinity : nil, alignment: isHorizontal ? .center : .top)
         } else {
             animatedOrStaticBody(index: index)

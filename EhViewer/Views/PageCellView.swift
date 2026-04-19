@@ -15,9 +15,6 @@ struct PageCellView: View {
     var isActiveAnimation: Bool = false
     /// MP4 変換用の gid（アニメ画像検知時のみ利用）
     var mp4Gid: Int = 0
-    #if canImport(UIKit)
-    var onTapAnimated: ((AnimatedImageSource) -> Void)? = nil
-    #endif
 
     var body: some View {
         if isHorizontalMode {
@@ -40,9 +37,8 @@ struct PageCellView: View {
     private var horizontalBody: some View {
         ZStack {
             #if canImport(UIKit)
-            if let animSrc = holder.animatedSource {
-                AnimatedVideoView(sourceData: animSrc.rawData, gid: mp4Gid, page: index, autoStart: false)
-                    .aspectRatio(animSrc.pixelSize, contentMode: .fit)
+            if let animURL = holder.animatedFileURL {
+                AnimatedVideoView(sourceURL: animURL, gid: mp4Gid, page: index, autoStart: false)
                     .frame(width: Self.screenSize.width, height: Self.screenSize.height)
             } else if let image = holder.image {
                 Image(platformImage: image)
@@ -93,16 +89,12 @@ struct PageCellView: View {
     private var verticalBody: some View {
         Group {
             #if canImport(UIKit)
-            if let animSrc = holder.animatedSource {
-                AnimatedVideoView(sourceData: animSrc.rawData, gid: mp4Gid, page: index, autoStart: false)
-                    .aspectRatio(animSrc.pixelSize, contentMode: .fit)
+            if let animURL = holder.animatedFileURL {
+                AnimatedVideoView(sourceURL: animURL, gid: mp4Gid, page: index, autoStart: false)
                     .frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        if verticalSizeClass == .regular {
-                            if let cb = onTapAnimated { cb(animSrc) }
-                            else if let img = holder.image { onTap(img) }
-                        }
+                        if verticalSizeClass == .regular, let img = holder.image { onTap(img) }
                     }
             } else if let image = holder.image {
                 ZStack(alignment: .top) {

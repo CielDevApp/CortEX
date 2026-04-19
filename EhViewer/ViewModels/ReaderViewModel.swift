@@ -133,6 +133,13 @@ class ReaderViewModel: ObservableObject {
 
     func onDisappear(index: Int) {
         let distance = abs(index - currentIndex)
+        // アニメ source (rawData ~17MB) は距離 3 超えたら即解放
+        if distance > 3 {
+            if pageHolders[index]?.animatedFileURL != nil {
+                pageHolders[index]?.animatedFileURL = nil
+                completedPages.remove(index)  // 再表示時に loadSingle で作り直す
+            }
+        }
         if distance > 50 {
             pageHolders.removeValue(forKey: index)
             rawImages.removeValue(forKey: index)
