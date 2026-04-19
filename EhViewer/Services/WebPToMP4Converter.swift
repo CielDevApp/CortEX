@@ -102,13 +102,6 @@ enum WebPToMP4Converter {
         progress: (@MainActor (Double) -> Void)? = nil,
         frameCallback: (@Sendable (CGImage) -> Void)? = nil
     ) async throws {
-        // 冪等化: 既に変換完了 (.ok マーカー存在) なら semaphore 取らず即 return
-        // prefetch タスクと現ページの convert 要求が重なっても無駄仕事しない
-        if FileManager.default.fileExists(atPath: okMarkerURL(for: outputURL).path),
-           FileManager.default.fileExists(atPath: outputURL.path) {
-            return
-        }
-
         // 同時変換1本に絞る: 2ページ目開始時のOOM回避
         await Self.concurrencyLimit.wait()
         defer { Self.concurrencyLimit.signal() }
@@ -116,12 +109,6 @@ enum WebPToMP4Converter {
         // キュー待ち中に表示から消えた（ユーザが素早くスワイプ等）場合は変換を放棄
         // → 100ページの動画作品を一気にスクロールしても queue が詰まらない
         try Task.checkCancellation()
-
-        // semaphore 待ち中に他タスクが完成させた可能性 → 再チェック
-        if FileManager.default.fileExists(atPath: okMarkerURL(for: outputURL).path),
-           FileManager.default.fileExists(atPath: outputURL.path) {
-            return
-        }
 
         // 診断: libwebp 利用可否 + WebP 検知結果を明示ログ
         let libwebpAvailable = WebPLibSupport.isAvailable
