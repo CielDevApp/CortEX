@@ -20,13 +20,17 @@ enum KeychainService: Sendable {
             // 存在しなければ新規追加
             var newItem = query
             newItem[kSecValueData as String] = data
-            SecItemAdd(newItem as CFDictionary, nil)
+            let addStatus = SecItemAdd(newItem as CFDictionary, nil)
+            LogManager.shared.log("Keychain", "add key=\(key) status=\(addStatus)")
         } else if status != errSecSuccess {
-            // 更新失敗 → 全削除して再追加
+            LogManager.shared.log("Keychain", "update failed key=\(key) status=\(status), retrying delete+add")
             SecItemDelete(query as CFDictionary)
             var newItem = query
             newItem[kSecValueData as String] = data
-            SecItemAdd(newItem as CFDictionary, nil)
+            let addStatus = SecItemAdd(newItem as CFDictionary, nil)
+            LogManager.shared.log("Keychain", "retry add key=\(key) status=\(addStatus)")
+        } else {
+            LogManager.shared.log("Keychain", "update ok key=\(key)")
         }
     }
 
