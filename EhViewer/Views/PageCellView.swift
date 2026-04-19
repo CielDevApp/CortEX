@@ -40,7 +40,7 @@ struct PageCellView: View {
         ZStack {
             #if canImport(UIKit)
             if let animURL = holder.animatedFileURL {
-                AnimatedVideoView(sourceURL: animURL, gid: mp4Gid, page: index, autoStart: false, onToggleControls: onToggleControls)
+                AnimatedVideoView(sourceURL: animURL, gid: mp4Gid, page: index, onToggleControls: onToggleControls)
                     .frame(width: Self.screenSize.width, height: Self.screenSize.height)
             } else if let image = holder.image {
                 Image(platformImage: image)
@@ -92,7 +92,7 @@ struct PageCellView: View {
         Group {
             #if canImport(UIKit)
             if let animURL = holder.animatedFileURL {
-                AnimatedVideoView(sourceURL: animURL, gid: mp4Gid, page: index, autoStart: false, onToggleControls: onToggleControls)
+                AnimatedVideoView(sourceURL: animURL, gid: mp4Gid, page: index, onToggleControls: onToggleControls)
                     .frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
                     .onTapGesture {

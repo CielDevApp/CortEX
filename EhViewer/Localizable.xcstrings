@@ -528,9 +528,6 @@
         }
       }
     },
-    "%lld%%" : {
-
-    },
     "%lld×%lld" : {
       "localizations" : {
         "ja" : {

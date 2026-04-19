@@ -83,6 +83,10 @@ enum WebPToMP4Converter {
         await Self.concurrencyLimit.wait()
         defer { Self.concurrencyLimit.signal() }
 
+        // キュー待ち中に表示から消えた（ユーザが素早くスワイプ等）場合は変換を放棄
+        // → 100ページの動画作品を一気にスクロールしても queue が詰まらない
+        try Task.checkCancellation()
+
         // 診断: libwebp 利用可否 + WebP 検知結果を明示ログ
         let libwebpAvailable = WebPLibSupport.isAvailable
         let isAnimatedWebP = WebPFileDetector.isAnimatedWebP(url: sourceURL)

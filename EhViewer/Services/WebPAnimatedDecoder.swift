@@ -157,4 +157,23 @@ enum WebPFileDetector {
         let anim: [UInt8] = [0x41, 0x4E, 0x49, 0x4D]
         return head.range(of: Data(anim)) != nil
     }
+
+    /// WebPのキャンバスサイズを同期取得（VP8Xチャンクから。アニメWebP専用）
+    /// libwebp不要 → View生成時の即時アスペクト比確定に利用
+    /// - VP8X payload: flags(1) + reserved(3) + canvas_w-1(3LE) + canvas_h-1(3LE)
+    /// - VP8X chunk は RIFFヘッダ直後 (offset 12)、payload は offset 20 から始まる
+    static func readCanvasSize(url: URL) -> CGSize? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let head = try? handle.read(upToCount: 30), head.count >= 30 else { return nil }
+        let bytes = [UInt8](head)
+        // RIFF...WEBPVP8X 判定
+        guard bytes[0] == 0x52, bytes[1] == 0x49, bytes[2] == 0x46, bytes[3] == 0x46,
+              bytes[8] == 0x57, bytes[9] == 0x45, bytes[10] == 0x42, bytes[11] == 0x50,
+              bytes[12] == 0x56, bytes[13] == 0x50, bytes[14] == 0x38, bytes[15] == 0x58
+        else { return nil }
+        let w = Int(bytes[24]) | (Int(bytes[25]) << 8) | (Int(bytes[26]) << 16)
+        let h = Int(bytes[27]) | (Int(bytes[28]) << 8) | (Int(bytes[29]) << 16)
+        return CGSize(width: w + 1, height: h + 1)
+    }
 }
