@@ -1,0 +1,281 @@
+import SwiftUI
+import AVFoundation
+#if canImport(UIKit)
+import UIKit
+
+extension Notification.Name {
+    /// 変換開始時に全 AVPlayer を停止させる通知
+    static let webpConvertDidStart = Notification.Name("WebPConvertDidStart")
+    /// 変換終了時に再生再開させる通知
+    static let webpConvertDidEnd = Notification.Name("WebPConvertDidEnd")
+}
+
+/// ダウンロード済み WebP アニメ → MP4 変換 + AVPlayer ループ再生ビュー。
+///
+/// 状態遷移:
+/// - 未変換: ポスター（先頭フレーム）+ 再生ボタン overlay → タップで変換開始
+/// - 変換中: ポスター + ProgressView
+/// - 変換済: AVPlayerLayer でループ再生
+struct AnimatedVideoView: View {
+    let sourceData: Data
+    let gid: Int
+    let page: Int
+    /// タップで自動変換する（false なら再生ボタンのタップで開始）
+    var autoStart: Bool = false
+
+    @State private var status: Status = .notConverted
+    @State private var progress: Double = 0
+    @State private var posterImage: UIImage?
+    @State private var convertedURL: URL?
+
+    enum Status {
+        case notConverted
+        case converting
+        case ready
+        case failed(String)
+    }
+
+    var body: some View {
+        ZStack {
+            if let posterImage {
+                Image(uiImage: posterImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                Color.black
+            }
+
+            switch status {
+            case .notConverted:
+                Button {
+                    startConvert()
+                } label: {
+                    ZStack {
+                        Circle().fill(.black.opacity(0.55)).frame(width: 72, height: 72)
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 32))
+                            .foregroundStyle(.white)
+                            .offset(x: 3)
+                    }
+                }
+                .buttonStyle(.plain)
+
+            case .converting:
+                ZStack {
+                    Circle().fill(.black.opacity(0.55)).frame(width: 72, height: 72)
+                    VStack(spacing: 4) {
+                        ProgressView(value: progress)
+                            .progressViewStyle(.circular)
+                            .tint(.white)
+                        Text("\(Int(progress * 100))%")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.white)
+                    }
+                }
+
+            case .ready:
+                if let url = convertedURL {
+                    LoopingPlayerView(url: url)
+                }
+
+            case .failed(let msg):
+                VStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+                    Text("変換失敗").font(.caption).foregroundStyle(.white)
+                    Text(msg).font(.caption2).foregroundStyle(.gray).lineLimit(2)
+                    Button("再試行") { startConvert() }
+                        .buttonStyle(.bordered).tint(.white)
+                }
+            }
+        }
+        .onAppear {
+            loadPoster()
+            // .ok マーカー有り = 正常変換済み
+            if WebPToMP4Converter.isFullyConverted(gid: gid, page: page) {
+                convertedURL = WebPToMP4Converter.mp4Path(gid: gid, page: page)
+                status = .ready
+            } else {
+                // 中途半端な mp4 があれば掃除（.ok なし）
+                WebPToMP4Converter.cleanupStaleIfNeeded(gid: gid, page: page)
+                if autoStart { startConvert() }
+            }
+        }
+    }
+
+    private func loadPoster() {
+        guard posterImage == nil else { return }
+        let data = sourceData
+        Task.detached(priority: .userInitiated) {
+            guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+                  let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return }
+            let img = UIImage(cgImage: cg)
+            await MainActor.run { self.posterImage = img }
+        }
+    }
+
+    private func startConvert() {
+        switch status {
+        case .notConverted, .failed: break
+        default: return
+        }
+        LogManager.shared.log("Convert", "startConvert tapped gid=\(gid) page=\(page)")
+        status = .converting
+        progress = 0
+        // 変換中は他の AVPlayer を停止させる（メモリ圧回避）
+        NotificationCenter.default.post(name: .webpConvertDidStart, object: nil)
+        let url = WebPToMP4Converter.mp4Path(gid: gid, page: page)
+        let data = sourceData
+        Task.detached(priority: .userInitiated) {
+            do {
+                try await WebPToMP4Converter.convert(data: data, outputURL: url) { p in
+                    progress = p
+                }
+                await MainActor.run {
+                    convertedURL = url
+                    status = .ready
+                    progress = 1
+                    NotificationCenter.default.post(name: .webpConvertDidEnd, object: nil)
+                }
+            } catch {
+                LogManager.shared.log("Convert", "THROWN: \(error)")
+                await MainActor.run {
+                    status = .failed(String(describing: error))
+                    NotificationCenter.default.post(name: .webpConvertDidEnd, object: nil)
+                }
+            }
+        }
+    }
+}
+
+/// AVPlayerLayer で ループ再生する UIViewRepresentable
+struct LoopingPlayerView: UIViewRepresentable {
+    let url: URL
+
+    func makeUIView(context: Context) -> PlayerContainerView {
+        let v = PlayerContainerView()
+        v.setURL(url)
+        return v
+    }
+
+    func updateUIView(_ uiView: PlayerContainerView, context: Context) {
+        uiView.setURL(url)
+    }
+}
+
+final class PlayerContainerView: UIView {
+    override class var layerClass: AnyClass { AVPlayerLayer.self }
+    private var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+    private var player: AVPlayer?
+    private var endObserver: Any?
+    private var convertStartObserver: Any?
+    private var convertEndObserver: Any?
+    private var statusObserver: NSKeyValueObservation?
+    private var currentURL: URL?
+    private var isSuspendedForConvert: Bool = false
+
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        attachConvertObservers()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        attachConvertObservers()
+    }
+
+    private func attachConvertObservers() {
+        convertStartObserver = NotificationCenter.default.addObserver(
+            forName: .webpConvertDidStart, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.player != nil else { return }
+            self.isSuspendedForConvert = true
+            self.stop()  // 完全に解放してメモリ返却
+        }
+        convertEndObserver = NotificationCenter.default.addObserver(
+            forName: .webpConvertDidEnd, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.isSuspendedForConvert else { return }
+            self.isSuspendedForConvert = false
+            if let url = self.currentURL, self.window != nil {
+                self.rebuildPlayer(url: url)
+            }
+        }
+    }
+
+    func setURL(_ url: URL) {
+        if currentURL == url, player != nil { return }
+        currentURL = url
+        rebuildPlayer(url: url)
+    }
+
+    private func rebuildPlayer(url: URL) {
+        stopInternal()
+        let item = AVPlayerItem(asset: AVURLAsset(url: url))
+        let p = AVPlayer(playerItem: item)
+        p.isMuted = true
+        p.actionAtItemEnd = .none
+        playerLayer.player = p
+        playerLayer.videoGravity = .resizeAspect
+
+        endObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak p] _ in
+            p?.seek(to: .zero)
+            p?.play()
+        }
+
+        // .readyToPlay になってから再生開始（新規書き込みMP4の読み込み待機）
+        statusObserver = item.observe(\.status, options: [.new, .initial]) { [weak p] item, _ in
+            DispatchQueue.main.async {
+                switch item.status {
+                case .readyToPlay:
+                    p?.play()
+                case .failed:
+                    LogManager.shared.log("Player", "item failed: \(item.error?.localizedDescription ?? "unknown")")
+                default:
+                    break
+                }
+            }
+        }
+
+        self.player = p
+    }
+
+    func stop() {
+        stopInternal()
+    }
+
+    private func stopInternal() {
+        player?.pause()
+        if let obs = endObserver {
+            NotificationCenter.default.removeObserver(obs)
+            endObserver = nil
+        }
+        statusObserver?.invalidate()
+        statusObserver = nil
+        playerLayer.player = nil
+        player = nil
+    }
+
+    override func willMove(toWindow newWindow: UIWindow?) {
+        super.willMove(toWindow: newWindow)
+        if newWindow == nil {
+            player?.pause()
+        } else if !isSuspendedForConvert {
+            player?.play()
+        }
+    }
+
+    deinit {
+        if let obs = convertStartObserver { NotificationCenter.default.removeObserver(obs) }
+        if let obs = convertEndObserver { NotificationCenter.default.removeObserver(obs) }
+        stopInternal()
+    }
+}
+#endif

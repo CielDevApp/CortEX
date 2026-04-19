@@ -18,6 +18,8 @@ struct DownloadedGallery: Codable, Identifiable, Sendable {
     var isComplete: Bool
     var downloadedPages: [Int]
     var source: String?  // "ehentai" or "nhentai"（nilは旧データ=ehentai）
+    /// 明示的にキャンセルされたか（trueなら起動時autoResumeをスキップ）
+    var isCancelled: Bool? = nil
 
     var id: Int { gid }
     nonisolated var directoryName: String { "\(gid)" }
@@ -110,9 +112,11 @@ class DownloadManager: ObservableObject {
         liveActivities.removeAll()
     }
 
-    /// 未完了ダウンロードを自動再開
+    /// 未完了ダウンロードを自動再開（キャンセル済みはスキップ）
     private func resumeIncompleteDownloads() async {
-        let incompleteItems = downloads.filter { !$0.value.isComplete && !$0.value.token.isEmpty }
+        let incompleteItems = downloads.filter {
+            !$0.value.isComplete && !$0.value.token.isEmpty && $0.value.isCancelled != true
+        }
         if incompleteItems.isEmpty { return }
         LogManager.shared.log("Download", "found \(incompleteItems.count) incomplete downloads to resume")
 
@@ -215,6 +219,13 @@ class DownloadManager: ObservableObject {
         let path = imageFilePath(gid: gid, page: page)
         guard fileManager.fileExists(atPath: path.path) else { return nil }
         return PlatformImage(contentsOfFile: path.path)
+    }
+
+    /// ローカル画像のData（アニメGIF/WebP判定用）
+    func loadLocalImageData(gid: Int, page: Int) -> Data? {
+        let path = imageFilePath(gid: gid, page: page)
+        guard fileManager.fileExists(atPath: path.path) else { return nil }
+        return try? Data(contentsOf: path)
     }
 
     func loadCoverImage(gid: Int) -> PlatformImage? {
@@ -431,8 +442,13 @@ class DownloadManager: ObservableObject {
         LogManager.shared.log("Download", "  galleryURL=\(galleryURLStr)")
         LogManager.shared.log("Download", "  coverURL=\(coverURL?.absoluteString ?? "nil")")
 
-        // メタデータを即座に保存
-        if downloads[gid] == nil {
+        // メタデータを即座に保存（既存ありならキャンセルフラグのみリセット）
+        if var existing = downloads[gid] {
+            if existing.isCancelled == true {
+                existing.isCancelled = false
+                saveMetadata(existing)
+            }
+        } else {
             let meta = DownloadedGallery(
                 gid: gid, token: token, title: title,
                 coverFileName: "cover.jpg", pageCount: pageCount,
@@ -469,7 +485,12 @@ class DownloadManager: ObservableObject {
 
         LogManager.shared.log("Download", "startNhentaiDownload: id=\(gallery.id) pages=\(gallery.num_pages) title=\(gallery.displayTitle)")
 
-        if downloads[gid] == nil {
+        if var existing = downloads[gid] {
+            if existing.isCancelled == true {
+                existing.isCancelled = false
+                saveMetadata(existing)
+            }
+        } else {
             let meta = DownloadedGallery(
                 gid: gid, token: "nh_\(gallery.media_id)", title: gallery.displayTitle,
                 coverFileName: "cover.jpg", pageCount: gallery.num_pages,
@@ -544,77 +565,82 @@ class DownloadManager: ObservableObject {
 
         updateProgress(gid: gid, current: state.downloadedSet.count, total: totalPages)
 
-        // エクストリーム時は後方DL
-        if ExtremeMode.shared.isEnabled && !EcoMode.shared.isEnabled {
-            state.backwardRunning = true
-            state.backwardCancelled = false
-            Task(priority: .high) {
-                await self.performNhBackward(gid: gid, nhGallery: nhGallery)
-            }
-        }
+        // Batch enqueue方式: 全ページを background URLSession に一括投入
+        // → アプリsuspend中もiOSが処理継続
+        // → 各完了は AsyncStream で受領してprogress更新
+        let stream = BackgroundDownloadManager.shared.makeStream(for: gid)
+        // ページごとの候補URL配列（retry用）
+        var candidates: [Int: [URL]] = [:]
+        let session = BackgroundDownloadManager.shared.nhSession
+        let nhHeaders = ["Referer": "https://nhentai.net/"]
 
-        // 前方DL
+        // 既存ファイル + 未DL分の候補URL準備（事前に全部計算）
         for index in 0..<totalPages {
-            if activeDownloads[gid]?.isCancelled == true {
-                state.backwardCancelled = true
-                activeDownloads.removeValue(forKey: gid)
-                meta.downloadedPages = Array(state.downloadedSet)
-                saveMetadata(meta)
-                biDirStates.removeValue(forKey: gid)
-                return
-            }
-
             if state.downloadedSet.contains(index) { continue }
             let filePath = imageFilePath(gid: gid, page: index)
             if fileManager.fileExists(atPath: filePath.path) {
                 state.downloadedSet.insert(index)
                 continue
             }
+            let nhPage = state.nhPages?[index]
+            let urls = await NhentaiClient.candidateImageURLs(
+                galleryId: state.nhGalleryId,
+                mediaId: state.nhMediaId ?? "",
+                page: index + 1,
+                ext: nhPage?.ext ?? "jpg"
+            )
+            candidates[index] = urls
+        }
 
-            while NetworkMonitor.shared.shouldPauseDownload {
-                if activeDownloads[gid]?.isCancelled == true { break }
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+        updateProgress(gid: gid, current: state.downloadedSet.count, total: totalPages)
+        LogManager.shared.log("Download", "nhentai batch enqueue: gid=\(gid) pending=\(candidates.count)")
+
+        // 最初の候補URLをすべて一括enqueue（suspend耐性）
+        for (index, urls) in candidates {
+            guard let firstURL = urls.first else { continue }
+            let filePath = imageFilePath(gid: gid, page: index)
+            BackgroundDownloadManager.shared.enqueue(
+                url: firstURL, gid: gid, pageIndex: index, finalPath: filePath,
+                session: session, headers: nhHeaders
+            )
+        }
+
+        // 完了ストリームから順次進捗更新
+        // ページごとに試行した候補インデックス
+        var candidateTriedCount: [Int: Int] = [:]  // index → 試した候補数
+        for index in candidates.keys { candidateTriedCount[index] = 1 }  // 既に1回enqueue済み
+        var pendingCount = candidates.count
+
+        for await completion in stream {
+            if activeDownloads[gid]?.isCancelled == true {
+                BackgroundDownloadManager.shared.cancelAllTasks(for: gid, session: session)
+                break
             }
 
-            let nhPage = state.nhPages?[index]
-            let success = await downloadNhPage(gid: gid, galleryId: state.nhGalleryId, index: index, mediaId: state.nhMediaId ?? "", pageNum: index + 1, ext: nhPage?.ext ?? "jpg", filePath: filePath, maxRetries: 3)
-            if success {
+            let index = completion.pageIndex
+            if completion.success {
                 state.downloadedSet.insert(index)
                 updateProgress(gid: gid, current: state.downloadedSet.count, total: totalPages)
+                pendingCount -= 1
             } else {
-                state.failedPages.append((index: index, pageURL: allPageURLs[index]))
-            }
-
-            // リーダー表示中は帯域をリーダーに譲る（1.5秒スロットル）
-            if await Self.isReaderActive(gid: gid) {
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
-            }
-
-            if state.downloadedSet.count >= totalPages { break }
-        }
-
-        // 後方DL待ち
-        while state.backwardRunning {
-            try? await Task.sleep(nanoseconds: 200_000_000)
-        }
-
-        // セカンドパス
-        let allFailed = state.failedPages.filter { !state.downloadedSet.contains($0.index) }
-        if !allFailed.isEmpty {
-            LogManager.shared.log("Download", "nhentai retrying \(allFailed.count) failed pages")
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-            for (index, url) in allFailed {
-                if activeDownloads[gid]?.isCancelled == true { break }
-                if state.downloadedSet.contains(index) { continue }
-                let filePath = imageFilePath(gid: gid, page: index)
-                let nhPage2 = state.nhPages?[index]
-                let success = await downloadNhPage(gid: gid, galleryId: state.nhGalleryId, index: index, mediaId: state.nhMediaId ?? "", pageNum: index + 1, ext: nhPage2?.ext ?? "jpg", filePath: filePath, maxRetries: 3)
-                if success {
-                    state.downloadedSet.insert(index)
-                    updateProgress(gid: gid, current: state.downloadedSet.count, total: totalPages)
+                // 次の候補URLでretry
+                let tried = candidateTriedCount[index] ?? 0
+                let urls = candidates[index] ?? []
+                if tried < urls.count {
+                    let nextURL = urls[tried]
+                    candidateTriedCount[index] = tried + 1
+                    let filePath = imageFilePath(gid: gid, page: index)
+                    BackgroundDownloadManager.shared.enqueue(
+                        url: nextURL, gid: gid, pageIndex: index, finalPath: filePath,
+                        session: session, headers: nhHeaders
+                    )
+                } else {
+                    // 全候補失敗
+                    state.failedPages.append((index: index, pageURL: urls.first ?? URL(string: "about:blank")!))
+                    pendingCount -= 1
                 }
-                // セカンドパスも即座にリトライ
             }
+            if pendingCount <= 0 { break }
         }
 
         meta.downloadedPages = Array(state.downloadedSet)
@@ -662,28 +688,48 @@ class DownloadManager: ObservableObject {
 
     /// nhentai単一ページDL（CDN動的解決付きリトライ）
     private func downloadNhPage(gid: Int, galleryId: Int, index: Int, mediaId: String, pageNum: Int, ext: String, filePath: URL, maxRetries: Int) async -> Bool {
+        // Background URLSessionを使用 → アプリsuspend中もDL継続
+        let urls = await NhentaiClient.candidateImageURLs(galleryId: galleryId, mediaId: mediaId, page: pageNum, ext: ext)
         for attempt in 1...maxRetries {
-            do {
-                let data = try await NhentaiClient.fetchPageImage(galleryId: galleryId, mediaId: mediaId, page: pageNum, ext: ext)
-                try data.write(to: filePath)
-                return true
-            } catch {
-                LogManager.shared.log("Download", "nhentai page \(index + 1): \(error.localizedDescription) (attempt \(attempt)/\(maxRetries))")
-                if attempt < maxRetries { try? await Task.sleep(nanoseconds: UInt64(attempt) * 3_000_000_000) }
+            for url in urls {
+                let ok = await BackgroundDownloadManager.shared.downloadToFile(
+                    url: url,
+                    session: BackgroundDownloadManager.shared.nhSession,
+                    finalPath: filePath,
+                    headers: ["Referer": "https://nhentai.net/"]
+                )
+                if ok, BackgroundDownloadManager.isValidImageFile(at: filePath) {
+                    return true
+                }
+                // 無効ファイル（HTMLなど）は削除して次のCDN試行
+                try? FileManager.default.removeItem(at: filePath)
+            }
+            if attempt < maxRetries {
+                try? await Task.sleep(nanoseconds: UInt64(attempt) * 3_000_000_000)
             }
         }
+        LogManager.shared.log("Download", "nhentai page \(index + 1) all CDNs failed after \(maxRetries) attempts")
         return false
     }
 
     func cancelDownload(gid: Int) {
         activeDownloads[gid]?.isCancelled = true
+        // 永続化: 起動時autoResumeをスキップさせる
+        if var meta = downloads[gid] {
+            meta.isCancelled = true
+            saveMetadata(meta)
+        }
     }
 
-    /// 未完了ダウンロードをすべて手動再開
+    /// 未完了ダウンロードをすべて手動再開（キャンセル済みも含めてリセット）
     func resumeAllIncomplete() {
         let incomplete = downloads.filter { !$0.value.isComplete && !$0.value.token.isEmpty && activeDownloads[$0.key] == nil }
         LogManager.shared.log("Download", "resumeAllIncomplete: \(incomplete.count) items")
-        for (gid, meta) in incomplete {
+        for (gid, var meta) in incomplete {
+            if meta.isCancelled == true {
+                meta.isCancelled = false
+                saveMetadata(meta)
+            }
             let gallery = Gallery(
                 gid: gid, token: meta.token,
                 title: meta.title, category: nil, coverURL: nil,
@@ -695,6 +741,12 @@ class DownloadManager: ObservableObject {
     }
 
     func deleteDownload(gid: Int) {
+        // 進行中タスクキャンセル + isCancelled 永続化（saveMetadata 経由で復活しない）
+        if activeDownloads[gid] != nil {
+            activeDownloads[gid]?.isCancelled = true
+        }
+        // LiveActivity 終了（通知センター/Dynamic Islandから消す）
+        endLiveActivity(gid: gid, success: false)
         let dir = galleryDirectory(gid: gid)
         try? fileManager.removeItem(at: dir)
         downloads.removeValue(forKey: gid)
@@ -826,68 +878,105 @@ class DownloadManager: ObservableObject {
             }
         }
 
-        // 前方ダウンロード（0→末尾）
-        for index in 0..<totalPages {
-            if activeDownloads[gid]?.isCancelled == true {
-                LogManager.shared.log("Download", "cancelled: gid=\(gid)")
-                state.backwardCancelled = true
-                activeDownloads.removeValue(forKey: gid)
-                meta.downloadedPages = Array(state.downloadedSet)
-                saveMetadata(meta)
-                biDirStates.removeValue(forKey: gid)
-                return
-            }
+        // Batch enqueue方式: URL解決は並列5で、解決次第BG sessionに投入
+        // → 一度enqueueされたDLはアプリsuspend中もiOSが継続
+        let stream = BackgroundDownloadManager.shared.makeStream(for: gid)
+        let session = BackgroundDownloadManager.shared.ehSession
+        let ehHeaders: [String: String] = [
+            "Referer": host == .exhentai ? "https://exhentai.org/" : "https://e-hentai.org/",
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+        ]
 
-            // 後方DLまたは既存ファイルでDL済みならスキップ（更新なし）
+        // 既存ファイルをマーク
+        var pendingIndices: [Int] = []
+        for index in 0..<totalPages {
             if state.downloadedSet.contains(index) { continue }
             let filePath = imageFilePath(gid: gid, page: index)
             if fileManager.fileExists(atPath: filePath.path) {
                 state.downloadedSet.insert(index)
                 continue
             }
+            pendingIndices.append(index)
+        }
+        updateProgress(gid: gid, current: state.downloadedSet.count, total: totalPages)
+        LogManager.shared.log("Download", "gid=\(gid) EH batch enqueue: pending=\(pendingIndices.count)")
 
-            // ネットワーク断時は復帰まで待機
-            while NetworkMonitor.shared.shouldPauseDownload {
-                if activeDownloads[gid]?.isCancelled == true { break }
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+        // URL解決 → enqueue を並列5で実行（解決の遅延を隠蔽）
+        let urlResolveSem = AsyncSemaphore(limit: 5)
+        let weakSelf = self
+        let resolveClient = self.client
+        Task.detached(priority: .utility) {
+            await withTaskGroup(of: Void.self) { group in
+                for index in pendingIndices {
+                    if weakSelf.activeDownloads[gid]?.isCancelled == true { break }
+                    let pageURL = allPageURLs[index]
+                    let filePath = weakSelf.imageFilePath(gid: gid, page: index)
+                    group.addTask {
+                        await urlResolveSem.wait()
+                        defer { urlResolveSem.signal() }
+                        do {
+                            let imageURL = try await resolveClient.fetchImageURL(pageURL: pageURL)
+                            BackgroundDownloadManager.shared.enqueue(
+                                url: imageURL, gid: gid, pageIndex: index, finalPath: filePath,
+                                session: session, headers: ehHeaders
+                            )
+                        } catch {
+                            LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) URL解決失敗: \(error.localizedDescription)")
+                            // 失敗もstream経由で通知（mirror再試行はsecondpassで）
+                            BackgroundDownloadManager.shared.enqueue(
+                                url: pageURL,  // ダミー（HTMLを画像扱いで失敗する）
+                                gid: gid, pageIndex: index, finalPath: filePath,
+                                session: session, headers: ehHeaders
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 完了stream消費（stall watchdog付き: 45秒completion無ければsecondpassにフォールバック）
+        var pendingCount = pendingIndices.count
+        let stallThreshold: Double = 45.0
+        let lastProgressBox = StallBox()
+        lastProgressBox.update()
+
+        let watchdog = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                if Task.isCancelled { break }
+                let elapsed = CFAbsoluteTimeGetCurrent() - lastProgressBox.value
+                if elapsed > stallThreshold {
+                    LogManager.shared.log("Download", "gid=\(gid) BG stream stall \(Int(elapsed))s - forcing finish")
+                    BackgroundDownloadManager.shared.finishStream(for: gid)
+                    break
+                }
+            }
+        }
+
+        for await completion in stream {
+            lastProgressBox.update()
+            if activeDownloads[gid]?.isCancelled == true {
+                BackgroundDownloadManager.shared.cancelAllTasks(for: gid, session: session)
+                break
             }
 
-            let pageURL = allPageURLs[index]
-            let success = await downloadSinglePage(
-                gid: gid, index: index, pageURL: pageURL,
-                filePath: filePath, host: host, maxRetries: 3
-            )
-            if success {
+            let index = completion.pageIndex
+            if completion.success {
                 state.downloadedSet.insert(index)
                 updateProgress(gid: gid, current: state.downloadedSet.count, total: totalPages)
             } else {
-                state.failedPages.append((index: index, pageURL: pageURL))
+                state.failedPages.append((index: index, pageURL: allPageURLs[index]))
             }
-
-            await ExtremeMode.shared.delay(nanoseconds: requestDelay)
-
-            // エクストリームモード途中ON → 後方DL起動
-            if ExtremeMode.shared.isEnabled && !EcoMode.shared.isEnabled && !state.backwardRunning {
-                state.backwardRunning = true
-                state.backwardCancelled = false
-                LogManager.shared.log("Download", "gid=\(gid) EXTREME ON mid-download: starting backward")
-                Task(priority: .high) {
-                    await self.performBackwardDownload(gid: gid, host: host)
-                }
-            }
-            // エクストリームモード途中OFF → 後方DLを停止
-            if !ExtremeMode.shared.isEnabled && state.backwardRunning {
-                LogManager.shared.log("Download", "gid=\(gid) EXTREME OFF: stopping backward")
-                state.backwardCancelled = true
-            }
-
-            // 全ページ完了チェック（後方DLとの合流）
-            if state.downloadedSet.count >= totalPages { break }
+            pendingCount -= 1
+            if pendingCount <= 0 { break }
         }
+        watchdog.cancel()
 
-        // 後方DLの完了を待つ
-        while state.backwardRunning {
-            try? await Task.sleep(nanoseconds: 200_000_000)
+        // stall で強制finishした場合、未完了のpendingIndicesをfailedとしてsecondpassに回す
+        for idx in pendingIndices where !state.downloadedSet.contains(idx) {
+            if !state.failedPages.contains(where: { $0.index == idx }) {
+                state.failedPages.append((index: idx, pageURL: allPageURLs[idx]))
+            }
         }
 
         // セカンドパス: 失敗ページを再試行
@@ -1002,17 +1091,26 @@ class DownloadManager: ObservableObject {
                 }
 
                 await ExtremeMode.shared.delay(nanoseconds: requestDelay)
-                let imageData = try await client.fetchImageData(url: imageURL, host: host)
 
-                guard !imageData.isEmpty else {
-                    LogManager.shared.log("Download", "gid=\(gid) page \(index + 1): empty data (attempt \(attempt)/\(maxRetries))")
+                // Background URLSession経由（アプリsuspend中もDL継続）
+                let headers: [String: String] = [
+                    "Referer": host == .exhentai ? "https://exhentai.org/" : "https://e-hentai.org/",
+                    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+                ]
+                let ok = await BackgroundDownloadManager.shared.downloadToFile(
+                    url: imageURL,
+                    session: BackgroundDownloadManager.shared.ehSession,
+                    finalPath: filePath,
+                    headers: headers
+                )
+                guard ok, BackgroundDownloadManager.isValidImageFile(at: filePath) else {
+                    try? FileManager.default.removeItem(at: filePath)
+                    LogManager.shared.log("Download", "gid=\(gid) page \(index + 1): invalid/empty (attempt \(attempt)/\(maxRetries))")
                     if attempt < maxRetries {
                         await ExtremeMode.shared.delay(nanoseconds: 3_000_000_000)
                     }
                     continue
                 }
-
-                try imageData.write(to: filePath)
                 return true
 
             } catch let error as NSError where error.code == -1200 {
@@ -1032,6 +1130,12 @@ class DownloadManager: ObservableObject {
             }
         }
         return false
+    }
+
+    /// stream stall検出用の時刻ボックス（Task間で共有）
+    private final class StallBox: @unchecked Sendable {
+        var value: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()
+        func update() { value = CFAbsoluteTimeGetCurrent() }
     }
 
     /// 完了通知

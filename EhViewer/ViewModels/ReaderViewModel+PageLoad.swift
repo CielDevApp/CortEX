@@ -81,12 +81,36 @@ extension ReaderViewModel {
         }
 
         // ダウンロード済みローカル画像
-        if let localImage = DownloadManager.shared.loadLocalImage(gid: gallery.gid, page: index) {
-            LogManager.shared.log("Reader", "loadSingle \(index) exit: local image hit")
-            LogManager.shared.log("Perf", "pageLoad[\(index)]: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms source=local")
-            rawImages[index] = localImage
-            applyFilterPipeline(index: index, raw: localImage)
-            return true
+        // アニメGIF/WebPはCGImageSource保持してon-demand decode（メモリ節約）
+        if let localData = DownloadManager.shared.loadLocalImageData(gid: gallery.gid, page: index) {
+            #if canImport(UIKit)
+            if AnimatedImageDecoder.isAnimated(data: localData) {
+                // CGImageSource作成と1フレーム目decode は Task.detached に退避（UIスレッド保護）
+                let sourceResult: (AnimatedImageSource?, PlatformImage?) = await Task.detached(priority: .userInitiated) {
+                    guard let src = AnimatedImageSource.make(data: localData) else { return (nil, nil) }
+                    let firstFrame: PlatformImage?
+                    if let cg = src.frame(at: 0) { firstFrame = PlatformImage(cgImage: cg) } else { firstFrame = nil }
+                    return (src, firstFrame)
+                }.value
+                if let src = sourceResult.0, let first = sourceResult.1 {
+                    await MainActor.run {
+                        let h = holder(for: index)
+                        h.animatedSource = src
+                        h.setLoaded(first)
+                    }
+                    LogManager.shared.log("Reader", "loadSingle \(index) exit: local animated source (\(src.frameCount) frames)")
+                    LogManager.shared.log("Perf", "pageLoad[\(index)]: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms source=local-animated")
+                    return true
+                }
+            }
+            #endif
+            if let localImage = PlatformImage(data: localData) {
+                LogManager.shared.log("Reader", "loadSingle \(index) exit: local image hit")
+                LogManager.shared.log("Perf", "pageLoad[\(index)]: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms source=local")
+                rawImages[index] = localImage
+                applyFilterPipeline(index: index, raw: localImage)
+                return true
+            }
         }
 
         let mode = qualityMode
@@ -218,6 +242,28 @@ extension ReaderViewModel {
                     pageCount: totalPages, page: index, imageData: imageData
                 )
             }
+
+            // アニメGIF/WebP分岐: CGImageSource保持でon-demand decode、フィルタパイプライン経由しない
+            #if canImport(UIKit)
+            if AnimatedImageDecoder.isAnimated(data: imageData) {
+                let sourceResult: (AnimatedImageSource?, PlatformImage?) = await Task.detached(priority: .userInitiated) {
+                    guard let src = AnimatedImageSource.make(data: imageData) else { return (nil, nil) }
+                    let firstFrame: PlatformImage?
+                    if let cg = src.frame(at: 0) { firstFrame = PlatformImage(cgImage: cg) } else { firstFrame = nil }
+                    return (src, firstFrame)
+                }.value
+                if let src = sourceResult.0, let first = sourceResult.1 {
+                    await MainActor.run {
+                        let h = holder(for: index)
+                        h.animatedSource = src
+                        h.setLoaded(first)
+                    }
+                    LogManager.shared.log("Reader", "loadSingle \(index) exit: fetched animated source (\(src.frameCount) frames)")
+                    LogManager.shared.log("Perf", "pageLoad[\(index)]: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms fetch=\(fetchMs)ms source=fetch-animated size=\(imageData.count)B")
+                    return true
+                }
+            }
+            #endif
 
             let decodeStart = CFAbsoluteTimeGetCurrent()
             // 専用キュー+GPU(CIContext)でデコード（協調プール不使用 → UIスレッド影響ゼロ）

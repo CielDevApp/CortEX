@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct LogViewerView: View {
     @ObservedObject private var logManager = LogManager.shared
@@ -7,6 +10,26 @@ struct LogViewerView: View {
     @State private var searchText = ""
 
     private let categories = ["All", "Thumb", "Metal", "CoreML", "Auth", "LiveActivity", "Download", "Pipeline", "Reader", "App"]
+
+    #if canImport(UIKit)
+    /// Documents/logs/ に書き出し。FilesアプリのEhViewerフォルダから取り出せる（UIFileSharingEnabled有効）
+    private func saveLogToDocuments() {
+        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let dir = docs.appendingPathComponent("logs", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        let stamp = df.string(from: Date())
+        let url = dir.appendingPathComponent("cortex_\(stamp).txt")
+        do {
+            try logManager.allText().write(to: url, atomically: true, encoding: .utf8)
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        } catch {
+            print("[LogExport] write failed: \(error)")
+            UINotificationFeedbackGenerator().notificationOccurred(.error)
+        }
+    }
+    #endif
 
     private var filteredLogs: [LogEntry] {
         logManager.logs.filter { entry in
@@ -114,6 +137,23 @@ struct LogViewerView: View {
                         Image(systemName: "square.and.arrow.up")
                     }
                 }
+                #if canImport(UIKit)
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        UIPasteboard.general.string = logManager.allText()
+                        UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                    }
+                }
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        saveLogToDocuments()
+                    } label: {
+                        Image(systemName: "folder.badge.plus")
+                    }
+                }
+                #endif
             }
         }
     }

@@ -47,15 +47,18 @@ final class LogManager: ObservableObject {
     }
 
     func log(_ category: String, _ message: String) {
-        // 初回ログ時に端末情報を先に出力
+        // 初回ログ時に端末情報 + ビルドタグを先に出力
         if !deviceInfoLogged {
             deviceInfoLogged = true
             let sig = Self.deviceSignature
             print("[Device] \(sig)")
+            print("[Build] \(BuildInfo.tag)")
             if isEnabled {
-                let entry = LogEntry(timestamp: Date(), category: "Device", message: sig)
+                let dev = LogEntry(timestamp: Date(), category: "Device", message: sig)
+                let build = LogEntry(timestamp: Date(), category: "Build", message: BuildInfo.tag)
                 DispatchQueue.main.async {
-                    self.logs.append(entry)
+                    self.logs.append(dev)
+                    self.logs.append(build)
                 }
             }
         }

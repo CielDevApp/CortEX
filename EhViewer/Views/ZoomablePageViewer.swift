@@ -27,11 +27,25 @@ struct ZoomablePageViewer: View {
         viewModel.holder(for: page).image ?? viewModel.holder(for: page).originalImage
     }
 
+    private func animatedSourceFor(page: Int) -> AnimatedImageSource? {
+        viewModel.holder(for: page).animatedSource
+    }
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if let img = imageFor(page: currentPage) {
+            if let animSrc = animatedSourceFor(page: currentPage) {
+                AnimatedPageZoomableScrollView(
+                    source: animSrc,
+                    isAtMinZoom: $isAtMinZoom,
+                    onTapRegion: { region in
+                        handleTap(region)
+                    }
+                )
+                .ignoresSafeArea()
+                .id(currentPage)
+            } else if let img = imageFor(page: currentPage) {
                 PageZoomableScrollView(
                     image: img,
                     isAtMinZoom: $isAtMinZoom,

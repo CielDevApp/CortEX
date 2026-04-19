@@ -157,6 +157,46 @@ struct ZoomableScrollView: UIViewRepresentable {
 }
 #endif
 
+/// アニメGIF/WebP用の全画面オーバーレイ（ズーム+再生）
+#if canImport(UIKit)
+struct ZoomableAnimatedOverlay: View {
+    let source: AnimatedImageSource
+    let onClose: () -> Void
+
+    @State private var isAtMinZoom = true
+    @State private var dragOffset: CGFloat = 0
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            AnimatedPageZoomableScrollView(
+                source: source,
+                isAtMinZoom: $isAtMinZoom,
+                onTapRegion: { region in
+                    if region == .center { onClose() }
+                }
+            )
+            .ignoresSafeArea()
+        }
+        .offset(y: dragOffset)
+        .opacity(max(0, 1.0 - abs(dragOffset) / 300.0))
+        .gesture(
+            isAtMinZoom
+            ? DragGesture()
+                .onChanged { value in dragOffset = value.translation.height }
+                .onEnded { value in
+                    if abs(value.translation.height) > 120 { onClose() }
+                    else { withAnimation(.easeOut(duration: 0.2)) { dragOffset = 0 } }
+                }
+            : nil
+        )
+        .persistentSystemOverlays(.hidden)
+        .statusBarHidden(true)
+        .transition(.opacity)
+    }
+}
+#endif
+
 /// タップした画像をフルスクリーンで拡大表示するオーバーレイ（常に全画面）
 struct ZoomableImageOverlay: View {
     let image: PlatformImage
