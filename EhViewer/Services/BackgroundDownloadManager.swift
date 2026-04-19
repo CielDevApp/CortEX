@@ -14,17 +14,20 @@ final class BackgroundDownloadManager: NSObject {
     private var _nhSession: URLSession?
     private var _ehSession: URLSession?
 
+    /// foreground session（URLSessionConfiguration.default）で 4 並列 DL を実現。
+    /// iOS の background session は 1/host の hard limit があり、動画WebPがシリアル化するため
+    /// foreground に切替。アプリが background に落ちた時は iOS が suspend→DL 一時停止、
+    /// foreground 復帰時に自動再開。アプリ完全終了後は起動時 auto-resume で続行。
     var nhSession: URLSession {
         if let s = _nhSession { return s }
-        let config = URLSessionConfiguration.background(withIdentifier: Self.nhSessionId)
-        config.sessionSendsLaunchEvents = true
-        config.isDiscretionary = false
+        let config = URLSessionConfiguration.default
         config.httpCookieStorage = HTTPCookieStorage.shared
         config.httpCookieAcceptPolicy = .always
         config.httpShouldSetCookies = true
-        config.waitsForConnectivity = false  // connectivity 待機で詰まるケース回避
-        config.timeoutIntervalForRequest = 30   // 個別リクエスト 30s でタイムアウト
-        config.timeoutIntervalForResource = 120  // リソース全体 2分（デフォ7日は長すぎ）
+        config.waitsForConnectivity = false
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 120
+        config.httpMaximumConnectionsPerHost = 4  // 4並列
         let s = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         _nhSession = s
         return s
@@ -32,15 +35,14 @@ final class BackgroundDownloadManager: NSObject {
 
     var ehSession: URLSession {
         if let s = _ehSession { return s }
-        let config = URLSessionConfiguration.background(withIdentifier: Self.ehSessionId)
-        config.sessionSendsLaunchEvents = true
-        config.isDiscretionary = false
+        let config = URLSessionConfiguration.default
         config.httpCookieStorage = HTTPCookieStorage.shared
         config.httpCookieAcceptPolicy = .always
         config.httpShouldSetCookies = true
         config.waitsForConnectivity = false
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 120
+        config.httpMaximumConnectionsPerHost = 4
         let s = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         _ehSession = s
         return s
