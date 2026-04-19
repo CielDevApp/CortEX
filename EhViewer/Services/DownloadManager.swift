@@ -1035,6 +1035,37 @@ class DownloadManager: ObservableObject {
 
         LogManager.shared.log("Download", "gid=\(gid) fetched \(allPageURLs.count) page URLs (expected: \(pageCount))")
 
+        // 【フォールバック】exhentai で 0件 = 未ログイン可能性。e-hentai (public) で再試行
+        // user の cookie が URLSession に共有されてない/未ログインでも public gallery なら
+        // e-hentai 側で DL できる。まず exhentai → 失敗 → e-hentai の順で試す
+        var usedHost = host
+        if allPageURLs.isEmpty && host == .exhentai {
+            let fallbackURL = galleryURLStr.replacingOccurrences(of: "exhentai.org", with: "e-hentai.org")
+            LogManager.shared.log("Download", "gid=\(gid) exhentai empty → fallback e-hentai: \(fallbackURL)")
+            var page = 0
+            while true {
+                do {
+                    let urlString = page > 0 ? fallbackURL + "?p=\(page)" : fallbackURL
+                    let html = try await client.fetchHTML(urlString: urlString, host: .ehentai)
+                    let urls = HTMLParser.parseImagePageURLs(html: html)
+                    LogManager.shared.log("Download", "  fallback page \(page): \(urls.count) URLs (total \(allPageURLs.count + urls.count))")
+                    if urls.isEmpty { break }
+                    allPageURLs.append(contentsOf: urls)
+                    page += 1
+                    if pageCount > 0 && allPageURLs.count >= pageCount { break }
+                    if page > 200 { break }
+                    await ExtremeMode.shared.delay(nanoseconds: requestDelay)
+                } catch {
+                    LogManager.shared.log("Download", "fallback page URL fetch failed: \(error)")
+                    break
+                }
+            }
+            if !allPageURLs.isEmpty {
+                usedHost = .ehentai
+                LogManager.shared.log("Download", "gid=\(gid) fallback SUCCESS: \(allPageURLs.count) URLs via e-hentai")
+            }
+        }
+
         // URL取得0件 = notLoggedIn/banned/ネットワーク不通 等の致命的エラー
         // 画像/メタを絶対に削除しない: meta.downloadedPages は実ファイルに lag する
         // ことがあり「meta=0 だから trash」は安全でない。真のゴミは cleanupTrashDownloads
