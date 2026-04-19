@@ -97,15 +97,22 @@ struct ContentView: View {
         .onOpenURL { url in
             // AirDrop/ファイル等から.cortexまたは.zipを受信
             let ext = url.pathExtension.lowercased()
-            if ext == "cortex" || ext == "zip" {
-                if let gid = GalleryExporter.importFromZip(url: url) {
-                    importToast = "インポート完了"
-                    // 保存済みタブへ自動遷移
-                    withAnimation { selectedTab = 3 }
-                } else {
-                    importToast = "インポート失敗"
+            guard ext == "cortex" || ext == "zip" else { return }
+            // 大容量 ZIP は数秒かかる → main thread ブロックで watchdog kill 回避のため
+            // background thread へ逃がす。import 中は toast で進行中を示す
+            importToast = "インポート中..."
+            LogManager.shared.log("Export", "onOpenURL: start import url=\(url.lastPathComponent)")
+            Task.detached(priority: .userInitiated) {
+                let result = GalleryExporter.importFromZip(url: url)
+                await MainActor.run {
+                    if result != nil {
+                        importToast = "インポート完了"
+                        withAnimation { selectedTab = 3 }
+                    } else {
+                        importToast = "インポート失敗"
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { importToast = nil }
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { importToast = nil }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToSettingsTab)) { _ in

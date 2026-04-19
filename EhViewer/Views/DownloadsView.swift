@@ -167,10 +167,13 @@ struct DownloadsView: View {
                 allowsMultipleSelection: false
             ) { result in
                 if case .success(let urls) = result, let url = urls.first {
-                    if GalleryExporter.importFromZip(url: url) != nil {
-                        importMessage = "インポート完了"
-                    } else {
-                        importMessage = "インポート失敗"
+                    // 大容量 ZIP の main thread ブロック回避のため background 実行
+                    importMessage = "インポート中..."
+                    Task.detached(priority: .userInitiated) {
+                        let ok = GalleryExporter.importFromZip(url: url) != nil
+                        await MainActor.run {
+                            importMessage = ok ? "インポート完了" : "インポート失敗"
+                        }
                     }
                 }
             }
