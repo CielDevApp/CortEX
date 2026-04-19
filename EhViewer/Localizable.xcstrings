@@ -2999,7 +2999,7 @@
         }
       }
     },
-    "MP4に変換して再生します" : {
+    "MP4変換またはツールバー表示切替" : {
 
     },
     "Neural Engineで画像を高解像度化。究極画質モードで適用。" : {
@@ -6948,6 +6948,9 @@
         }
       }
     },
+    "ツールバー表示切替" : {
+
+    },
     "テーマ" : {
       "localizations" : {
         "de" : {
@@ -7640,6 +7643,9 @@
           }
         }
       }
+    },
+    "ファスト（低画質・最速）" : {
+
     },
     "フィルタ" : {
       "comment" : "A label for the \"Filter\" option in the settings menu.",
@@ -8402,6 +8408,9 @@
           }
         }
       }
+    },
+    "メニュー" : {
+
     },
     "もう一回" : {
       "localizations" : {
@@ -13122,9 +13131,6 @@
           }
         }
       }
-    },
-    "画質を選択" : {
-
     },
     "画質設定" : {
       "comment" : "A label for the quality settings section in the gallery reader view.",

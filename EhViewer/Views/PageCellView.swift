@@ -15,6 +15,8 @@ struct PageCellView: View {
     var isActiveAnimation: Bool = false
     /// MP4 変換用の gid（アニメ画像検知時のみ利用）
     var mp4Gid: Int = 0
+    /// アニメビュー長押し時に親ビューのツールバー表示を切替える
+    var onToggleControls: (() -> Void)? = nil
 
     var body: some View {
         if isHorizontalMode {
@@ -38,7 +40,7 @@ struct PageCellView: View {
         ZStack {
             #if canImport(UIKit)
             if let animURL = holder.animatedFileURL {
-                AnimatedVideoView(sourceURL: animURL, gid: mp4Gid, page: index, autoStart: false)
+                AnimatedVideoView(sourceURL: animURL, gid: mp4Gid, page: index, autoStart: false, onToggleControls: onToggleControls)
                     .frame(width: Self.screenSize.width, height: Self.screenSize.height)
             } else if let image = holder.image {
                 Image(platformImage: image)
@@ -90,7 +92,7 @@ struct PageCellView: View {
         Group {
             #if canImport(UIKit)
             if let animURL = holder.animatedFileURL {
-                AnimatedVideoView(sourceURL: animURL, gid: mp4Gid, page: index, autoStart: false)
+                AnimatedVideoView(sourceURL: animURL, gid: mp4Gid, page: index, autoStart: false, onToggleControls: onToggleControls)
                     .frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
                     .onTapGesture {

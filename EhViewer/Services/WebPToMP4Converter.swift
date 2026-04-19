@@ -336,7 +336,12 @@ enum WebPToMP4Converter {
             throw ConverterError.finishFailed(writer.error?.localizedDescription ?? "unknown")
         }
         let outFileSize = (try? FileManager.default.attributesOfItem(atPath: outputURL.path)[.size] as? Int) ?? 0
-        // 成功マーカー作成
+        // 出力サイズ検証: 10KB 未満は破損扱い → .ok 作らずエラー
+        if outFileSize < 10_000 {
+            try? FileManager.default.removeItem(at: outputURL)
+            LogManager.shared.log("Convert", "FAILED output too small: \(outFileSize)B")
+            throw ConverterError.finishFailed("output too small: \(outFileSize)B")
+        }
         FileManager.default.createFile(atPath: Self.okMarkerURL(for: outputURL).path, contents: Data())
         LogManager.shared.log("Convert", "DONE total=\(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms mp4=\(outFileSize)B mem=\(memoryFootprintMB())MB")
 
