@@ -1036,22 +1036,14 @@ class DownloadManager: ObservableObject {
         LogManager.shared.log("Download", "gid=\(gid) fetched \(allPageURLs.count) page URLs (expected: \(pageCount))")
 
         // URL取得0件 = notLoggedIn/banned/ネットワーク不通 等の致命的エラー
-        // watchdog 53秒待たずに即座に失敗通知する
+        // 画像/メタを絶対に削除しない: meta.downloadedPages は実ファイルに lag する
+        // ことがあり「meta=0 だから trash」は安全でない。真のゴミは cleanupTrashDownloads
+        // が init 時に pageCount=0 / token空 で別途判定する。
         if allPageURLs.isEmpty {
-            let downloadedCount = meta.downloadedPages.count
-            if downloadedCount > 0 {
-                // 部分DL済みあり → meta と画像は保持 (再起動/retry で再開可能)
-                LogManager.shared.log("Download", "gid=\(gid) ABORT: zero URLs but keeping \(downloadedCount)/\(pageCount) partial pages for retry")
-                await MainActor.run {
-                    self.activeDownloads.removeValue(forKey: gid)
-                    self.endLiveActivity(gid: gid, success: false)
-                }
-            } else {
-                // ゼロ進行 + URL取得失敗 → ゴミなので削除
-                LogManager.shared.log("Download", "gid=\(gid) ABORT: zero URLs and zero progress - deleting trash metadata")
-                await MainActor.run {
-                    self.deleteDownload(gid: gid)
-                }
+            LogManager.shared.log("Download", "gid=\(gid) ABORT: zero URLs fetched - stopping task (data preserved for retry)")
+            await MainActor.run {
+                self.activeDownloads.removeValue(forKey: gid)
+                self.endLiveActivity(gid: gid, success: false)
             }
             return
         }
