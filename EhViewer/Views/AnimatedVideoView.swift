@@ -5,39 +5,38 @@ import UIKit
 
 /// ダウンロード済み WebP アニメ → MP4 変換 + AVPlayer ループ再生ビュー。
 ///
-/// 状態遷移:
-/// - 未変換: ポスター（先頭フレーム）+ 再生ボタン overlay → タップで変換開始
-/// - 変換中: ポスター + ProgressView
-/// - 変換済: AVPlayerLayer でループ再生
+/// ユーザーの操作ゼロで静止画と動画の境界を消す設計:
+/// - 表示された瞬間にバックグラウンド変換開始
+/// - 変換中はポスター（1フレーム目）を静止表示（待ち時間を隠す）
+/// - 変換完了で AVPlayer へシームレス切替（ポスター同アスペクト比で黒帯なし）
+/// - キャッシュあれば即 AVPlayer
+/// - onDisappear で Task キャンセル（高速スクロール時のキュー詰まり回避）
 struct AnimatedVideoView: View {
     /// WebP/GIFのファイルパス（ディスクベース、Dataメモリ保持しない）
     let sourceURL: URL
     let gid: Int
     let page: Int
-    /// タップで自動変換する（false なら再生ボタンのタップで開始）
-    var autoStart: Bool = false
     /// 親ビューのツールバー/コントロール表示切替（長押し競合回避: 変換メニューから呼ぶ）
     var onToggleControls: (() -> Void)? = nil
 
-    @State private var status: Status = .notConverted
-    @State private var progress: Double = 0
+    @State private var status: Status = .converting
     @State private var posterImage: UIImage?
     @State private var convertedURL: URL?
     @State private var showReconvertDialog: Bool = false
-    @State private var streamingFrameHolder = StreamingFrameHolder()
+    @State private var convertTask: Task<Void, Never>?
+    /// ポスター/プレイヤー共通のアスペクト比（黒帯回避）
+    /// WebPヘッダから同期取得 → AVPlayer 生成前にすでに確定している
+    @State private var aspectSize: CGSize = .zero
 
     enum Status {
-        case notConverted
-        case converting   // = ストリーミング再生 + 裏で MP4 変換（フレームが来るまでポスター）
+        case converting   // = ポスター静止表示 + 裏で MP4 変換
         case ready
         case failed(String)
     }
 
-    // 変換は単一モード（オリジナル画質）。libwebp 化で解像度違いによる速度差が
-    // 消えたため画質選択不要。
-
     var body: some View {
         ZStack {
+            // 変換中はポスター（1フレーム目）のみ表示。streaming 非表示で速度違和感を消す
             if let posterImage {
                 Image(uiImage: posterImage)
                     .resizable()
@@ -47,54 +46,24 @@ struct AnimatedVideoView: View {
             }
 
             switch status {
-            case .notConverted:
-                Button {
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                    startConvert()
-                } label: {
-                    ZStack {
-                        Circle().fill(.black.opacity(0.55)).frame(width: 72, height: 72)
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 32))
-                            .foregroundStyle(.white)
-                            .offset(x: 3)
-                    }
-                }
-                .buttonStyle(.plain)
-
             case .converting:
-                // ストリーミング再生: 変換中のフレームをリアルタイムで表示
-                StreamingFrameView(holder: streamingFrameHolder)
-                    .aspectRatio(contentMode: .fit)
-                // 変換進捗バー（右上小さく）
-                VStack {
-                    HStack {
-                        Spacer()
-                        HStack(spacing: 4) {
-                            ProgressView(value: progress)
-                                .progressViewStyle(.circular)
-                                .tint(.white)
-                                .scaleEffect(0.6)
-                            Text("\(Int(progress * 100))%")
-                                .font(.caption2.monospacedDigit())
-                                .foregroundStyle(.white)
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(.black.opacity(0.55))
-                        .clipShape(Capsule())
-                        .padding(8)
-                    }
-                    Spacer()
-                }
+                EmptyView()
 
             case .ready:
                 if let url = convertedURL {
-                    LoopingPlayerView(url: url)
-                        .onLongPressGesture(minimumDuration: 0.6) {
-                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                            showReconvertDialog = true
+                    // ポスターと同じアスペクト比で AVPlayer を frame 化 → 黒帯消失
+                    Group {
+                        if aspectSize.width > 0 && aspectSize.height > 0 {
+                            LoopingPlayerView(url: url)
+                                .aspectRatio(aspectSize, contentMode: .fit)
+                        } else {
+                            LoopingPlayerView(url: url)
                         }
+                    }
+                    .onLongPressGesture(minimumDuration: 0.6) {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        showReconvertDialog = true
+                    }
                 }
 
             case .failed(let msg):
@@ -109,13 +78,22 @@ struct AnimatedVideoView: View {
         }
         .onAppear {
             loadPoster()
+            // AVPlayer 生成前にアスペクト比を確定させる
+            if aspectSize == .zero, let s = WebPFileDetector.readCanvasSize(url: sourceURL) {
+                aspectSize = s
+            }
             if WebPToMP4Converter.isFullyConverted(gid: gid, page: page) {
                 convertedURL = WebPToMP4Converter.mp4Path(gid: gid, page: page)
                 status = .ready
             } else {
                 WebPToMP4Converter.cleanupStaleIfNeeded(gid: gid, page: page)
-                if autoStart { startConvert() }
+                startConvert()
             }
+        }
+        .onDisappear {
+            // 画面外に出たら変換タスクをキャンセル（semaphore 待ち中なら即破棄される）
+            convertTask?.cancel()
+            convertTask = nil
         }
         .confirmationDialog("メニュー", isPresented: $showReconvertDialog, titleVisibility: .visible) {
             if onToggleControls != nil {
@@ -135,7 +113,7 @@ struct AnimatedVideoView: View {
         try? FileManager.default.removeItem(at: url)
         try? FileManager.default.removeItem(at: ok)
         convertedURL = nil
-        status = .notConverted
+        status = .converting
         LogManager.shared.log("Convert", "reconvert triggered gid=\(gid) page=\(page)")
         startConvert()
     }
@@ -157,39 +135,36 @@ struct AnimatedVideoView: View {
     }
 
     private func startConvert() {
-        switch status {
-        case .notConverted, .failed: break
-        default: return
-        }
-        LogManager.shared.log("Convert", "startConvert tapped gid=\(gid) page=\(page)")
+        // すでに進行中 / 完了済みなら何もしない
+        if convertTask != nil { return }
+        if case .ready = status { return }
+        LogManager.shared.log("Convert", "auto start gid=\(gid) page=\(page)")
         status = .converting
-        progress = 0
         let url = WebPToMP4Converter.mp4Path(gid: gid, page: page)
         let srcURL = sourceURL
-        // オリジナル画質固定
         let maxDim: CGFloat? = .greatestFiniteMagnitude
-        let holder = streamingFrameHolder
-        Task.detached(priority: .userInitiated) {
+        convertTask = Task.detached(priority: .userInitiated) {
             do {
                 try await WebPToMP4Converter.convert(
                     sourceURL: srcURL,
                     outputURL: url,
                     maxPixelSize: maxDim,
-                    progress: { p in progress = p },
-                    frameCallback: { cgImage in
-                        // decode 直後のフレームを UI に転送（メインスレッドで layer.contents 更新）
-                        holder.setFrame(cgImage)
-                    }
+                    progress: nil,
+                    frameCallback: nil
                 )
                 await MainActor.run {
                     convertedURL = url
                     status = .ready
-                    progress = 1
+                    convertTask = nil
                 }
+            } catch is CancellationError {
+                LogManager.shared.log("Convert", "cancelled gid=\(gid) page=\(page)")
+                await MainActor.run { convertTask = nil }
             } catch {
                 LogManager.shared.log("Convert", "THROWN: \(error)")
                 await MainActor.run {
                     status = .failed(String(describing: error))
+                    convertTask = nil
                 }
             }
         }
@@ -278,23 +253,29 @@ final class PlayerContainerView: UIView {
         p.isMuted = true
         p.actionAtItemEnd = .none
         playerLayer.player = p
+        // ポスターと同アスペクト比で frame 化済み → .resizeAspect で黒帯なし（等価フィット）
         playerLayer.videoGravity = .resizeAspect
 
+        // ループ: seek 完了待ってから play（非同期 seek 中に play 呼ぶと瞬間的な高速再生になる）
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: item,
             queue: .main
         ) { [weak p] _ in
-            p?.seek(to: .zero)
-            p?.play()
+            p?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+                p?.play()
+            }
         }
 
-        // .readyToPlay になってから再生開始（新規書き込みMP4の読み込み待機）
+        // 初回再生: readyToPlay で 0 位置を明示 seek してから play
+        // （新規書き込み MP4 の最初の frame デコード追いつかない場合のズレ防止）
         statusObserver = item.observe(\.status, options: [.new, .initial]) { [weak p] item, _ in
             DispatchQueue.main.async {
                 switch item.status {
                 case .readyToPlay:
-                    p?.play()
+                    p?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+                        p?.play()
+                    }
                 case .failed:
                     LogManager.shared.log("Player", "item failed: \(item.error?.localizedDescription ?? "unknown")")
                 default:

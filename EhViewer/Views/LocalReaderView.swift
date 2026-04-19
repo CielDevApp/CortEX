@@ -405,7 +405,6 @@ struct LocalReaderView: View {
                 sourceURL: fileURL,
                 gid: meta.gid,
                 page: index,
-                autoStart: false,
                 onToggleControls: {
                     withAnimation(.easeInOut(duration: 0.2)) { showControls.toggle() }
                 }
