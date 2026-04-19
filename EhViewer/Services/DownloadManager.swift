@@ -681,17 +681,23 @@ class DownloadManager: ObservableObject {
         meta.downloadedPages = Array(state.downloadedSet)
         meta.isComplete = totalPages > 0 && state.downloadedSet.count >= totalPages
         meta.downloadDate = Date()
-        saveMetadata(meta)
-        activeDownloads.removeValue(forKey: gid)
-        biDirStates.removeValue(forKey: gid)
-        endLiveActivity(gid: gid, success: meta.isComplete)
-        LogManager.shared.log("Download", "nhentai finished: \(state.downloadedSet.count)/\(totalPages) isComplete=\(meta.isComplete)")
+        let finalMeta = meta
+        let completed = meta.isComplete
+        await MainActor.run {
+            saveMetadata(finalMeta)
+            var updatedActive = activeDownloads
+            updatedActive.removeValue(forKey: gid)
+            activeDownloads = updatedActive
+            biDirStates.removeValue(forKey: gid)
+            endLiveActivity(gid: gid, success: completed)
+        }
+        LogManager.shared.log("Download", "nhentai finished: \(state.downloadedSet.count)/\(totalPages) isComplete=\(completed)")
 
-        if meta.isComplete {
+        if completed {
             #if canImport(UIKit)
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             #endif
-            sendDownloadCompleteNotification(title: meta.title)
+            sendDownloadCompleteNotification(title: finalMeta.title)
         }
     }
 
@@ -1141,17 +1147,25 @@ class DownloadManager: ObservableObject {
             LogManager.shared.log("Download", "gid=\(gid) 2ndpass END: done=\(state.downloadedSet.count)/\(totalPages)")
         }
 
-        // 完了処理
+        // 完了処理: @Published dict は subscript mutation だとSwiftUI更新が不確実
+        // → MainActor + 再代入パターンで確実に通知発火させる
         meta.downloadedPages = Array(state.downloadedSet)
         meta.isComplete = totalPages > 0 && state.downloadedSet.count >= totalPages
         meta.downloadDate = Date()
-        saveMetadata(meta)
-        activeDownloads.removeValue(forKey: gid)
-        biDirStates.removeValue(forKey: gid)
-        endLiveActivity(gid: gid, success: meta.isComplete)
-        LogManager.shared.log("Download", "gid=\(gid) finished: \(state.downloadedSet.count)/\(totalPages) isComplete=\(meta.isComplete)")
+        let finalMeta = meta
+        let completed = meta.isComplete
+        await MainActor.run {
+            saveMetadata(finalMeta)
+            // 再代入で @Published 通知を確実発火
+            var updatedActive = activeDownloads
+            updatedActive.removeValue(forKey: gid)
+            activeDownloads = updatedActive
+            biDirStates.removeValue(forKey: gid)
+            endLiveActivity(gid: gid, success: completed)
+        }
+        LogManager.shared.log("Download", "gid=\(gid) finished: \(state.downloadedSet.count)/\(totalPages) isComplete=\(completed)")
 
-        if meta.isComplete {
+        if completed {
             #if canImport(UIKit)
             let generator = UINotificationFeedbackGenerator()
             generator.notificationOccurred(.success)

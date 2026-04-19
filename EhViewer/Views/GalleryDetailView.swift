@@ -834,10 +834,18 @@ struct GalleryDetailView: View {
     }
 
     /// サムネイル情報を逐次取得（1ページ目即表示、残りバックグラウンド）
-    /// エクストリームモード: フル画像URLを解決してディスクキャッシュに先読み
+    /// エクストリームモード: フル画像URLを解決してメモリキャッシュに先読み
+    /// 動画WebP/GIF ギャラリーは UIImage(data:) で全フレーム展開→OOM 発生するのでスキップ
     private func prefetchFullImages() {
         guard ExtremeMode.shared.isEnabled, let detail else { return }
         let gallery = detail.gallery
+        // 動画ギャラリー判定（タイトル heuristic）→ prefetch 無効化
+        let titleLower = gallery.title.lowercased()
+        if titleLower.contains("animated") || titleLower.contains("gif")
+            || gallery.title.contains("🎥") {
+            LogManager.shared.log("Download", "extreme prefetch SKIP (animated gallery): gid=\(gallery.gid)")
+            return
+        }
         let galleryHost = host
         Task.detached(priority: .utility) {
             LogManager.shared.log("Download", "extreme prefetch: starting for gid=\(gallery.gid)")
