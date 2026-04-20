@@ -147,15 +147,31 @@ enum WebPFileDetector {
         guard let head = try? handle.read(upToCount: 256), head.count >= 12 else {
             return false
         }
-        let bytes = [UInt8](head)
+        return isAnimatedWebP(bytes: head)
+    }
+
+    /// メモリ上の Data から直接アニメ WebP 判定 (GalleryReader のオンライン画像用)。
+    /// 先頭 256B (または全長) だけ見る軽量チェック、onAppear で同期呼び出し可能。
+    static func isAnimatedWebP(data: Data) -> Bool {
+        guard data.count >= 12 else { return false }
+        // 先頭 256B 以内で判定（ANIM chunk は通常 file head 数百B内）
+        let searchLen = min(data.count, 256)
+        let head = data.prefix(searchLen)
+        return isAnimatedWebP(bytes: head)
+    }
+
+    /// 共通判定ロジック（URL / Data の両 API が呼ぶ）
+    private static func isAnimatedWebP(bytes: Data) -> Bool {
+        guard bytes.count >= 12 else { return false }
+        let s = bytes.startIndex
         // "RIFF" (52 49 46 46) + (file size) + "WEBP" (57 45 42 50)
-        guard bytes[0] == 0x52, bytes[1] == 0x49, bytes[2] == 0x46, bytes[3] == 0x46,
-              bytes[8] == 0x57, bytes[9] == 0x45, bytes[10] == 0x42, bytes[11] == 0x50 else {
+        guard bytes[s]   == 0x52, bytes[s+1]  == 0x49, bytes[s+2]  == 0x46, bytes[s+3]  == 0x46,
+              bytes[s+8] == 0x57, bytes[s+9]  == 0x45, bytes[s+10] == 0x42, bytes[s+11] == 0x50 else {
             return false
         }
         // "ANIM" chunk (41 4E 49 4D) を検索
-        let anim: [UInt8] = [0x41, 0x4E, 0x49, 0x4D]
-        return head.range(of: Data(anim)) != nil
+        let anim = Data([0x41, 0x4E, 0x49, 0x4D])
+        return bytes.range(of: anim) != nil
     }
 
     /// WebPのキャンバスサイズを同期取得（VP8Xチャンクから。アニメWebP専用）

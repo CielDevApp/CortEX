@@ -42,6 +42,15 @@ struct PageCellView: View {
             if let animURL = holder.animatedFileURL {
                 AnimatedVideoView(sourceURL: animURL, gid: mp4Gid, page: index, onToggleControls: onToggleControls)
                     .frame(width: Self.screenSize.width, height: Self.screenSize.height)
+            } else if let animData = holder.animatedWebPData {
+                GalleryAnimatedWebPView(
+                    data: animData,
+                    staticImage: holder.image,
+                    gid: mp4Gid,
+                    page: index,
+                    onToggleControls: onToggleControls
+                )
+                .frame(width: Self.screenSize.width, height: Self.screenSize.height)
             } else if let image = holder.image {
                 Image(platformImage: image)
                     .resizable()
@@ -98,6 +107,15 @@ struct PageCellView: View {
                     .onTapGesture {
                         if verticalSizeClass == .regular, let img = holder.image { onTap(img) }
                     }
+            } else if let animData = holder.animatedWebPData {
+                GalleryAnimatedWebPView(
+                    data: animData,
+                    staticImage: holder.image,
+                    gid: mp4Gid,
+                    page: index,
+                    onToggleControls: onToggleControls
+                )
+                .frame(maxWidth: .infinity)
             } else if let image = holder.image {
                 ZStack(alignment: .top) {
                     Image(platformImage: image)

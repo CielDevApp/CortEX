@@ -148,6 +148,7 @@ struct EhViewerApp: App {
 
         ImageCache.shared.cleanupOnLaunch()
         GalleryExporter.cleanupOldExportFiles()
+        cleanupGalleryWebPTmp()
         print("[CoreML] modelAvailable: \(CoreMLImageProcessor.shared.modelAvailable)")
 
         // DEBUG: iPad sim から吸い出した cookie を Keychain に一度だけ注入
@@ -211,5 +212,27 @@ struct EhViewerApp: App {
                 }
             }
         }
+    }
+}
+
+/// GalleryAnimatedWebPView が tmp 書き出した gallery_webp_* を起動時に一括削除。
+/// onDisappear で削除される想定だが、クラッシュや強制終了の場合の保険。
+@MainActor
+private func cleanupGalleryWebPTmp() {
+    let tmp = FileManager.default.temporaryDirectory
+    guard let items = try? FileManager.default.contentsOfDirectory(
+        at: tmp, includingPropertiesForKeys: [.fileSizeKey]
+    ) else { return }
+    var removed = 0
+    var freed: Int64 = 0
+    for url in items where url.lastPathComponent.hasPrefix("gallery_webp_") {
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        if (try? FileManager.default.removeItem(at: url)) != nil {
+            removed += 1
+            freed += Int64(size)
+        }
+    }
+    if removed > 0 {
+        LogManager.shared.log("App", "cleanup gallery_webp tmp: \(removed) files, \(freed / 1024 / 1024)MB")
     }
 }

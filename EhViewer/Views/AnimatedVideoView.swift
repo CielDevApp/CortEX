@@ -180,6 +180,80 @@ struct AnimatedVideoView: View {
     }
 }
 
+/// GalleryReader (オンライン E-Hentai) のアニメ WebP 手動再生ビュー。
+///
+/// 変換コストが重いため、LocalReader と違い自動起動しない:
+/// - 初期表示: 静止画 (posterImage) + ▶ ボタン overlay
+/// - ▶ タップ: 生 Data を tmp.webp 書き出し → 既存 AnimatedVideoView に切替
+/// - tmp は onDisappear で削除 + 起動時一括クリーンアップで保険
+///
+/// AnimatedVideoView 自体は URL 前提・自動再生のまま一切触らない（LocalReader 互換性完全維持）。
+struct GalleryAnimatedWebPView: View {
+    /// 表示中のページの生 WebP Data（アニメ判定済み）
+    let data: Data
+    /// 静止画 fallback（一覧から既に表示されているもの、そのまま表示に使う）
+    let staticImage: UIImage?
+    /// 変換キャッシュ識別用
+    let gid: Int
+    let page: Int
+    /// 親ビューのツールバー表示切替（AnimatedVideoView へそのまま伝播）
+    var onToggleControls: (() -> Void)? = nil
+
+    @State private var tmpURL: URL?
+    @State private var playRequested = false
+
+    var body: some View {
+        ZStack {
+            if playRequested, let tmpURL {
+                AnimatedVideoView(
+                    sourceURL: tmpURL,
+                    gid: gid,
+                    page: page,
+                    onToggleControls: onToggleControls
+                )
+            } else {
+                // 静止画 (すでにロード済みの 1 フレーム目) + ▶ ボタン
+                if let staticImage {
+                    Image(uiImage: staticImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                } else {
+                    Color.black
+                }
+                Button {
+                    requestPlayback()
+                } label: {
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 72))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .shadow(radius: 6)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .onDisappear {
+            // tmp 削除: ページ離脱時に即掃除（容量圧迫回避）
+            if let url = tmpURL {
+                try? FileManager.default.removeItem(at: url)
+                tmpURL = nil
+            }
+        }
+    }
+
+    private func requestPlayback() {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gallery_webp_\(gid)_\(page)_\(UUID().uuidString).webp")
+        do {
+            try data.write(to: url)
+            tmpURL = url
+            playRequested = true
+            LogManager.shared.log("Convert", "gallery webp play requested gid=\(gid) page=\(page) tmp=\(url.lastPathComponent)")
+        } catch {
+            LogManager.shared.log("Convert", "gallery webp tmp write failed gid=\(gid) page=\(page): \(error.localizedDescription)")
+        }
+    }
+}
+
 /// ストリーミング再生用: 変換中に decode されたフレームをリアルタイム表示
 /// Holder が UIView を保持し、decode スレッドから setFrame → main dispatch → layer.contents 更新
 final class StreamingFrameHolder: @unchecked Sendable {
