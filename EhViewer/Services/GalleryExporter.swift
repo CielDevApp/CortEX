@@ -37,6 +37,7 @@ enum GalleryExporter {
 
     /// ギャラリーフォルダをZIPにしてURLを返す
     static func exportAsZip(gid: Int) -> URL? {
+        LogManager.shared.log("Export", "exportAsZip ENTER gid=\(gid) mainThread=\(Thread.isMainThread)")
         // 毎回エクスポート前に古いファイルを掃除（増殖を抑える）
         cleanupOldExportFiles()
         let dm = DownloadManager.shared
@@ -51,16 +52,22 @@ enum GalleryExporter {
         var zipURL: URL?
         var coordError: NSError?
         let coordinator = NSFileCoordinator()
+        let coordStart = Date()
+        LogManager.shared.log("Export", "coordinate START gid=\(gid) mainThread=\(Thread.isMainThread)")
         coordinator.coordinate(readingItemAt: galleryDir, options: .forUploading, error: &coordError) { tempZipURL in
+            LogManager.shared.log("Export", "coordinate closure gid=\(gid) mainThread=\(Thread.isMainThread) elapsed=\(Int(Date().timeIntervalSince(coordStart) * 1000))ms")
             // 一時ZIPを永続的な場所にコピー
             let exportDir = FileManager.default.temporaryDirectory
             let title = dm.downloads[gid]?.title ?? "\(gid)"
             let safeName = title.replacingOccurrences(of: "/", with: "_").prefix(50)
             let destURL = exportDir.appendingPathComponent("\(safeName).cortex")
             try? FileManager.default.removeItem(at: destURL)
+            let copyStart = Date()
             try? FileManager.default.copyItem(at: tempZipURL, to: destURL)
+            LogManager.shared.log("Export", "copy done gid=\(gid) copyMs=\(Int(Date().timeIntervalSince(copyStart) * 1000))")
             zipURL = destURL
         }
+        LogManager.shared.log("Export", "coordinate END gid=\(gid) totalMs=\(Int(Date().timeIntervalSince(coordStart) * 1000))")
 
         if let error = coordError {
             LogManager.shared.log("Export", "zip failed: \(error)")
