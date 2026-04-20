@@ -274,7 +274,11 @@ struct LocalReaderView: View {
                 }
                 .scrollTargetLayout()
             }
-            .scrollPosition(id: $scrolledID, anchor: .top)
+            // anchor: .center で iPad 大画面（複数ページ可視）時も画面中央のページを
+            // scrolledID に反映。iPhone は 1 ページしか入らないため anchor 種別は無影響。
+            // anchor: .top の頃、iPad で 2-3 ページ可視の状況で scrolledID 更新が
+            // 遅延して「バーが追従しない」症状が出ていた。
+            .scrollPosition(id: $scrolledID, anchor: .center)
             .onChange(of: scrolledID) { _, newID in
                 if let newID {
                     currentIndex = newID
