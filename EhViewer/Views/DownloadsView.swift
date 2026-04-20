@@ -14,6 +14,9 @@ struct DownloadsView: View {
     @State private var previewMeta: DownloadedGallery?
     /// プレビューからリーダー起動する時の初期ページ（通常起動では 0）
     @State private var readerInitialPage: Int = 0
+    /// エクスポート進行中の gid（nil = idle）。ZIP 生成を main thread でやると
+    /// 500+ ページで数秒フリーズするため Task.detached に移した、その進行表示用。
+    @State private var exportingGid: Int?
 
     private var activeList: [(gid: Int, progress: DownloadManager.DownloadProgress)] {
         manager.activeDownloads.sorted(by: { $0.key < $1.key }).map { (gid: $0.key, progress: $0.value) }
@@ -74,12 +77,21 @@ struct DownloadsView: View {
                                         Label("プレビュー表示", systemImage: "rectangle.grid.3x2")
                                     }
                                     Button {
-                                        if let url = GalleryExporter.exportAsZip(gid: meta.gid) {
-                                            exportShareItem = ShareableURL(url: url)
+                                        let gid = meta.gid
+                                        exportingGid = gid
+                                        Task.detached(priority: .userInitiated) {
+                                            let url = GalleryExporter.exportAsZip(gid: gid)
+                                            await MainActor.run {
+                                                exportingGid = nil
+                                                if let url {
+                                                    exportShareItem = ShareableURL(url: url)
+                                                }
+                                            }
                                         }
                                     } label: {
                                         Label("エクスポート", systemImage: "square.and.arrow.up")
                                     }
+                                    .disabled(exportingGid != nil)
                                     Button(role: .destructive) {
                                         manager.deleteDownload(gid: meta.gid)
                                     } label: {
@@ -208,6 +220,23 @@ struct DownloadsView: View {
                             readerMeta = m
                         }
                     )
+                    .transition(.opacity)
+                }
+                if exportingGid != nil {
+                    ZStack {
+                        Color.black.opacity(0.4).ignoresSafeArea()
+                        VStack(spacing: 12) {
+                            ProgressView().scaleEffect(1.4).tint(.white)
+                            Text("エクスポート中…")
+                                .font(.subheadline).foregroundStyle(.white)
+                            Text("ページ数が多い作品は数秒かかります")
+                                .font(.caption2).foregroundStyle(.white.opacity(0.7))
+                        }
+                        .padding(24)
+                        .background(.ultraThinMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .shadow(radius: 12)
+                    }
                     .transition(.opacity)
                 }
             }
