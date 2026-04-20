@@ -38,50 +38,80 @@ nonisolated enum GalleryExporter {
         }
     }
 
-    // MARK: - エクスポート（フォルダ→ZIP→ShareSheet）
+    // MARK: - エクスポート（フォルダ→ZIP streaming→ShareSheet）
 
     /// ギャラリーフォルダをZIPにしてURLを返す
-    static func exportAsZip(gid: Int) -> URL? {
-        LogManager.shared.log("Export", "exportAsZip ENTER gid=\(gid) mainThread=\(Thread.isMainThread)")
-        // 毎回エクスポート前に古いファイルを掃除（増殖を抑える）
+    ///
+    /// ZIP streaming 版 (stored 方式、ZIP64 常時有効)。旧 NSFileCoordinator(.forUploading)
+    /// は 500+ ページ作品で Code=512 失敗 + 59 秒 main block していたため廃止。
+    /// 自前実装の利点:
+    ///   - `progress` コールバックで実進捗報告可能 (ページ単位)
+    ///   - chunk-wise 読み書きでメモリピークは 256KB 程度
+    ///   - WebP/MP4 は既に圧縮済みなので stored (無圧縮) で速度優先
+    /// 失敗時は throws、成功時は .cortex の URL を返す。
+    static func exportAsZipStreaming(
+        gid: Int,
+        progress: ((_ completed: Int, _ total: Int) -> Void)? = nil
+    ) throws -> URL {
+        LogManager.shared.log("Export", "exportAsZipStreaming ENTER gid=\(gid) mainThread=\(Thread.isMainThread)")
         cleanupOldExportFiles()
+
         let dm = DownloadManager.shared
         let galleryDir = galleryDirectory(gid: gid)
 
         guard FileManager.default.fileExists(atPath: galleryDir.path) else {
-            LogManager.shared.log("Export", "gallery \(gid) not found")
-            return nil
+            throw NSError(domain: "GalleryExporter", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "ギャラリーフォルダが見つかりません (gid=\(gid))"])
         }
 
-        // NSFileCoordinatorでフォルダをZIP化
-        var zipURL: URL?
-        var coordError: NSError?
-        let coordinator = NSFileCoordinator()
-        let coordStart = Date()
-        LogManager.shared.log("Export", "coordinate START gid=\(gid) mainThread=\(Thread.isMainThread)")
-        coordinator.coordinate(readingItemAt: galleryDir, options: .forUploading, error: &coordError) { tempZipURL in
-            LogManager.shared.log("Export", "coordinate closure gid=\(gid) mainThread=\(Thread.isMainThread) elapsed=\(Int(Date().timeIntervalSince(coordStart) * 1000))ms")
-            // 一時ZIPを永続的な場所にコピー
-            let exportDir = FileManager.default.temporaryDirectory
-            let title = dm.downloads[gid]?.title ?? "\(gid)"
-            let safeName = title.replacingOccurrences(of: "/", with: "_").prefix(50)
-            let destURL = exportDir.appendingPathComponent("\(safeName).cortex")
-            try? FileManager.default.removeItem(at: destURL)
-            let copyStart = Date()
-            try? FileManager.default.copyItem(at: tempZipURL, to: destURL)
-            LogManager.shared.log("Export", "copy done gid=\(gid) copyMs=\(Int(Date().timeIntervalSince(copyStart) * 1000))")
-            zipURL = destURL
-        }
-        LogManager.shared.log("Export", "coordinate END gid=\(gid) totalMs=\(Int(Date().timeIntervalSince(coordStart) * 1000))")
-
-        if let error = coordError {
-            LogManager.shared.log("Export", "zip failed: \(error)")
+        // ディレクトリ再帰走査、相対パスを収集
+        guard let enumerator = FileManager.default.enumerator(
+            at: galleryDir,
+            includingPropertiesForKeys: [.isRegularFileKey]
+        ) else {
+            throw NSError(domain: "GalleryExporter", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "ギャラリーフォルダの列挙に失敗"])
         }
 
-        if let url = zipURL {
-            LogManager.shared.log("Export", "exported gid=\(gid) → \(url.lastPathComponent)")
+        var fileURLs: [URL] = []
+        for case let fileURL as URL in enumerator {
+            let isFile = (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) ?? false
+            if isFile { fileURLs.append(fileURL) }
         }
-        return zipURL
+        guard !fileURLs.isEmpty else {
+            throw NSError(domain: "GalleryExporter", code: 3,
+                          userInfo: [NSLocalizedDescriptionKey: "ギャラリーにファイルがありません"])
+        }
+
+        // 出力先 .cortex（temporaryDirectory）
+        let exportDir = FileManager.default.temporaryDirectory
+        let title = dm.downloads[gid]?.title ?? "\(gid)"
+        let safeName = title.replacingOccurrences(of: "/", with: "_").prefix(50)
+        let destURL = exportDir.appendingPathComponent("\(safeName).cortex")
+        try? FileManager.default.removeItem(at: destURL)
+
+        let t0 = Date()
+        let writer = try ZipStreamWriter(url: destURL)
+
+        let total = fileURLs.count
+        progress?(0, total)
+
+        let galleryPrefix = galleryDir.path + "/"
+        for (i, fileURL) in fileURLs.enumerated() {
+            let relPath = fileURL.path.replacingOccurrences(of: galleryPrefix, with: "")
+            try autoreleasepool {
+                try writer.addFileStored(name: relPath, sourceURL: fileURL)
+            }
+            progress?(i + 1, total)
+        }
+
+        try writer.finish()
+
+        let elapsedMs = Int(Date().timeIntervalSince(t0) * 1000)
+        let size = (try? FileManager.default.attributesOfItem(atPath: destURL.path)[.size] as? Int) ?? 0
+        LogManager.shared.log("Export",
+            "exportAsZipStreaming DONE gid=\(gid) files=\(total) size=\(size / 1024 / 1024)MB elapsedMs=\(elapsedMs) → \(destURL.lastPathComponent)")
+        return destURL
     }
 
     // MARK: - インポート（ZIP→フォルダ→DownloadManager登録）
@@ -565,5 +595,204 @@ nonisolated enum GalleryExporter {
     private static func galleryDirectory(gid: Int) -> URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         return docs.appendingPathComponent("EhViewer/downloads/\(gid)", isDirectory: true)
+    }
+}
+
+// MARK: - ZipStreamWriter
+
+/// 自前 ZIP Writer (stored 方式、ZIP64 常時有効)。
+/// - stored: 既に圧縮済みの画像 (WebP/JPEG/PNG/MP4) は deflate 効果薄 + CPU 浪費、stored で速度優先
+/// - ZIP64: file size/offset/entry 数のいずれが 4GB/65535 を超えても安全に動く
+/// - streaming: chunk 単位 (256KB) で読み書き、メモリピーク抑制
+/// - nonisolated: 外側 enum の isolation を継承、Task.detached で別スレッド実行
+final class ZipStreamWriter {
+    private struct Entry {
+        let name: String
+        let crc32: UInt32
+        let size: UInt64
+        let localHeaderOffset: UInt64
+    }
+
+    private let fh: FileHandle
+    private var currentOffset: UInt64 = 0
+    private var entries: [Entry] = []
+    private var finished = false
+
+    init(url: URL) throws {
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        self.fh = try FileHandle(forWritingTo: url)
+    }
+
+    deinit {
+        if !finished { try? fh.close() }
+    }
+
+    /// ファイルを stored (無圧縮) で追加。
+    /// メモリピーク: 256KB chunk × 2 程度 (入出力バッファ)。
+    func addFileStored(name: String, sourceURL: URL) throws {
+        let localHeaderOffset = currentOffset
+
+        // 事前スキャン: CRC32 と総サイズを計算 (ZIP の LFH は CRC が先頭要求のため)
+        let srcFH = try FileHandle(forReadingFrom: sourceURL)
+        defer { try? srcFH.close() }
+
+        var crc: UInt32 = 0
+        var size: UInt64 = 0
+        let chunkSize = 256 * 1024
+
+        while true {
+            let chunk: Data = autoreleasepool {
+                (try? srcFH.read(upToCount: chunkSize)) ?? Data()
+            }
+            if chunk.isEmpty { break }
+            crc = chunk.withUnsafeBytes { raw -> UInt32 in
+                let base = raw.bindMemory(to: UInt8.self).baseAddress
+                return UInt32(crc32(uLong(crc), base, UInt32(chunk.count)))
+            }
+            size += UInt64(chunk.count)
+        }
+        try srcFH.seek(toOffset: 0)
+
+        // Local File Header
+        let nameBytes = name.data(using: .utf8) ?? Data()
+        var lfh = Data(capacity: 30 + nameBytes.count + 20)
+        lfh.append(contentsOf: [0x50, 0x4b, 0x03, 0x04])  // signature
+        lfh.append(le: UInt16(45))    // version needed (ZIP64)
+        lfh.append(le: UInt16(0))     // general purpose bit flag
+        lfh.append(le: UInt16(0))     // compression method = stored
+        lfh.append(le: UInt16(0))     // last mod file time
+        lfh.append(le: UInt16(0))     // last mod file date
+        lfh.append(le: crc)
+        lfh.append(le: UInt32(0xFFFFFFFF))  // comp size (ZIP64 extra で指定)
+        lfh.append(le: UInt32(0xFFFFFFFF))  // uncomp size (ZIP64 extra で指定)
+        lfh.append(le: UInt16(nameBytes.count))
+        lfh.append(le: UInt16(20))    // extra field length (ZIP64: tag 2 + size 2 + uncomp 8 + comp 8)
+        lfh.append(nameBytes)
+        // ZIP64 Extended Information Extra Field
+        lfh.append(le: UInt16(0x0001))
+        lfh.append(le: UInt16(16))    // size of following data
+        lfh.append(le: size)           // uncomp size
+        lfh.append(le: size)           // comp size (stored なので同じ)
+        try fh.write(contentsOf: lfh)
+        currentOffset += UInt64(lfh.count)
+
+        // ファイル本体を chunk コピー
+        while true {
+            let done: Bool = try autoreleasepool {
+                guard let chunk = try srcFH.read(upToCount: chunkSize), !chunk.isEmpty else {
+                    return true
+                }
+                try fh.write(contentsOf: chunk)
+                currentOffset += UInt64(chunk.count)
+                return false
+            }
+            if done { break }
+        }
+
+        entries.append(Entry(
+            name: name,
+            crc32: crc,
+            size: size,
+            localHeaderOffset: localHeaderOffset
+        ))
+    }
+
+    /// Central Directory + ZIP64 EOCD + EOCD を書き出し、ファイルを閉じる。
+    func finish() throws {
+        guard !finished else { return }
+
+        let cdStart = currentOffset
+
+        // Central Directory File Headers
+        for entry in entries {
+            let nameBytes = entry.name.data(using: .utf8) ?? Data()
+            var cd = Data(capacity: 46 + nameBytes.count + 28)
+            cd.append(contentsOf: [0x50, 0x4b, 0x01, 0x02])  // signature
+            cd.append(le: UInt16(45))    // version made by
+            cd.append(le: UInt16(45))    // version needed
+            cd.append(le: UInt16(0))     // flags
+            cd.append(le: UInt16(0))     // compression method = stored
+            cd.append(le: UInt16(0))     // last mod time
+            cd.append(le: UInt16(0))     // last mod date
+            cd.append(le: entry.crc32)
+            cd.append(le: UInt32(0xFFFFFFFF))  // comp size (ZIP64)
+            cd.append(le: UInt32(0xFFFFFFFF))  // uncomp size (ZIP64)
+            cd.append(le: UInt16(nameBytes.count))
+            cd.append(le: UInt16(28))    // extra field length (ZIP64: uncomp 8 + comp 8 + offset 8 + tag 4)
+            cd.append(le: UInt16(0))     // comment length
+            cd.append(le: UInt16(0))     // disk number start
+            cd.append(le: UInt16(0))     // internal file attrs
+            cd.append(le: UInt32(0))     // external file attrs
+            cd.append(le: UInt32(0xFFFFFFFF))  // local header offset (ZIP64)
+            cd.append(nameBytes)
+            // ZIP64 Extra Field
+            cd.append(le: UInt16(0x0001))
+            cd.append(le: UInt16(24))    // size of following data
+            cd.append(le: entry.size)              // uncomp size
+            cd.append(le: entry.size)              // comp size (stored なので同じ)
+            cd.append(le: entry.localHeaderOffset)
+            try fh.write(contentsOf: cd)
+            currentOffset += UInt64(cd.count)
+        }
+
+        let cdSize = currentOffset - cdStart
+        let z64EocdOffset = currentOffset
+
+        // ZIP64 End of Central Directory Record
+        var z64 = Data(capacity: 56)
+        z64.append(contentsOf: [0x50, 0x4b, 0x06, 0x06])
+        z64.append(le: UInt64(44))     // size of ZIP64 EOCD record - 12
+        z64.append(le: UInt16(45))     // version made by
+        z64.append(le: UInt16(45))     // version needed
+        z64.append(le: UInt32(0))      // disk number
+        z64.append(le: UInt32(0))      // disk with CD
+        z64.append(le: UInt64(entries.count))  // entries on disk
+        z64.append(le: UInt64(entries.count))  // total entries
+        z64.append(le: cdSize)
+        z64.append(le: cdStart)
+        try fh.write(contentsOf: z64)
+        currentOffset += UInt64(z64.count)
+
+        // ZIP64 End of Central Directory Locator
+        var loc = Data(capacity: 20)
+        loc.append(contentsOf: [0x50, 0x4b, 0x06, 0x07])
+        loc.append(le: UInt32(0))      // disk with ZIP64 EOCD
+        loc.append(le: z64EocdOffset)
+        loc.append(le: UInt32(1))      // total number of disks
+        try fh.write(contentsOf: loc)
+        currentOffset += UInt64(loc.count)
+
+        // End of Central Directory Record (ZIP64 で実値は 0xFFFF... にしておく)
+        var eocd = Data(capacity: 22)
+        eocd.append(contentsOf: [0x50, 0x4b, 0x05, 0x06])
+        eocd.append(le: UInt16(0))     // disk number
+        eocd.append(le: UInt16(0))     // disk with CD
+        eocd.append(le: UInt16(0xFFFF))    // entries on disk (ZIP64 で実値参照)
+        eocd.append(le: UInt16(0xFFFF))    // total entries (ZIP64 で実値参照)
+        eocd.append(le: UInt32(0xFFFFFFFF))  // size of CD (ZIP64)
+        eocd.append(le: UInt32(0xFFFFFFFF))  // offset of CD (ZIP64)
+        eocd.append(le: UInt16(0))     // comment length
+        try fh.write(contentsOf: eocd)
+        currentOffset += UInt64(eocd.count)
+
+        try fh.close()
+        finished = true
+    }
+}
+
+// MARK: - Data little-endian append helpers (ZIP is little-endian)
+
+private extension Data {
+    mutating func append(le value: UInt16) {
+        var le = value.littleEndian
+        Swift.withUnsafeBytes(of: &le) { self.append(contentsOf: $0) }
+    }
+    mutating func append(le value: UInt32) {
+        var le = value.littleEndian
+        Swift.withUnsafeBytes(of: &le) { self.append(contentsOf: $0) }
+    }
+    mutating func append(le value: UInt64) {
+        var le = value.littleEndian
+        Swift.withUnsafeBytes(of: &le) { self.append(contentsOf: $0) }
     }
 }
