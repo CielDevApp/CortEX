@@ -17,6 +17,10 @@ struct DownloadsView: View {
     /// エクスポート進行中の gid（nil = idle）。ZIP 生成を main thread でやると
     /// 500+ ページで数秒フリーズするため Task.detached に移した、その進行表示用。
     @State private var exportingGid: Int?
+    /// エクスポート進捗。自前 ZIP streaming でページ単位に更新。
+    @State private var exportProgress: ExportProgress = ExportProgress(done: 0, total: 0)
+    /// エクスポートエラーメッセージ（nil = 成功 or idle）。Alert 表示用。
+    @State private var exportError: String?
 
     private var activeList: [(gid: Int, progress: DownloadManager.DownloadProgress)] {
         manager.activeDownloads.sorted(by: { $0.key < $1.key }).map { (gid: $0.key, progress: $0.value) }
@@ -77,35 +81,7 @@ struct DownloadsView: View {
                                         Label("プレビュー表示", systemImage: "rectangle.grid.3x2")
                                     }
                                     Button {
-                                        let gid = meta.gid
-                                        let tapTime = Date()
-                                        LogManager.shared.log("Export", "tap gid=\(gid) mainThread=\(Thread.isMainThread)")
-                                        exportingGid = gid
-                                        Task.detached(priority: .userInitiated) {
-                                            LogManager.shared.log("Export", "detached start gid=\(gid) mainThread=\(Thread.isMainThread) elapsed=\(Int(Date().timeIntervalSince(tapTime) * 1000))ms")
-
-                                            let zipStart = Date()
-                                            let url = GalleryExporter.exportAsZip(gid: gid)
-                                            let zipMs = Int(Date().timeIntervalSince(zipStart) * 1000)
-                                            LogManager.shared.log("Export", "zip done gid=\(gid) zipMs=\(zipMs) mainThread=\(Thread.isMainThread) url=\(url?.lastPathComponent ?? "nil")")
-
-                                            await MainActor.run {
-                                                exportingGid = nil
-                                                LogManager.shared.log("Export", "overlay cleared gid=\(gid)")
-                                            }
-
-                                            // overlay 消滅アニメと sheet 提示の同 tick 衝突回避
-                                            try? await Task.sleep(nanoseconds: 300_000_000)
-
-                                            await MainActor.run {
-                                                if let url {
-                                                    exportShareItem = ShareableURL(url: url)
-                                                    LogManager.shared.log("Export", "sheet requested gid=\(gid)")
-                                                } else {
-                                                    LogManager.shared.log("Export", "sheet SKIPPED gid=\(gid) url=nil")
-                                                }
-                                            }
-                                        }
+                                        performExport(meta: meta)
                                     } label: {
                                         Label("エクスポート", systemImage: "square.and.arrow.up")
                                     }
@@ -241,27 +217,18 @@ struct DownloadsView: View {
                     .transition(.opacity)
                 }
                 if exportingGid != nil {
-                    ZStack {
-                        Color.black.opacity(0.4).ignoresSafeArea()
-                        VStack(spacing: 12) {
-                            ProgressView().scaleEffect(1.4).tint(.white)
-                            Text("エクスポート中…")
-                                .font(.subheadline).foregroundStyle(.white)
-                            Text("ページ数が多い作品は数秒かかります")
-                                .font(.caption2).foregroundStyle(.white.opacity(0.7))
-                        }
-                        .padding(24)
-                        .background(.ultraThinMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                        .shadow(radius: 12)
-                    }
-                    .transition(.opacity)
+                    exportProgressOverlay
                 }
             }
             .alert("インポート", isPresented: .constant(importMessage != nil)) {
                 Button("OK") { importMessage = nil }
             } message: {
                 Text(importMessage ?? "")
+            }
+            .alert("エクスポート失敗", isPresented: .constant(exportError != nil)) {
+                Button("OK") { exportError = nil }
+            } message: {
+                Text(exportError ?? "")
             }
             .onChange(of: manager.lastImportedGid) { _, gid in
                 guard let gid else { return }
@@ -495,6 +462,66 @@ struct DownloadsView: View {
         .padding(.vertical, 4)
     }
 
+    // MARK: - エクスポート処理（自前 ZIP streaming + 実進捗）
+
+    private func performExport(meta: DownloadedGallery) {
+        let gid = meta.gid
+        let totalPages = meta.pageCount
+        exportingGid = gid
+        exportProgress = ExportProgress(done: 0, total: totalPages)
+
+        Task.detached(priority: .userInitiated) {
+            do {
+                let url = try GalleryExporter.exportAsZipStreaming(
+                    gid: gid,
+                    progress: { done, total in
+                        Task { @MainActor in
+                            exportProgress = ExportProgress(done: done, total: total)
+                        }
+                    }
+                )
+                await MainActor.run { exportingGid = nil }
+                // overlay 消滅 vs sheet 提示の同 tick 衝突回避
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                await MainActor.run {
+                    exportShareItem = ShareableURL(url: url)
+                }
+            } catch {
+                await MainActor.run {
+                    exportingGid = nil
+                    exportError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private var exportProgressOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.4).ignoresSafeArea()
+            VStack(spacing: 14) {
+                let done = exportProgress.done
+                let total = max(exportProgress.total, 1)
+                let ratio = Double(done) / Double(total)
+                Text("エクスポート中…")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.white)
+                ProgressView(value: ratio)
+                    .progressViewStyle(.linear)
+                    .tint(.white)
+                    .frame(width: 240)
+                Text("\(done) / \(total) ページ (\(Int(ratio * 100))%)")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.85))
+                    .monospacedDigit()
+            }
+            .padding(24)
+            .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .shadow(radius: 12)
+        }
+        .transition(.opacity)
+    }
+
     // MARK: - 速度フォーマット
 
     private func formatSpeed(_ bytesPerSec: Int64) -> String {
@@ -553,6 +580,12 @@ struct DownloadsView: View {
 struct ShareableURL: Identifiable {
     let id = UUID()
     let url: URL
+}
+
+/// エクスポート進捗（SwiftUI @State 要件で Equatable 必須）
+struct ExportProgress: Equatable {
+    let done: Int
+    let total: Int
 }
 
 #if canImport(UIKit)
