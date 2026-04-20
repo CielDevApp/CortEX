@@ -54,6 +54,9 @@ class DownloadManager: ObservableObject {
     private var downloadedBytes: [Int: Int64] = [:]
     /// gid ごとの DL 開始時点の on-disk バイト数（リアルタイム表示の基準値）
     private var initialOnDiskBytes: [Int: Int64] = [:]
+    /// deleteDownload 後に autoSavePage の in-flight Task が metadata を復活させる
+    /// ゾンビ問題対策。リーダー再オープン or startDownload 時にクリア。
+    private var recentlyDeletedGids: Set<Int> = []
 
     @Published var downloads: [Int: DownloadedGallery] = [:] {
         didSet { activeDownloadCount = downloads.values.filter { !$0.isComplete }.count }
@@ -321,6 +324,8 @@ class DownloadManager: ObservableObject {
     /// オンライン閲覧中の画像データをDLフォルダに保存（バックグラウンド）
     func autoSavePage(gid: Int, token: String, title: String, pageCount: Int, page: Int, imageData: Data) {
         guard UserDefaults.standard.bool(forKey: "autoSaveOnRead") else { return }
+        // 「このまま閉じる」で deleteDownload 直後、in-flight Task がゾンビ復活させる経路をブロック
+        guard !recentlyDeletedGids.contains(gid) else { return }
 
         let dir = galleryDirectory(gid: gid)
         ensureDirectory(dir)
@@ -342,6 +347,12 @@ class DownloadManager: ObservableObject {
             }
 
             await MainActor.run {
+                // Task.detached 中に deleteDownload が走ったら write したファイル含めて破棄
+                guard !self.recentlyDeletedGids.contains(gid) else {
+                    try? self.fileManager.removeItem(at: filePath)
+                    if needsCover { try? self.fileManager.removeItem(at: coverPath) }
+                    return
+                }
                 // メタデータ更新
                 var meta = self.downloads[gid] ?? DownloadedGallery(
                     gid: gid, token: token, title: title,
@@ -360,6 +371,7 @@ class DownloadManager: ObservableObject {
     /// カバー画像の自動保存
     func autoSaveCover(gid: Int, imageData: Data) {
         guard UserDefaults.standard.bool(forKey: "autoSaveOnRead") else { return }
+        guard !recentlyDeletedGids.contains(gid) else { return }
         let coverPath = coverFilePath(gid: gid)
         guard !fileManager.fileExists(atPath: coverPath.path) else { return }
         Task.detached(priority: .utility) {
@@ -495,6 +507,8 @@ class DownloadManager: ObservableObject {
             LogManager.shared.log("Download", "already downloading gid=\(gallery.gid)")
             return
         }
+        // 明示 DL 開始なので、以前の「このまま閉じる」ブロックを解除
+        recentlyDeletedGids.remove(gallery.gid)
 
         let gid = gallery.gid
         let token = gallery.token
@@ -888,10 +902,17 @@ class DownloadManager: ObservableObject {
         bg.cancelAllTasks(for: gid, session: bg.ehSession)
         // LiveActivity 終了（通知センター/Dynamic Islandから消す）
         endLiveActivity(gid: gid, success: false)
+        // in-flight autoSavePage Task が saveMetadata で復活させないようブロック
+        recentlyDeletedGids.insert(gid)
         let dir = galleryDirectory(gid: gid)
         try? fileManager.removeItem(at: dir)
         downloads.removeValue(forKey: gid)
         coverCache.removeObject(forKey: NSNumber(value: gid))
+    }
+
+    /// リーダー再オープン時等、autoSave を再有効化したい場面で呼ぶ
+    func clearRecentlyDeleted(gid: Int) {
+        recentlyDeletedGids.remove(gid)
     }
 
     /// @Published辞書のin-place mutationはSwiftUIに通知されないため、辞書を再代入して通知する
@@ -1277,7 +1298,11 @@ class DownloadManager: ObservableObject {
             LogManager.shared.log("Download", "gid=\(gid) 2ndpass START retry=\(failedPageNums) (5s wait)")
             // UI: 「別ミラーから再試行中」に切替 (info マーク表示用)
             updatePhase(gid: gid, phase: .retrying)
-            await ExtremeMode.shared.delay(nanoseconds: 5_000_000_000)
+            // 5s 待機中に cancelDownload されたら即脱出（小刻みに分割してチェック）
+            for _ in 0..<10 {
+                if activeDownloads[gid]?.isCancelled == true { break }
+                await ExtremeMode.shared.delay(nanoseconds: 500_000_000)
+            }
 
             for (index, pageURL) in allFailed {
                 if activeDownloads[gid]?.isCancelled == true { break }
@@ -1398,6 +1423,8 @@ class DownloadManager: ObservableObject {
         var usedMirror = forceMirror
 
         for attempt in 1...maxRetries {
+            // 各 attempt 冒頭でキャンセル反映（fetchImageURL の途中で cancel された後の次 attempt を即脱出）
+            if activeDownloads[gid]?.isCancelled == true { return false }
             do {
                 LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) attempt \(attempt): resolving URL")
                 // SSLエラーで失敗済みなら別ミラーを試す
@@ -1408,9 +1435,11 @@ class DownloadManager: ObservableObject {
                 } else {
                     imageURL = try await client.fetchImageURL(pageURL: pageURL)
                 }
+                if activeDownloads[gid]?.isCancelled == true { return false }
                 LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) attempt \(attempt): resolved → \(imageURL.absoluteString.suffix(80))")
 
                 await ExtremeMode.shared.delay(nanoseconds: requestDelay)
+                if activeDownloads[gid]?.isCancelled == true { return false }
 
                 // Background URLSession経由（アプリsuspend中もDL継続）
                 let headers: [String: String] = [
@@ -1425,6 +1454,7 @@ class DownloadManager: ObservableObject {
                     headers: headers
                 )
                 LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) attempt \(attempt): downloadTask done ok=\(ok)")
+                if activeDownloads[gid]?.isCancelled == true { return false }
                 guard ok, BackgroundDownloadManager.isValidImageFile(at: filePath) else {
                     try? FileManager.default.removeItem(at: filePath)
                     LogManager.shared.log("Download", "gid=\(gid) page \(index + 1): invalid/empty (attempt \(attempt)/\(maxRetries))")
