@@ -192,7 +192,13 @@ struct DownloadsView: View {
                 }
             }
             .sheet(item: $exportShareItem) { item in
-                ActivityView(activityItems: [item.url])
+                // 共有完了（AirDrop/Save to Files/キャンセル等すべて）で tmp の .cortex を削除。
+                // 次の起動 or 次の export を待たずに即掃除して容量圧迫を防ぐ。
+                ActivityView(activityItems: [item.url]) {
+                    let url = item.url
+                    try? FileManager.default.removeItem(at: url)
+                    LogManager.shared.log("Export", "tmp cleanup after share: \(url.lastPathComponent)")
+                }
             }
             #if os(iOS)
             .fullScreenCover(item: $readerMeta, onDismiss: { readerInitialPage = 0 }) { meta in
@@ -612,9 +618,15 @@ enum ExportPhase: Equatable {
 #if canImport(UIKit)
 struct ActivityView: UIViewControllerRepresentable {
     let activityItems: [Any]
+    /// activity 完了（成功 / キャンセル両方）で発火。tmp ファイル削除用。
+    var onComplete: (() -> Void)? = nil
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+        let vc = UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+        vc.completionWithItemsHandler = { _, _, _, _ in
+            onComplete?()
+        }
+        return vc
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
