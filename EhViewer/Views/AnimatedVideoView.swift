@@ -184,13 +184,19 @@ struct AnimatedVideoView: View {
 ///
 /// 変換コストが重いため、LocalReader と違い自動起動しない:
 /// - 初期表示: 静止画 (posterImage) + ▶ ボタン overlay
-/// - ▶ タップ: 生 Data を tmp.webp 書き出し → 既存 AnimatedVideoView に切替
+/// - ▶ タップ: Data なら tmp.webp 書き出し / URL ならそのまま → 既存 AnimatedVideoView に切替
 /// - tmp は onDisappear で削除 + 起動時一括クリーンアップで保険
 ///
 /// AnimatedVideoView 自体は URL 前提・自動再生のまま一切触らない（LocalReader 互換性完全維持）。
+enum AnimatedSource: Equatable {
+    /// オンライン fetch の生 WebP Data（tmp 書き出し要）
+    case data(Data)
+    /// 既に DL 済みのローカルファイルパス（そのまま使用）
+    case url(URL)
+}
+
 struct GalleryAnimatedWebPView: View {
-    /// 表示中のページの生 WebP Data（アニメ判定済み）
-    let data: Data
+    let source: AnimatedSource
     /// 静止画 fallback（一覧から既に表示されているもの、そのまま表示に使う）
     let staticImage: UIImage?
     /// 変換キャッシュ識別用
@@ -199,14 +205,15 @@ struct GalleryAnimatedWebPView: View {
     /// 親ビューのツールバー表示切替（AnimatedVideoView へそのまま伝播）
     var onToggleControls: (() -> Void)? = nil
 
-    @State private var tmpURL: URL?
+    @State private var playURL: URL?
     @State private var playRequested = false
+    @State private var ownsTmpFile = false
 
     var body: some View {
         ZStack {
-            if playRequested, let tmpURL {
+            if playRequested, let playURL {
                 AnimatedVideoView(
-                    sourceURL: tmpURL,
+                    sourceURL: playURL,
                     gid: gid,
                     page: page,
                     onToggleControls: onToggleControls
@@ -232,24 +239,36 @@ struct GalleryAnimatedWebPView: View {
             }
         }
         .onDisappear {
-            // tmp 削除: ページ離脱時に即掃除（容量圧迫回避）
-            if let url = tmpURL {
+            // tmp 書き出した場合のみ削除（既存の DL 済みファイルは残す）
+            if ownsTmpFile, let url = playURL {
                 try? FileManager.default.removeItem(at: url)
-                tmpURL = nil
             }
+            playURL = nil
+            playRequested = false
+            ownsTmpFile = false
         }
     }
 
     private func requestPlayback() {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("gallery_webp_\(gid)_\(page)_\(UUID().uuidString).webp")
-        do {
-            try data.write(to: url)
-            tmpURL = url
+        switch source {
+        case .data(let data):
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("gallery_webp_\(gid)_\(page)_\(UUID().uuidString).webp")
+            do {
+                try data.write(to: url)
+                playURL = url
+                ownsTmpFile = true
+                playRequested = true
+                LogManager.shared.log("Convert", "gallery webp play (data) gid=\(gid) page=\(page) tmp=\(url.lastPathComponent)")
+            } catch {
+                LogManager.shared.log("Convert", "gallery webp tmp write failed gid=\(gid) page=\(page): \(error.localizedDescription)")
+            }
+        case .url(let url):
+            // 既存 DL 済みファイルはそのまま使う（削除しない）
+            playURL = url
+            ownsTmpFile = false
             playRequested = true
-            LogManager.shared.log("Convert", "gallery webp play requested gid=\(gid) page=\(page) tmp=\(url.lastPathComponent)")
-        } catch {
-            LogManager.shared.log("Convert", "gallery webp tmp write failed gid=\(gid) page=\(page): \(error.localizedDescription)")
+            LogManager.shared.log("Convert", "gallery webp play (url) gid=\(gid) page=\(page) file=\(url.lastPathComponent)")
         }
     }
 }

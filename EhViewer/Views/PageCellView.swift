@@ -17,6 +17,9 @@ struct PageCellView: View {
     var mp4Gid: Int = 0
     /// アニメビュー長押し時に親ビューのツールバー表示を切替える
     var onToggleControls: (() -> Void)? = nil
+    /// true = GalleryReader 経由、アニメ WebP は全て ▶ ボタン手動再生扱い
+    /// false = LocalReader / NhentaiReader 経由、既存の自動再生挙動維持
+    var manualPlayForAnimated: Bool = false
 
     var body: some View {
         if isHorizontalMode {
@@ -40,11 +43,22 @@ struct PageCellView: View {
         ZStack {
             #if canImport(UIKit)
             if let animURL = holder.animatedFileURL {
-                AnimatedVideoView(sourceURL: animURL, gid: mp4Gid, page: index, onToggleControls: onToggleControls)
+                if manualPlayForAnimated {
+                    GalleryAnimatedWebPView(
+                        source: .url(animURL),
+                        staticImage: holder.image,
+                        gid: mp4Gid,
+                        page: index,
+                        onToggleControls: onToggleControls
+                    )
                     .frame(width: Self.screenSize.width, height: Self.screenSize.height)
+                } else {
+                    AnimatedVideoView(sourceURL: animURL, gid: mp4Gid, page: index, onToggleControls: onToggleControls)
+                        .frame(width: Self.screenSize.width, height: Self.screenSize.height)
+                }
             } else if let animData = holder.animatedWebPData {
                 GalleryAnimatedWebPView(
-                    data: animData,
+                    source: .data(animData),
                     staticImage: holder.image,
                     gid: mp4Gid,
                     page: index,
@@ -101,15 +115,26 @@ struct PageCellView: View {
         Group {
             #if canImport(UIKit)
             if let animURL = holder.animatedFileURL {
-                AnimatedVideoView(sourceURL: animURL, gid: mp4Gid, page: index, onToggleControls: onToggleControls)
+                if manualPlayForAnimated {
+                    GalleryAnimatedWebPView(
+                        source: .url(animURL),
+                        staticImage: holder.image,
+                        gid: mp4Gid,
+                        page: index,
+                        onToggleControls: onToggleControls
+                    )
                     .frame(maxWidth: .infinity)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        if verticalSizeClass == .regular, let img = holder.image { onTap(img) }
-                    }
+                } else {
+                    AnimatedVideoView(sourceURL: animURL, gid: mp4Gid, page: index, onToggleControls: onToggleControls)
+                        .frame(maxWidth: .infinity)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            if verticalSizeClass == .regular, let img = holder.image { onTap(img) }
+                        }
+                }
             } else if let animData = holder.animatedWebPData {
                 GalleryAnimatedWebPView(
-                    data: animData,
+                    source: .data(animData),
                     staticImage: holder.image,
                     gid: mp4Gid,
                     page: index,
