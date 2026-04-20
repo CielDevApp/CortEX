@@ -68,7 +68,15 @@ class DownloadManager: ObservableObject {
         var current: Int
         var total: Int
         var isCancelled: Bool = false
+        var phase: Phase = .preparing
         nonisolated var fraction: Double { total > 0 ? Double(current) / Double(total) : 0 }
+
+        /// DL フェーズ: UI 側で「準備中」「通常DL」「リトライ中」を区別するため
+        enum Phase: Sendable {
+            case preparing   // URL 取得中など、progress 0/0 で見える期間
+            case active      // 1stpass 通常 DL 中
+            case retrying    // 2ndpass に入った (低速 mirror 再試行中)
+        }
     }
 
     private let client = EhClient.shared
@@ -873,11 +881,25 @@ class DownloadManager: ObservableObject {
 
     /// @Published辞書のin-place mutationはSwiftUIに通知されないため、辞書を再代入して通知する
     /// スロットルは cover cache 導入で再レンダーが安くなったので撤去（リアルタイム表示）
+    /// phase は既存値を保持、別途 updatePhase() で変更する
     private func updateProgress(gid: Int, current: Int, total: Int) {
         var updated = activeDownloads
-        updated[gid] = DownloadProgress(current: current, total: total)
+        let prevPhase = updated[gid]?.phase ?? .preparing
+        let prevCancelled = updated[gid]?.isCancelled ?? false
+        updated[gid] = DownloadProgress(current: current, total: total, isCancelled: prevCancelled, phase: prevPhase)
         activeDownloads = updated
         updateLiveActivity(gid: gid, current: current, total: total)
+    }
+
+    /// DL phase のみを更新 (UI 表示切替用)
+    /// preparing → active → retrying の遷移に対応
+    private func updatePhase(gid: Int, phase: DownloadProgress.Phase) {
+        guard var entry = activeDownloads[gid] else { return }
+        guard entry.phase != phase else { return }
+        entry.phase = phase
+        var updated = activeDownloads
+        updated[gid] = entry
+        activeDownloads = updated
     }
 
     /// ギャラリーディレクトリ内の画像ファイル合計サイズをスキャンして初期化
@@ -1103,6 +1125,9 @@ class DownloadManager: ObservableObject {
             }
         }
 
+        // URL 取得完了、実 DL フェーズに遷移 (UI で「準備中」→ 通常 DL 表示)
+        updatePhase(gid: gid, phase: .active)
+
         // Batch enqueue方式: URL解決は並列5で、解決次第BG sessionに投入
         // → 一度enqueueされたDLはアプリsuspend中もiOSが継続
         let stream = BackgroundDownloadManager.shared.makeStream(for: gid)
@@ -1227,6 +1252,8 @@ class DownloadManager: ObservableObject {
         if !allFailed.isEmpty {
             let failedPageNums = allFailed.map { $0.index + 1 }
             LogManager.shared.log("Download", "gid=\(gid) 2ndpass START retry=\(failedPageNums) (5s wait)")
+            // UI: 「別ミラーから再試行中」に切替 (info マーク表示用)
+            updatePhase(gid: gid, phase: .retrying)
             await ExtremeMode.shared.delay(nanoseconds: 5_000_000_000)
 
             for (index, pageURL) in allFailed {
