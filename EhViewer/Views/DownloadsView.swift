@@ -583,6 +583,10 @@ struct LocalThumbCell: View {
     let index: Int
     let onTap: () -> Void
 
+    /// セル高さ（縦長固定）。adaptive(80-120px) の列幅に対して 140 高で portrait 比率になる。
+    /// 縦長/横長どちらの元画像も .aspectRatio(.fill) + .clipped() で中心クロップし統一。
+    static let cellHeight: CGFloat = 140
+
     @State private var thumbImage: PlatformImage?
     @State private var isAnimated: Bool = false
 
@@ -594,9 +598,11 @@ struct LocalThumbCell: View {
                         Image(platformImage: img)
                             .resizable()
                             .aspectRatio(contentMode: .fill)
+                            .frame(minWidth: 0, maxWidth: .infinity, minHeight: Self.cellHeight, maxHeight: Self.cellHeight)
+                            .clipped()
                     } else {
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Color.gray.opacity(0.2))
+                        Color.gray.opacity(0.2)
+                            .frame(height: Self.cellHeight)
                             .overlay {
                                 Image(systemName: "photo")
                                     .foregroundStyle(.secondary)
@@ -609,8 +615,7 @@ struct LocalThumbCell: View {
                             .shadow(radius: 2)
                     }
                 }
-                .frame(height: 120)
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, minHeight: Self.cellHeight, maxHeight: Self.cellHeight)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .overlay {
                     if isAnimated {
