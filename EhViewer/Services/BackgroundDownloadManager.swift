@@ -81,11 +81,33 @@ final class BackgroundDownloadManager: NSObject {
     /// アプリ復帰時にシステムから受け取るcompletionHandler
     var systemCompletionHandlers: [String: () -> Void] = [:]
 
+    /// 速度ベース stall 検出 (個別 task 単位)
+    /// 既存の stream watchdog (DownloadManager 側、20秒 completion 無しで強制終了) は
+    /// 「そもそも completion が来ない」ケース用。SpeedTracker は「通信はしてるが遅すぎる」
+    /// ケースを別軸で検知する。責務分離でダブルキルを回避
+    private let speedTracker = SpeedTracker()
+    private var speedCheckTimer: DispatchSourceTimer?
+
     private override init() {
         super.init()
         // 起動時に前回の残骸 task をクリーンアップ
         Task.detached(priority: .utility) { [weak self] in
             await self?.cleanupStaleTasks()
+        }
+        // 5秒ごとに SpeedTracker を評価 (低速 task を早期 kill → 2ndpass で mirror 切替)
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        timer.schedule(deadline: .now() + 5, repeating: 5)
+        timer.setEventHandler { [weak self] in
+            self?.evaluateSpeedStalls()
+        }
+        timer.resume()
+        speedCheckTimer = timer
+    }
+
+    private func evaluateSpeedStalls() {
+        let killed = speedTracker.evaluateAndCancel()
+        for (taskId, reason) in killed {
+            LogManager.shared.log("bgdl", "speed-kill taskId=\(taskId) \(reason)")
         }
     }
 
@@ -114,6 +136,7 @@ final class BackgroundDownloadManager: NSObject {
             stateQueue.sync {
                 singleTaskContinuations[task.taskIdentifier] = (finalPath, continuation)
             }
+            speedTracker.start(taskId: task.taskIdentifier, task: task)
             task.resume()
         }
     }
@@ -142,6 +165,7 @@ final class BackgroundDownloadManager: NSObject {
         stateQueue.sync {
             registry[task.taskIdentifier] = TaskEntry(gid: gid, pageIndex: pageIndex, finalPath: finalPath)
         }
+        speedTracker.start(taskId: task.taskIdentifier, task: task)
         task.resume()
     }
 
@@ -231,6 +255,8 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
                     totalBytesWritten: Int64,
                     totalBytesExpectedToWrite: Int64) {
         let taskId = downloadTask.taskIdentifier
+        // SpeedTracker 更新 (task 単位の受信総量追跡)
+        speedTracker.update(taskId: taskId, totalBytes: totalBytesWritten)
         let gidOpt: Int? = stateQueue.sync { registry[taskId]?.gid }
         guard let gid = gidOpt else { return }
         bytesLock.lock()
@@ -270,6 +296,7 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
         let taskId = downloadTask.taskIdentifier
+        speedTracker.finish(taskId: taskId)
 
         // Single task path（互換）
         let single: (URL, CheckedContinuation<Bool, Never>)? = stateQueue.sync {
@@ -389,6 +416,7 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         guard let error else { return }
         let taskId = task.taskIdentifier
+        speedTracker.finish(taskId: taskId)
 
         // Single task path
         let single: (URL, CheckedContinuation<Bool, Never>)? = stateQueue.sync {
@@ -417,5 +445,98 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
             handler?()
         }
         LogManager.shared.log("bgdl", "session events done: \(identifier)")
+    }
+}
+
+/// 各 DL task の受信バイト量と進捗時刻を追跡し、低速/停止を検出して早期 cancel する
+/// 既存の stream stall watchdog (DownloadManager 側、completion 到達を監視) とはスコープ独立:
+/// SpeedTracker は 1 task 内の実速度を見る、stream watchdog は task 群全体の progress 間隔を見る。
+/// Kill 発動時は URLSessionTask.cancel() → didCompleteWithError 経由で retriable=true 通知
+/// → 既存 2ndpass 回送フローに乗る (ダブルキル無し)
+final class SpeedTracker: @unchecked Sendable {
+    private let lock = NSLock()
+    private var trackers: [Int: Tracker] = [:]
+
+    private struct Tracker {
+        weak var task: URLSessionTask?
+        var lastBytes: Int64
+        var lastProgressAt: CFAbsoluteTime
+        var startedAt: CFAbsoluteTime
+        /// 直近 30 秒以内のサンプル (時刻, 累計バイト)
+        var samples: [(time: CFAbsoluteTime, bytes: Int64)]
+    }
+
+    /// 追跡開始 (enqueue / downloadToFile 時)
+    func start(taskId: Int, task: URLSessionTask) {
+        let now = CFAbsoluteTimeGetCurrent()
+        lock.lock(); defer { lock.unlock() }
+        trackers[taskId] = Tracker(
+            task: task,
+            lastBytes: 0,
+            lastProgressAt: now,
+            startedAt: now,
+            samples: [(now, 0)]
+        )
+    }
+
+    /// 進捗通知 (didWriteData から呼ぶ)
+    func update(taskId: Int, totalBytes: Int64) {
+        let now = CFAbsoluteTimeGetCurrent()
+        lock.lock(); defer { lock.unlock() }
+        guard var t = trackers[taskId] else { return }
+        if totalBytes > t.lastBytes {
+            t.lastBytes = totalBytes
+            t.lastProgressAt = now
+        }
+        t.samples.append((now, totalBytes))
+        // 直近 30 秒より古いサンプルは破棄 (メモリ保全)
+        let cutoff = now - 30
+        t.samples.removeAll { $0.time < cutoff }
+        trackers[taskId] = t
+    }
+
+    /// 追跡終了 (完了/エラー/cancel 後)
+    func finish(taskId: Int) {
+        lock.lock(); defer { lock.unlock() }
+        trackers.removeValue(forKey: taskId)
+    }
+
+    /// 全 task を評価、kill すべきなら task.cancel() 発動
+    /// 返り値: (taskId, 理由) のリスト
+    func evaluateAndCancel() -> [(taskId: Int, reason: String)] {
+        let now = CFAbsoluteTimeGetCurrent()
+        lock.lock()
+        let snapshot = trackers
+        lock.unlock()
+
+        var killed: [(Int, String)] = []
+        for (taskId, t) in snapshot {
+            guard let reason = Self.killReason(tracker: t, now: now) else { continue }
+            t.task?.cancel()
+            killed.append((taskId, reason))
+            // finish は didCompleteWithError で呼ばれるのでここでは解除しない
+        }
+        return killed
+    }
+
+    /// kill 条件判定 (静的ロジック、副作用なし)
+    /// - 進捗停止 20秒超 = 純粋 stall
+    /// - 直近 30秒以上のサンプル平均が 100 B/s 未満 = 低速すぎ
+    private static func killReason(tracker t: Tracker, now: CFAbsoluteTime) -> String? {
+        let noProgress = now - t.lastProgressAt
+        if noProgress > 20 {
+            return "no progress for \(Int(noProgress))s"
+        }
+        if let oldest = t.samples.first, let newest = t.samples.last {
+            let timeDelta = newest.time - oldest.time
+            let bytesDelta = newest.bytes - oldest.bytes
+            if timeDelta >= 30 {
+                let bytesPerSec = Double(bytesDelta) / timeDelta
+                if bytesPerSec < 100 {
+                    return "slow \(Int(bytesPerSec))B/s over \(Int(timeDelta))s"
+                }
+            }
+        }
+        return nil
     }
 }
