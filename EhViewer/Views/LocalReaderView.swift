@@ -435,7 +435,8 @@ struct LocalReaderView: View {
                 page: index,
                 onToggleControls: {
                     withAnimation(.easeInOut(duration: 0.2)) { showControls.toggle() }
-                }
+                },
+                autoPlayIfActive: currentIndex == index
             )
             .frame(maxWidth: .infinity, maxHeight: isHorizontal ? .infinity : nil, alignment: isHorizontal ? .center : .top)
         } else {
