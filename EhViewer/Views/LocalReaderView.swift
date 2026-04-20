@@ -270,6 +270,19 @@ struct LocalReaderView: View {
                         localPageCell(index: index)
                             .id(index)
                             .frame(maxWidth: .infinity)
+                            #if canImport(UIKit)
+                            .onAppear {
+                                // iPad では .scrollPosition(id:) のバインディング更新が
+                                // 複数ページ可視 + スライダージャンプ後の手動スクロールで
+                                // 効かなくなる症状あり（iPadOS 26.3 実機で確認）。
+                                // iPad 限定で onAppear 補助更新を入れて「追従しない」を解消。
+                                // iPhone は 1 ページ可視で .scrollPosition が安定動作する
+                                // ので補助不要、Day13 last-wins 撲滅の成果を維持。
+                                if UIDevice.current.userInterfaceIdiom == .pad {
+                                    currentIndex = index
+                                }
+                            }
+                            #endif
                     }
                 }
                 .scrollTargetLayout()
