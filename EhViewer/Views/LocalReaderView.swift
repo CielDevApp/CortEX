@@ -296,25 +296,28 @@ struct LocalReaderView: View {
             .scrollPosition(id: $scrolledID, anchor: .center)
             #if canImport(UIKit)
             .onPreferenceChange(PagePositionKey.self) { positions in
-                // iPad では画面中央に最も近いセルの index を currentIndex に反映。
-                // iPhone は .scrollPosition で安定動作するので preference 更新しない。
+                LogManager.shared.log("iPadScroll", "preference update: \(positions.count) positions, keys=\(positions.keys.sorted())")
                 guard UIDevice.current.userInterfaceIdiom == .pad, !positions.isEmpty else { return }
                 let screenMid = UIScreen.main.bounds.height / 2
                 if let closest = positions.min(by: { abs($0.value - screenMid) < abs($1.value - screenMid) }) {
+                    LogManager.shared.log("iPadScroll", "closest to center=\(Int(screenMid)): index=\(closest.key) midY=\(Int(closest.value))")
                     if currentIndex != closest.key {
+                        LogManager.shared.log("iPadScroll", "currentIndex change via preference: \(currentIndex) → \(closest.key)")
                         currentIndex = closest.key
                     }
                 }
             }
             #endif
             .onChange(of: scrolledID) { _, newID in
+                LogManager.shared.log("iPadScroll", "scrolledID changed: \(newID ?? -1) idiom=\(UIDevice.current.userInterfaceIdiom.rawValue)")
                 if let newID {
                     currentIndex = newID
                 }
             }
-            .onChange(of: currentIndex) { _, newIndex in
+            .onChange(of: currentIndex) { old, new in
+                LogManager.shared.log("iPadScroll", "currentIndex: \(old) → \(new) isSliding=\(isSliding)")
                 if !isSliding {
-                    sliderValue = Double(newIndex)
+                    sliderValue = Double(new)
                 }
             }
             .onChange(of: Int(sliderValue)) {
@@ -352,6 +355,7 @@ struct LocalReaderView: View {
             }
             .onChange(of: sliderJumpTarget) { _, target in
                 if let target {
+                    LogManager.shared.log("iPadScroll", "slider set: target=\(target)")
                     // scrolledID 代入で .scrollPosition が自動スクロール + currentIndex 更新
                     withAnimation {
                         scrolledID = target
