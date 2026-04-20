@@ -4,16 +4,17 @@ import TipKit
 struct LocalReaderView: View {
     let meta: DownloadedGallery
     var isLiveDownload: Bool = false
+    let initialPage: Int
 
     @ObservedObject private var downloadManager = DownloadManager.shared
     @Environment(\.dismiss) private var dismiss
     @State private var showControls = true
     @State private var showPageJump = false
     @State private var jumpPageText = ""
-    @State private var currentIndex = 0
+    @State private var currentIndex: Int
     @State private var dragOffset: CGFloat = 0
     @State private var zoomImage: PlatformImage?
-    @State private var sliderValue: Double = 0
+    @State private var sliderValue: Double
     @State private var isSliding = false
     @State private var sliderJumpTarget: Int?
     @State private var showPageOverlay = false
@@ -31,10 +32,20 @@ struct LocalReaderView: View {
     @AppStorage("noFilterMode") private var storedNoFilter = false
     @AppStorage("readerDirection") private var readerDirection = 0
     @AppStorage("readingOrder") private var readingOrder = 1
-    @State private var horizontalPage: Int = 0
+    @State private var horizontalPage: Int
     /// 縦モードでトップに見えてるセル id を Apple 公式 .scrollPosition(id:) で追跡。
     /// 旧実装の ForEach.onAppear 上書きは mount 順非決定 → スライダー値が「明後日」になる欠陥があった。
-    @State private var scrolledID: Int? = 0
+    @State private var scrolledID: Int?
+
+    init(meta: DownloadedGallery, isLiveDownload: Bool = false, initialPage: Int = 0) {
+        self.meta = meta
+        self.isLiveDownload = isLiveDownload
+        self.initialPage = initialPage
+        self._currentIndex = State(initialValue: initialPage)
+        self._sliderValue = State(initialValue: Double(initialPage))
+        self._horizontalPage = State(initialValue: initialPage)
+        self._scrolledID = State(initialValue: initialPage)
+    }
 
     var body: some View {
         ZStack {
