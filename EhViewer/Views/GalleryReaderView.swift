@@ -367,7 +367,8 @@ struct GalleryReaderView: View {
             mp4Gid: gallery.gid,
             onToggleControls: {
                 withAnimation(.easeInOut(duration: 0.2)) { showControls.toggle() }
-            }
+            },
+            manualPlayForAnimated: true
         )
         #else
         PageCellView(
