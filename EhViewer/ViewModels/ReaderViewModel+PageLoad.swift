@@ -248,8 +248,14 @@ extension ReaderViewModel {
                 )
             }
 
-            // オンラインfetchのアニメ画像は静止画1フレーム fallback 表示（rawData保持によるOOM回避）
-            // DL 後にローカル経路で URL ベース再生可能になる
+            // アニメ WebP 判定: 該当ページのみ生 Data を holder に保持、
+            // GalleryAnimatedWebPView の ▶ ボタンで再生起動用。静止画は Data 破棄（OOM 回避）。
+            if WebPFileDetector.isAnimatedWebP(data: imageData) {
+                let heldData = imageData
+                await MainActor.run {
+                    self.holder(for: index).animatedWebPData = heldData
+                }
+            }
 
             let decodeStart = CFAbsoluteTimeGetCurrent()
             // 専用キュー+GPU(CIContext)でデコード（協調プール不使用 → UIスレッド影響ゼロ）

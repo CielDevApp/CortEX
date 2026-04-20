@@ -13,6 +13,10 @@ final class PageImageHolder: ObservableObject {
     /// アニメGIF/WebP用: ディスク上のファイルパス（rawDataはメモリに持たない）
     /// nilなら静止画として扱う
     @Published var animatedFileURL: URL?
+    /// GalleryReader (オンライン E-Hentai) のアニメ WebP 生 Data。
+    /// 静止画として imageData は保持しないが、アニメ WebP のみ ▶ ボタン再生用に保持。
+    /// アプリ起動時に一括削除される tmp 経由の変換パイプラインに渡す用。
+    @Published var animatedWebPData: Data?
 
     /// 翻訳焼き込み前の元画像
     var originalImage: PlatformImage?
