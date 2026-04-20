@@ -1,4 +1,4 @@
-# Cort:EX ver.02a f3
+# Cort:EX ver.02a f5
 
 <img src="assets/preview.png" alt="CortEX Preview">
 
@@ -113,6 +113,16 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 - Metal / CoreML / Vision / WebKit / ActivityKit / TipKit
 
 ## Changelog
+
+### ver.02a f5 (2026-04-20)
+- **Custom ZIP Stream Writer** — Replaced Apple's NSFileCoordinator.forUploading (59s main-thread freeze + Code=512 failure on large galleries) with a streaming stored+ZIP64 writer. 6× faster, real-time progress bar, 3GB+ galleries export successfully
+- **Zombie Download Elimination** — Delete/cancel now properly stops URL resolution / stream consumer / 2ndpass retry loops (previously kept downloading to deleted directories). Guards against metadata resurrection on cleanup
+- **Scroll Position Consistency** — LocalReaderView page counter now always matches the displayed page. Fixed LazyVStack `.onAppear` last-wins race + `.scrollPosition`/`scrollTo` API conflict that caused random page numbers (e.g. "1/47" while viewing page 13)
+- **Downloaded Gallery Preview** — Long-press a saved gallery to see a thumbnail grid of all pages; tap to jump into the reader at that page. Portrait-fixed cells for uniform layout, animated WebP marked with purple border + play icon
+- **0B Cache Corruption Guard** — Size check (≥10KB) in `isFullyConverted` prevents AVPlayer "item failed" cascades from race-condition-corrupted cached .mp4 files
+- **DL Retry Strategy** — Cloudflare `cf-mitigated: challenge` header detection, 509 gif URL pattern detection, SpeedTracker byte-progress watchdog kills stuck tasks, retrying UI phase with remaining page count
+- **Concurrent Gallery Downloads** — Releasing the URL resolve semaphore after fetch allows multiple galleries to download in parallel
+- **Temp File Lifecycle** — Auto cleanup of `.cortex` after share sheet completion (AirDrop / Save to Files / cancel) in addition to launch-time sweep
 
 ### ver.02a f3 (2026-04-12)
 - **GPU Sprite Pipeline** — Sprite decode, crop, and resize via Metal CIContext (single-pass GPU rendering)

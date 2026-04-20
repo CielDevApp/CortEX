@@ -1,4 +1,4 @@
-# Cort:EX ver.02a f3
+# Cort:EX ver.02a f5
 
 **E-Hentai / EXhentai / nhentai 统一浏览器 for iOS / iPadOS**
 
@@ -109,6 +109,16 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 - Metal / CoreML / Vision / WebKit / ActivityKit / TipKit
 
 ## 更新日志
+
+### ver.02a f5 (2026-04-20)
+- **自研 ZIP streaming writer** — 替换 Apple 的 NSFileCoordinator.forUploading（大作品 59 秒主线程阻塞 + Code=512 失败），改为流式 stored+ZIP64 writer。6 倍速 + 实时进度条 + 3GB+ 作品也能正常导出
+- **僵尸下载根除** — 删除 / 取消后 URL 解析 / stream 消费 / 二次重试循环仍在运行的问题修复。清理时的元数据复活也已防止
+- **滚动位置一致性** — LocalReaderView 页码与显示页不一致的问题根除。LazyVStack `.onAppear` 的 last-wins 竞态 + `.scrollPosition` / `scrollTo` API 冲突导致「1/47 却在显示第 13 页」类错位
+- **已保存作品预览** — 长按显示全页缩略图网格，点击跳转该页阅读。竖长固定单元格统一布局，动画 WebP 以紫框 + ▶ 图标标识
+- **0B 缓存误识别防护** — `isFullyConverted` 增加尺寸检查（≥10KB），避免 race condition 导致的 0B 缓存 mp4 引发 AVPlayer "item failed" 连锁
+- **DL 重试策略** — Cloudflare `cf-mitigated: challenge` 头检测、509 gif URL 模式检测、SpeedTracker 基于字节进度的看门狗、别镜像重试中 UI 阶段
+- **并行下载** — URL 解析完成即释放 semaphore，支持多作品并行下载
+- **临时文件自动清理** — 共享表单完成时（AirDrop / Save to Files / 取消）即删除 `.cortex`，与启动时残骸清理协同
 
 ### ver.02a f3 (2026-04-12)
 - **GPU精灵图管线** — 精灵图解码、裁剪、缩放通过Metal CIContext单通道GPU渲染
