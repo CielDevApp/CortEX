@@ -187,6 +187,29 @@ final class BackgroundDownloadManager: NSObject {
         return false
     }
 
+    /// E-Hentai が帯域制限 (Hath 枠超過) で返す 509 警告 GIF を判定
+    /// マジックバイトは有効な GIF なので isValidImageFile は通過する → 追加判定が必要
+    /// 判定条件: URL path が 509 画像 or (GIF + サイズ 5KB 未満)
+    /// 該当したら retriable として扱い、ファイルを破棄してリトライキューへ
+    static func looksLike509Warning(url: URL?, filePath: URL) -> Bool {
+        // URL path チェック (定番パス)
+        let p = url?.path.lowercased() ?? ""
+        if p.hasSuffix("/509.gif") || p.hasSuffix("/509s.gif") {
+            return true
+        }
+        // ファイルサイズチェック (509 警告 gif は典型 ~1KB)
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: filePath.path),
+              let size = attrs[.size] as? Int64, size < 5 * 1024 else {
+            return false
+        }
+        // GIF マジックバイト確認 (小さい JPEG/WebP を誤判定しないため)
+        guard let handle = try? FileHandle(forReadingFrom: filePath) else { return false }
+        defer { try? handle.close() }
+        guard let head = try? handle.read(upToCount: 4), head.count >= 4 else { return false }
+        let b = [UInt8](head)
+        return b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x38
+    }
+
     // MARK: - System handler
 
     /// 起動時: AppDelegateから呼び出される
@@ -312,7 +335,16 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
                     }
                     try FileManager.default.moveItem(at: location, to: entry.finalPath)
                     if Self.isValidImageFile(at: entry.finalPath) {
-                        success = true
+                        // 509 警告 GIF 検出 (Hath 帯域制限時の E-H ガード画像)
+                        // マジックバイトは valid GIF なので追加判定、該当なら retriable
+                        if Self.looksLike509Warning(url: task.originalRequest?.url, filePath: entry.finalPath) {
+                            let urlTail = task.originalRequest?.url?.absoluteString.suffix(80) ?? ""
+                            LogManager.shared.log("bgdl", "509 warning gif detected gid=\(entry.gid) page=\(entry.pageIndex) url=...\(urlTail)")
+                            try? FileManager.default.removeItem(at: entry.finalPath)
+                            retriable = true
+                        } else {
+                            success = true
+                        }
                     } else {
                         try? FileManager.default.removeItem(at: entry.finalPath)
                         LogManager.shared.log("bgdl", "invalid image gid=\(entry.gid) page=\(entry.pageIndex)")
