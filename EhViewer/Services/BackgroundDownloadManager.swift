@@ -321,6 +321,20 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
         var retriable = false
 
         if let httpResp = task.response as? HTTPURLResponse {
+            // Cloudflare challenge 検出 (status code に関係なく優先判定)
+            // CF は challenge page を 200/403/503 等 多様な status で返す可能性があり、
+            // cf-mitigated: challenge ヘッダが付いたら「一時的な gate」として retriable 扱い。
+            // 数秒後に解消されることが多いので即 retry で通過する想定。
+            if let cfMitigated = httpResp.value(forHTTPHeaderField: "cf-mitigated"),
+               cfMitigated.lowercased() == "challenge" {
+                LogManager.shared.log("bgdl", "cloudflare challenge detected gid=\(entry.gid) page=\(entry.pageIndex) status=\(httpResp.statusCode)")
+                retriable = true
+                // challenge page の中身は画像じゃないので破棄
+                try? FileManager.default.removeItem(at: location)
+                emitCompletion(gid: entry.gid, pageIndex: entry.pageIndex, success: false, retriable: retriable)
+                return
+            }
+
             if !(200...299).contains(httpResp.statusCode) {
                 LogManager.shared.log("bgdl", "http \(httpResp.statusCode) gid=\(entry.gid) page=\(entry.pageIndex)")
                 retriable = httpResp.statusCode == 503 || httpResp.statusCode == 429
