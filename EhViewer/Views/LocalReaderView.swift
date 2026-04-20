@@ -293,8 +293,10 @@ struct LocalReaderView: View {
                     #endif
                 Button("ジャンプ") {
                     if let page = Int(jumpPageText), page >= 1, page <= meta.pageCount {
+                        // .scrollPosition(id:) と ScrollViewReader.scrollTo の併用で
+                        // scrolledID と実スクロール位置が乖離するため、scrolledID 直接代入に統一。
                         withAnimation {
-                            proxy.scrollTo(page - 1, anchor: .top)
+                            scrolledID = page - 1
                         }
                     }
                     jumpPageText = ""
@@ -307,7 +309,10 @@ struct LocalReaderView: View {
             }
             .onChange(of: sliderJumpTarget) { _, target in
                 if let target {
-                    proxy.scrollTo(target, anchor: .top)
+                    // scrolledID 代入で .scrollPosition が自動スクロール + currentIndex 更新
+                    withAnimation {
+                        scrolledID = target
+                    }
                     sliderJumpTarget = nil
                 }
             }
