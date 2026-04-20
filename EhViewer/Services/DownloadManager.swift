@@ -1021,7 +1021,11 @@ class DownloadManager: ObservableObject {
         }
 
         await urlResolveSemaphore.wait()
-        defer { urlResolveSemaphore.signal() }
+        // URL 解決完了したら即 release する。performDownload 全体を保持すると
+        // 2ndpass (低速 mirror 再試行中) で他 gallery の URL 解決がブロックされる。
+        // 以降 (batch enqueue / stream 待機 / 2ndpass) は semaphore 不要で並行可。
+        var urlResolveReleased = false
+        defer { if !urlResolveReleased { urlResolveSemaphore.signal() } }
 
         while true {
             do {
@@ -1100,6 +1104,10 @@ class DownloadManager: ObservableObject {
             }
             return
         }
+
+        // URL 解決完了、他 gallery の URL 解決をブロックしないため semaphore 解放
+        urlResolveSemaphore.signal()
+        urlResolveReleased = true
 
         let totalPages = allPageURLs.count
         meta.pageCount = totalPages

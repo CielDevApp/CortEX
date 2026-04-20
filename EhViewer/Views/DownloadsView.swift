@@ -241,7 +241,7 @@ struct DownloadsView: View {
                     case .active:
                         activeProgressDetails(gid: gid, progress: progress)
                     case .retrying:
-                        retryingInfo()
+                        retryingInfo(progress: progress)
                     }
                 }
                 Spacer()
@@ -304,17 +304,30 @@ struct DownloadsView: View {
         }
     }
 
-    /// .retrying 時の info マーク + 説明文
+    /// .retrying 時の info マーク + 説明文 + 残り枚数
     @ViewBuilder
-    private func retryingInfo() -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: "info.circle.fill")
-                .foregroundStyle(.orange)
-                .font(.caption)
-            Text("別ミラーから再試行中…")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
+    private func retryingInfo(progress: DownloadManager.DownloadProgress) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text("\(progress.current) / \(progress.total) ページ")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                let remainingPages = max(progress.total - progress.current, 0)
+                if remainingPages > 0 {
+                    Text("残り\(remainingPages)枚")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.orange)
+                }
+            }
+            HStack(spacing: 4) {
+                Image(systemName: "info.circle.fill")
+                    .foregroundStyle(.orange)
+                    .font(.caption)
+                Text("別ミラーから再試行中…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
         }
     }
 
