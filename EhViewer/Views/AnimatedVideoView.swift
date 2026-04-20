@@ -206,8 +206,30 @@ struct GalleryAnimatedWebPView: View {
     var onToggleControls: (() -> Void)? = nil
 
     @State private var playURL: URL?
-    @State private var playRequested = false
+    @State private var playRequested: Bool
     @State private var ownsTmpFile = false
+
+    init(source: AnimatedSource, staticImage: UIImage?, gid: Int, page: Int, onToggleControls: (() -> Void)? = nil) {
+        self.source = source
+        self.staticImage = staticImage
+        self.gid = gid
+        self.page = page
+        self.onToggleControls = onToggleControls
+        // 田中 Day14 要件: 変換済みキャッシュは再マウントで即再生。
+        // onAppear で発火すると LazyVStack スクロール時に毎回 AVPlayer 再構築され
+        // フレーム落ちでスクロール自体が体感的にカクつく（実機ログで確認済み）。
+        // init で @State 初期値を決めて、以降の onAppear ループから完全に独立させる。
+        // 対象は .url 経路（LocalReader / DL 済み Gallery）のみ。.data 経路（Gallery
+        // オンライン fetch）は tmp 書き出しが必要なため init では重く、明示タップ維持。
+        if case .url(let url) = source,
+           WebPToMP4Converter.isFullyConverted(gid: gid, page: page) {
+            self._playURL = State(initialValue: url)
+            self._playRequested = State(initialValue: true)
+        } else {
+            self._playURL = State(initialValue: nil)
+            self._playRequested = State(initialValue: false)
+        }
+    }
 
     var body: some View {
         ZStack {
@@ -236,14 +258,6 @@ struct GalleryAnimatedWebPView: View {
                         .shadow(radius: 6)
                 }
                 .buttonStyle(.plain)
-            }
-        }
-        .onAppear {
-            // 田中 Day14 要件: 変換済みキャッシュが既にある場合、▶ タップを待たず自動で再生昇格。
-            // LazyVStack が unmount → 再 mount してもすぐ再生再開される = 「流れっぱなし」の実現。
-            // 未変換ページは従来通り ▶ ボタンで明示タップ待ち（変換コスト抑制維持）。
-            if !playRequested, WebPToMP4Converter.isFullyConverted(gid: gid, page: page) {
-                requestPlayback()
             }
         }
         .onDisappear {
