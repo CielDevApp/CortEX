@@ -342,6 +342,16 @@ final class PlayerContainerView: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
     private var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
     private var player: AVPlayer?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        // ScrollView 配下で UIView がタッチを吸収するとスクロール（上スワイプ等）が
+        // 通らなくなる。AVPlayerLayer の表示だけで良いので user interaction は無効化。
+        // SwiftUI 側の .onLongPressGesture 等は親 View ツリーで拾うので影響なし。
+        isUserInteractionEnabled = false
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
     private var endObserver: Any?
     private var statusObserver: NSKeyValueObservation?
     private var currentURL: URL?
