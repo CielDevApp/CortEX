@@ -289,7 +289,7 @@ struct LocalReaderView: View {
                 .scrollTargetLayout()
             }
             .coordinateSpace(name: "localReaderScroll")
-            .scrollPosition(id: $scrolledID, anchor: .center)
+            .scrollPosition(id: $scrolledID, anchor: .top)
             #if canImport(UIKit)
             .onPreferenceChange(PagePositionKey.self) { positions in
                 LogManager.shared.log("iPadScroll", "preference update: \(positions.count) positions, keys=\(positions.keys.sorted())")
