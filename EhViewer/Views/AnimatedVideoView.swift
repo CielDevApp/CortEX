@@ -261,13 +261,17 @@ struct GalleryAnimatedWebPView: View {
             }
         }
         .onDisappear {
-            // tmp 書き出した場合のみ削除（既存の DL 済みファイルは残す）
+            // .data 経路（Gallery online fetch）のみ tmp 削除 + state リセット。
+            // .url 経路（LocalReader / DL 済み）は playRequested を維持して、
+            // 再 mount 時にそのまま再生状態で復帰させる（田中 Day14「流れっぱ」要件）。
+            // LazyVStack スクロールで unmount/re-mount されても AVPlayer の @State を
+            // 保持できれば「戻ってきた瞬間に再生中」の体感になる。
             if ownsTmpFile, let url = playURL {
                 try? FileManager.default.removeItem(at: url)
+                playURL = nil
+                playRequested = false
+                ownsTmpFile = false
             }
-            playURL = nil
-            playRequested = false
-            ownsTmpFile = false
         }
     }
 
