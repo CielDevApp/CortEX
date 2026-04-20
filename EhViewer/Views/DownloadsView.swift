@@ -10,6 +10,10 @@ struct DownloadsView: View {
     @State private var readerMeta: DownloadedGallery?
     @State private var liveReaderMeta: DownloadedGallery?
     @State private var tabBarHidden = false
+    /// 長押しプレビュー表示中のギャラリー（nil = 非表示）
+    @State private var previewMeta: DownloadedGallery?
+    /// プレビューからリーダー起動する時の初期ページ（通常起動では 0）
+    @State private var readerInitialPage: Int = 0
 
     private var activeList: [(gid: Int, progress: DownloadManager.DownloadProgress)] {
         manager.activeDownloads.sorted(by: { $0.key < $1.key }).map { (gid: $0.key, progress: $0.value) }
@@ -64,6 +68,11 @@ struct DownloadsView: View {
                         ForEach(completedList) { meta in
                             completedRow(meta: meta)
                                 .contextMenu {
+                                    Button {
+                                        previewMeta = meta
+                                    } label: {
+                                        Label("プレビュー表示", systemImage: "rectangle.grid.3x2")
+                                    }
                                     Button {
                                         if let url = GalleryExporter.exportAsZip(gid: meta.gid) {
                                             exportShareItem = ShareableURL(url: url)
@@ -181,13 +190,27 @@ struct DownloadsView: View {
                 ActivityView(activityItems: [item.url])
             }
             #if os(iOS)
-            .fullScreenCover(item: $readerMeta) { meta in
-                LocalReaderView(meta: meta)
+            .fullScreenCover(item: $readerMeta, onDismiss: { readerInitialPage = 0 }) { meta in
+                LocalReaderView(meta: meta, initialPage: readerInitialPage)
             }
             .fullScreenCover(item: $liveReaderMeta) { meta in
                 LocalReaderView(meta: meta, isLiveDownload: true)
             }
             #endif
+            .overlay {
+                if let m = previewMeta {
+                    LocalPreviewOverlay(
+                        meta: m,
+                        onDismiss: { previewMeta = nil },
+                        onTapPage: { page in
+                            readerInitialPage = page
+                            previewMeta = nil
+                            readerMeta = m
+                        }
+                    )
+                    .transition(.opacity)
+                }
+            }
             .alert("インポート", isPresented: .constant(importMessage != nil)) {
                 Button("OK") { importMessage = nil }
             } message: {
@@ -496,3 +519,143 @@ struct ActivityView: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 #endif
+
+// MARK: - 保存済みギャラリーの長押しプレビュー
+
+/// 保存済み作品の全ページサムネグリッド。既存 GalleryPreviewOverlay / NhentaiPreviewOverlay と
+/// 同じ UI 骨格だが、サムネ源がディスク画像（ネット取得 URL 不要）な点が違う。
+struct LocalPreviewOverlay: View {
+    let meta: DownloadedGallery
+    let onDismiss: () -> Void
+    /// タップされたページ index (0-indexed) を親に返す
+    let onTapPage: (Int) -> Void
+
+    private let columns = [GridItem(.adaptive(minimum: 80, maximum: 120), spacing: 6)]
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture { onDismiss() }
+
+            VStack(spacing: 0) {
+                HStack {
+                    Text(meta.title)
+                        .font(.caption.bold())
+                        .lineLimit(2)
+                    Spacer()
+                    Button(action: onDismiss) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding()
+
+                Divider()
+
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 6) {
+                        ForEach(0..<meta.pageCount, id: \.self) { index in
+                            LocalThumbCell(gid: meta.gid, index: index) {
+                                onTapPage(index)
+                            }
+                        }
+                    }
+                    .padding()
+                }
+            }
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .shadow(radius: 20)
+            .frame(maxWidth: 600, maxHeight: 600)
+            .padding()
+        }
+    }
+}
+
+/// 保存済みギャラリーの 1 ページサムネセル。
+/// ディスクから CGImageSourceCreateThumbnailAtIndex で 240px 縮小し、
+/// アニメ WebP なら紫枠 + ▶アイコンで識別可能にする。
+struct LocalThumbCell: View {
+    let gid: Int
+    let index: Int
+    let onTap: () -> Void
+
+    @State private var thumbImage: PlatformImage?
+    @State private var isAnimated: Bool = false
+
+    var body: some View {
+        Button(action: onTap) {
+            ZStack(alignment: .topTrailing) {
+                ZStack {
+                    if let img = thumbImage {
+                        Image(platformImage: img)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } else {
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.gray.opacity(0.2))
+                            .overlay {
+                                Image(systemName: "photo")
+                                    .foregroundStyle(.secondary)
+                            }
+                    }
+                    if isAnimated {
+                        Image(systemName: "play.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(.white)
+                            .shadow(radius: 2)
+                    }
+                }
+                .frame(height: 120)
+                .frame(maxWidth: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay {
+                    if isAnimated {
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.purple, lineWidth: 2)
+                    }
+                }
+
+                Text("\(index + 1)")
+                    .font(.caption2.bold())
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(.black.opacity(0.6))
+                    .foregroundStyle(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .padding(4)
+            }
+        }
+        .buttonStyle(.plain)
+        .onAppear { loadThumbnail() }
+    }
+
+    private func loadThumbnail() {
+        guard thumbImage == nil else { return }
+        let url = DownloadManager.shared.imageFilePath(gid: gid, page: index)
+        Task.detached(priority: .userInitiated) {
+            let animated = WebPFileDetector.isAnimatedWebP(url: url)
+            let opts: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceThumbnailMaxPixelSize: 240
+            ]
+            guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else {
+                await MainActor.run { self.isAnimated = animated }
+                return
+            }
+            #if canImport(UIKit)
+            let img = UIImage(cgImage: cg)
+            #else
+            let img = NSImage(cgImage: cg, size: .zero)
+            #endif
+            await MainActor.run {
+                self.thumbImage = img
+                self.isAnimated = animated
+            }
+        }
+    }
+}
