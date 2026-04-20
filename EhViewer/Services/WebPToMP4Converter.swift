@@ -50,21 +50,28 @@ enum WebPToMP4Converter {
         mp4URL.appendingPathExtension("ok")
     }
 
-    /// 完全な変換済み（mp4 + .ok 両方存在）
+    /// 完全な変換済み（mp4 + .ok 両方存在 + サイズ 10KB 以上）
+    /// サイズ検査は race condition / 過去残骸で残った 0B mp4 を誤認しないため。
     static func isFullyConverted(gid: Int, page: Int) -> Bool {
         let mp4 = mp4Path(gid: gid, page: page)
         let ok = okMarkerURL(for: mp4)
-        return FileManager.default.fileExists(atPath: mp4.path)
-            && FileManager.default.fileExists(atPath: ok.path)
+        guard FileManager.default.fileExists(atPath: mp4.path),
+              FileManager.default.fileExists(atPath: ok.path) else { return false }
+        let size = (try? FileManager.default.attributesOfItem(atPath: mp4.path)[.size] as? Int) ?? 0
+        return size >= 10_000
     }
 
-    /// ゴミ掃除: .ok が無ければ mp4 削除
+    /// ゴミ掃除: .ok 無し or サイズ 10KB 未満の mp4 を削除（.ok も道連れ）
     static func cleanupStaleIfNeeded(gid: Int, page: Int) {
         let mp4 = mp4Path(gid: gid, page: page)
         let ok = okMarkerURL(for: mp4)
-        if FileManager.default.fileExists(atPath: mp4.path)
-            && !FileManager.default.fileExists(atPath: ok.path) {
+        guard FileManager.default.fileExists(atPath: mp4.path) else { return }
+        let size = (try? FileManager.default.attributesOfItem(atPath: mp4.path)[.size] as? Int) ?? 0
+        let okExists = FileManager.default.fileExists(atPath: ok.path)
+        if !okExists || size < 10_000 {
+            LogManager.shared.log("Convert", "cleanup stale mp4 gid=\(gid) page=\(page) size=\(size)B ok=\(okExists)")
             try? FileManager.default.removeItem(at: mp4)
+            try? FileManager.default.removeItem(at: ok)
         }
     }
 
