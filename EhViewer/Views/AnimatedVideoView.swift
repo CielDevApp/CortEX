@@ -204,24 +204,27 @@ struct GalleryAnimatedWebPView: View {
     let page: Int
     /// 親ビューのツールバー表示切替（AnimatedVideoView へそのまま伝播）
     var onToggleControls: (() -> Void)? = nil
+    /// 現在表示中のページかどうか（currentIndex == index）。true + キャッシュ済みなら自動再生。
+    /// false のページは ▶ ボタン待機。全ページ同時に AVPlayer 起動すると CPU/メモリ飽和で
+    /// UI が hang するため、アクティブページのみ自動昇格する方針。
+    var autoPlayIfActive: Bool = false
 
     @State private var playURL: URL?
     @State private var playRequested: Bool
     @State private var ownsTmpFile = false
 
-    init(source: AnimatedSource, staticImage: UIImage?, gid: Int, page: Int, onToggleControls: (() -> Void)? = nil) {
+    init(source: AnimatedSource, staticImage: UIImage?, gid: Int, page: Int, onToggleControls: (() -> Void)? = nil, autoPlayIfActive: Bool = false) {
         self.source = source
         self.staticImage = staticImage
         self.gid = gid
         self.page = page
         self.onToggleControls = onToggleControls
-        // 田中 Day14 要件: 変換済みキャッシュは再マウントで即再生。
-        // onAppear で発火すると LazyVStack スクロール時に毎回 AVPlayer 再構築され
-        // フレーム落ちでスクロール自体が体感的にカクつく（実機ログで確認済み）。
-        // init で @State 初期値を決めて、以降の onAppear ループから完全に独立させる。
-        // 対象は .url 経路（LocalReader / DL 済み Gallery）のみ。.data 経路（Gallery
-        // オンライン fetch）は tmp 書き出しが必要なため init では重く、明示タップ維持。
+        self.autoPlayIfActive = autoPlayIfActive
+        // 自動昇格条件: .url 経路 + アクティブページ + 変換済みキャッシュあり。
+        // 全ページ同時昇格は LazyVStack 内で AVPlayer が一斉レンダーされて
+        // UI フリーズ（田中 iPad 実機で 12 ページ全 cached 作品で再現、ログ確認済み）。
         if case .url(let url) = source,
+           autoPlayIfActive,
            WebPToMP4Converter.isFullyConverted(gid: gid, page: page) {
             self._playURL = State(initialValue: url)
             self._playRequested = State(initialValue: true)
@@ -260,12 +263,20 @@ struct GalleryAnimatedWebPView: View {
                 .buttonStyle(.plain)
             }
         }
+        .onChange(of: autoPlayIfActive) { _, newValue in
+            // スクロールで currentIndex が自分のページに来た場合、▶ を経由せず自動昇格。
+            // 既に playRequested=true なら何もしない（重複 AVPlayer 再構築回避）。
+            guard newValue, !playRequested else { return }
+            if case .url(let url) = source,
+               WebPToMP4Converter.isFullyConverted(gid: gid, page: page) {
+                playURL = url
+                playRequested = true
+            }
+        }
         .onDisappear {
             // .data 経路（Gallery online fetch）のみ tmp 削除 + state リセット。
             // .url 経路（LocalReader / DL 済み）は playRequested を維持して、
             // 再 mount 時にそのまま再生状態で復帰させる（田中 Day14「流れっぱ」要件）。
-            // LazyVStack スクロールで unmount/re-mount されても AVPlayer の @State を
-            // 保持できれば「戻ってきた瞬間に再生中」の体感になる。
             if ownsTmpFile, let url = playURL {
                 try? FileManager.default.removeItem(at: url)
                 playURL = nil
