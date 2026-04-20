@@ -1,4 +1,4 @@
-# Cort:EX ver.02a f3
+# Cort:EX ver.02a f5
 
 **E-Hentai / EXhentai / nhentai 統合ビューア for iOS / iPadOS**
 
@@ -109,6 +109,16 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 - Metal / CoreML / Vision / WebKit / ActivityKit / TipKit
 
 ## 更新履歴
+
+### ver.02a f5 (2026-04-20)
+- **自前 ZIP streaming writer** — Apple の NSFileCoordinator.forUploading（大作品で 59 秒 main ブロック + Code=512 失敗）を自前ストリーミング stored+ZIP64 writer に置換。6 倍速 + リアルタイム進捗バー + 3GB 超作品も正常 export
+- **ゾンビ DL 撲滅** — 削除 / キャンセル後も URL 解決 / stream 消費 / 2ndpass リトライループが走り続ける問題を修正。クリーンアップ時のメタデータ蘇生も防止
+- **スクロール位置整合** — LocalReaderView のページ表記が表示ページと一致しない問題を根絶。LazyVStack `.onAppear` の last-wins 競合 + `.scrollPosition` / `scrollTo` API 衝突が原因で「1/47 なのに 13 ページ目を表示中」的なズレが出ていた
+- **保存済み作品のプレビュー** — 長押しで全ページのサムネグリッド表示、タップで該当ページから読み始め。縦長固定セルで統一、アニメ WebP は紫枠 + ▶ アイコンで識別
+- **0B キャッシュ誤認防止** — `isFullyConverted` にサイズ検査（10KB 以上）を追加、race condition で壊れた 0B キャッシュ mp4 による AVPlayer "item failed" 連鎖を阻止
+- **DL リトライ戦略** — Cloudflare `cf-mitigated: challenge` ヘッダ検出、509 gif URL パターン検出、SpeedTracker によるバイト進捗 watchdog、別ミラー再試行中 UI フェーズ
+- **並行 DL** — URL 解決完了時点で semaphore 解放、複数作品の並行ダウンロード対応
+- **一時ファイル自動整理** — 共有シート完了時（AirDrop / Save to Files / キャンセル）に `.cortex` を即削除、起動時の残骸整理と併用
 
 ### ver.02a f3 (2026-04-12)
 - **GPUスプライトパイプライン** — スプライトのデコード・クロップ・リサイズをMetal CIContextで1パスGPU処理
