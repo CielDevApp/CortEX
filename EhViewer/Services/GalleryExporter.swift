@@ -6,7 +6,12 @@ import UIKit
 import zlib
 
 /// ダウンロード済みギャラリーのエクスポート/インポート
-enum GalleryExporter {
+///
+/// nonisolated: プロジェクトの Default Actor Isolation = @MainActor 設定により
+/// 暗黙的に main isolated になっていた結果、Task.detached 内でも main thread に
+/// dispatch 戻され NSFileCoordinator の ZIP 生成が 59 秒 main を block していた。
+/// enum 全体を nonisolated 化して importFromZip も予防的に main から切り離す。
+nonisolated enum GalleryExporter {
 
     // MARK: - 古い .cortex の自動掃除
 
