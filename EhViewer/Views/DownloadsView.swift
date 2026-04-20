@@ -14,11 +14,10 @@ struct DownloadsView: View {
     @State private var previewMeta: DownloadedGallery?
     /// プレビューからリーダー起動する時の初期ページ（通常起動では 0）
     @State private var readerInitialPage: Int = 0
-    /// エクスポート進行中の gid（nil = idle）。ZIP 生成を main thread でやると
-    /// 500+ ページで数秒フリーズするため Task.detached に移した、その進行表示用。
-    @State private var exportingGid: Int?
-    /// エクスポート進捗。自前 ZIP streaming でページ単位に更新。
-    @State private var exportProgress: ExportProgress = ExportProgress(done: 0, total: 0)
+    /// エクスポート進行フェーズ（nil = idle）。
+    /// - processing: ZIP streaming 中、進捗バー表示
+    /// - preparingSheet: 100% 完了、iOS ActivityViewController 準備中（失敗と錯覚しないよう明示表示）
+    @State private var exportPhase: ExportPhase?
     /// エクスポートエラーメッセージ（nil = 成功 or idle）。Alert 表示用。
     @State private var exportError: String?
 
@@ -85,7 +84,7 @@ struct DownloadsView: View {
                                     } label: {
                                         Label("エクスポート", systemImage: "square.and.arrow.up")
                                     }
-                                    .disabled(exportingGid != nil)
+                                    .disabled(exportPhase != nil)
                                     Button(role: .destructive) {
                                         manager.deleteDownload(gid: meta.gid)
                                     } label: {
@@ -216,7 +215,7 @@ struct DownloadsView: View {
                     )
                     .transition(.opacity)
                 }
-                if exportingGid != nil {
+                if exportPhase != nil {
                     exportProgressOverlay
                 }
             }
@@ -467,8 +466,7 @@ struct DownloadsView: View {
     private func performExport(meta: DownloadedGallery) {
         let gid = meta.gid
         let totalPages = meta.pageCount
-        exportingGid = gid
-        exportProgress = ExportProgress(done: 0, total: totalPages)
+        exportPhase = .processing(ExportProgress(done: 0, total: totalPages))
 
         Task.detached(priority: .userInitiated) {
             do {
@@ -476,43 +474,58 @@ struct DownloadsView: View {
                     gid: gid,
                     progress: { done, total in
                         Task { @MainActor in
-                            exportProgress = ExportProgress(done: done, total: total)
+                            exportPhase = .processing(ExportProgress(done: done, total: total))
                         }
                     }
                 )
-                await MainActor.run { exportingGid = nil }
-                // overlay 消滅 vs sheet 提示の同 tick 衝突回避
+                // 100% 到達 → シート準備中表示に切替 (iOS ActivityViewController 表示まで数秒)
+                await MainActor.run { exportPhase = .preparingSheet }
+                // overlay 消滅アニメと sheet 提示の同 tick 衝突回避
                 try? await Task.sleep(nanoseconds: 300_000_000)
                 await MainActor.run {
                     exportShareItem = ShareableURL(url: url)
+                    exportPhase = nil
                 }
             } catch {
                 await MainActor.run {
-                    exportingGid = nil
+                    exportPhase = nil
                     exportError = error.localizedDescription
                 }
             }
         }
     }
 
+    @ViewBuilder
     private var exportProgressOverlay: some View {
         ZStack {
             Color.black.opacity(0.4).ignoresSafeArea()
             VStack(spacing: 14) {
-                let done = exportProgress.done
-                let total = max(exportProgress.total, 1)
-                let ratio = Double(done) / Double(total)
-                Text("エクスポート中…")
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.white)
-                ProgressView(value: ratio)
-                    .progressViewStyle(.linear)
-                    .tint(.white)
-                    .frame(width: 240)
-                Text("\(done) / \(total) ページ (\(Int(ratio * 100))%)")
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.85))
-                    .monospacedDigit()
+                switch exportPhase {
+                case .processing(let progress):
+                    let done = progress.done
+                    let total = max(progress.total, 1)
+                    let ratio = Double(done) / Double(total)
+                    Text("エクスポート中…")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(.white)
+                    ProgressView(value: ratio)
+                        .progressViewStyle(.linear)
+                        .tint(.white)
+                        .frame(width: 240)
+                    Text("\(done) / \(total) ページ (\(Int(ratio * 100))%)")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.85))
+                        .monospacedDigit()
+                case .preparingSheet:
+                    ProgressView()
+                        .scaleEffect(1.3)
+                        .tint(.white)
+                    Text("共有シートを準備中…")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(.white)
+                case .none:
+                    EmptyView()
+                }
             }
             .padding(24)
             .background(.ultraThinMaterial)
@@ -586,6 +599,14 @@ struct ShareableURL: Identifiable {
 struct ExportProgress: Equatable {
     let done: Int
     let total: Int
+}
+
+/// エクスポートの段階的フェーズ。
+/// 100% 到達 → `preparingSheet` で「共有シートを準備中…」を数秒表示、
+/// iOS ActivityViewController の準備遅延で「失敗したかと思った」錯覚を防ぐ。
+enum ExportPhase: Equatable {
+    case processing(ExportProgress)
+    case preparingSheet
 }
 
 #if canImport(UIKit)
