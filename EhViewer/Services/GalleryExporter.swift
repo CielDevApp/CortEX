@@ -96,9 +96,25 @@ nonisolated enum GalleryExporter {
         let total = fileURLs.count
         progress?(0, total)
 
-        let galleryPrefix = galleryDir.path + "/"
+        // iOS の /private/var/ と /var/ は同一場所を指すシンボリックリンクだが、
+        // FileManager.enumerator(at:) が返す URL の .path は /private/var/... と
+        // なる一方、galleryDir.path は /var/... の場合がある。単純な prefix 比較では
+        // 一致せず、ZIP entry 名がフルパスになって import 側の metadata.json 検出が
+        // 失敗する致命バグ。standardizedFileURL で両者を正規化してから差分を取る。
+        let baseURL = galleryDir.standardizedFileURL
+        let baseComponents = baseURL.pathComponents
         for (i, fileURL) in fileURLs.enumerated() {
-            let relPath = fileURL.path.replacingOccurrences(of: galleryPrefix, with: "")
+            let stdURL = fileURL.standardizedFileURL
+            let fullComponents = stdURL.pathComponents
+            let relPath: String
+            if fullComponents.count > baseComponents.count,
+               Array(fullComponents.prefix(baseComponents.count)) == baseComponents {
+                relPath = fullComponents.dropFirst(baseComponents.count).joined(separator: "/")
+            } else {
+                // フォールバック: ファイル名のみ（metadata.json や page_NNNN.jpg は衝突しない前提）
+                LogManager.shared.log("Export", "path normalize fallback: base=\(baseURL.path) file=\(stdURL.path)")
+                relPath = fileURL.lastPathComponent
+            }
             try autoreleasepool {
                 try writer.addFileStored(name: relPath, sourceURL: fileURL)
             }
