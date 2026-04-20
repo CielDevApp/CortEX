@@ -32,6 +32,9 @@ struct LocalReaderView: View {
     @AppStorage("readerDirection") private var readerDirection = 0
     @AppStorage("readingOrder") private var readingOrder = 1
     @State private var horizontalPage: Int = 0
+    /// 縦モードでトップに見えてるセル id を Apple 公式 .scrollPosition(id:) で追跡。
+    /// 旧実装の ForEach.onAppear 上書きは mount 順非決定 → スライダー値が「明後日」になる欠陥があった。
+    @State private var scrolledID: Int? = 0
 
     var body: some View {
         ZStack {
@@ -256,8 +259,14 @@ struct LocalReaderView: View {
                         localPageCell(index: index)
                             .id(index)
                             .frame(maxWidth: .infinity)
-                            .onAppear { currentIndex = index }
                     }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollPosition(id: $scrolledID, anchor: .top)
+            .onChange(of: scrolledID) { _, newID in
+                if let newID {
+                    currentIndex = newID
                 }
             }
             .onChange(of: currentIndex) { _, newIndex in
