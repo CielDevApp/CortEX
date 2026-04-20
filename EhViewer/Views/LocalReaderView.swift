@@ -271,42 +271,27 @@ struct LocalReaderView: View {
                             .id(index)
                             .frame(maxWidth: .infinity)
                             #if canImport(UIKit)
-                            .background(
-                                // iPad 限定: GeometryReader で自セルの scroll 座標系での
-                                // midY を親に通知。LazyVStack プリロード範囲内で手動
-                                // スクロールしても onAppear は再発火しないため、.onAppear
-                                // 補助 (8dcbf6f) は効かなかった。位置情報ベースで追随する。
-                                Group {
-                                    if UIDevice.current.userInterfaceIdiom == .pad {
-                                        GeometryReader { geo in
-                                            Color.clear.preference(
-                                                key: PagePositionKey.self,
-                                                value: [index: geo.frame(in: .named("localReaderScroll")).midY]
-                                            )
-                                        }
-                                    }
+                            .onAppear {
+                                // iPad では .scrollPosition(id:) のバインディング更新が
+                                // 複数ページ可視 + スライダージャンプ後の手動スクロールで
+                                // 効かなくなる症状あり（iPadOS 26.3 実機で確認）。
+                                // iPad 限定で onAppear 補助更新を入れて「追従しない」を解消。
+                                // iPhone は 1 ページ可視で .scrollPosition が安定動作する
+                                // ので補助不要、Day13 last-wins 撲滅の成果を維持。
+                                if UIDevice.current.userInterfaceIdiom == .pad {
+                                    currentIndex = index
                                 }
-                            )
+                            }
                             #endif
                     }
                 }
                 .scrollTargetLayout()
             }
-            .coordinateSpace(name: "localReaderScroll")
+            // anchor: .center で iPad 大画面（複数ページ可視）時も画面中央のページを
+            // scrolledID に反映。iPhone は 1 ページしか入らないため anchor 種別は無影響。
+            // anchor: .top の頃、iPad で 2-3 ページ可視の状況で scrolledID 更新が
+            // 遅延して「バーが追従しない」症状が出ていた。
             .scrollPosition(id: $scrolledID, anchor: .center)
-            #if canImport(UIKit)
-            .onPreferenceChange(PagePositionKey.self) { positions in
-                // iPad では画面中央に最も近いセルの index を currentIndex に反映。
-                // iPhone は .scrollPosition で安定動作するので preference 更新しない。
-                guard UIDevice.current.userInterfaceIdiom == .pad, !positions.isEmpty else { return }
-                let screenMid = UIScreen.main.bounds.height / 2
-                if let closest = positions.min(by: { abs($0.value - screenMid) < abs($1.value - screenMid) }) {
-                    if currentIndex != closest.key {
-                        currentIndex = closest.key
-                    }
-                }
-            }
-            #endif
             .onChange(of: scrolledID) { _, newID in
                 if let newID {
                     currentIndex = newID
@@ -712,15 +697,5 @@ struct LocalReaderView: View {
             .padding(.bottom, 8)
             .background(.ultraThinMaterial.opacity(0.8))
         }
-    }
-}
-
-/// iPad 限定の scroll 位置追跡用 PreferenceKey。
-/// LazyVStack の各セルから GeometryReader 経由で自 index → midY マップを親に通知、
-/// 画面中央に最も近いセルを currentIndex に反映する目的。
-struct PagePositionKey: PreferenceKey {
-    static var defaultValue: [Int: CGFloat] = [:]
-    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
-        value.merge(nextValue()) { _, new in new }
     }
 }
