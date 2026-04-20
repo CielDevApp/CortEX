@@ -238,6 +238,14 @@ struct GalleryAnimatedWebPView: View {
                 .buttonStyle(.plain)
             }
         }
+        .onAppear {
+            // 田中 Day14 要件: 変換済みキャッシュが既にある場合、▶ タップを待たず自動で再生昇格。
+            // LazyVStack が unmount → 再 mount してもすぐ再生再開される = 「流れっぱなし」の実現。
+            // 未変換ページは従来通り ▶ ボタンで明示タップ待ち（変換コスト抑制維持）。
+            if !playRequested, WebPToMP4Converter.isFullyConverted(gid: gid, page: page) {
+                requestPlayback()
+            }
+        }
         .onDisappear {
             // tmp 書き出した場合のみ削除（既存の DL 済みファイルは残す）
             if ownsTmpFile, let url = playURL {
