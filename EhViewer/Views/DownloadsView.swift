@@ -78,13 +78,31 @@ struct DownloadsView: View {
                                     }
                                     Button {
                                         let gid = meta.gid
+                                        let tapTime = Date()
+                                        LogManager.shared.log("Export", "tap gid=\(gid) mainThread=\(Thread.isMainThread)")
                                         exportingGid = gid
                                         Task.detached(priority: .userInitiated) {
+                                            LogManager.shared.log("Export", "detached start gid=\(gid) mainThread=\(Thread.isMainThread) elapsed=\(Int(Date().timeIntervalSince(tapTime) * 1000))ms")
+
+                                            let zipStart = Date()
                                             let url = GalleryExporter.exportAsZip(gid: gid)
+                                            let zipMs = Int(Date().timeIntervalSince(zipStart) * 1000)
+                                            LogManager.shared.log("Export", "zip done gid=\(gid) zipMs=\(zipMs) mainThread=\(Thread.isMainThread) url=\(url?.lastPathComponent ?? "nil")")
+
                                             await MainActor.run {
                                                 exportingGid = nil
+                                                LogManager.shared.log("Export", "overlay cleared gid=\(gid)")
+                                            }
+
+                                            // overlay 消滅アニメと sheet 提示の同 tick 衝突回避
+                                            try? await Task.sleep(nanoseconds: 300_000_000)
+
+                                            await MainActor.run {
                                                 if let url {
                                                     exportShareItem = ShareableURL(url: url)
+                                                    LogManager.shared.log("Export", "sheet requested gid=\(gid)")
+                                                } else {
+                                                    LogManager.shared.log("Export", "sheet SKIPPED gid=\(gid) url=nil")
                                                 }
                                             }
                                         }
