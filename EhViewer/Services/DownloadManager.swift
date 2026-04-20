@@ -719,7 +719,12 @@ class DownloadManager: ObservableObject {
         let finalMeta = meta
         let completed = meta.isComplete
         await MainActor.run {
-            saveMetadata(finalMeta)
+            // 途中で deleteDownload された場合、downloads から entry が消えている。
+            // そのまま saveMetadata すると ensureDirectory + 再挿入で蘇生してしまう。
+            let wasDeleted = downloads[gid] == nil
+            if !wasDeleted {
+                saveMetadata(finalMeta)
+            }
             var updatedActive = activeDownloads
             updatedActive.removeValue(forKey: gid)
             activeDownloads = updatedActive
@@ -796,6 +801,10 @@ class DownloadManager: ObservableObject {
             meta.isCancelled = true
             saveMetadata(meta)
         }
+        // enqueue 済み URLSessionTask も即キャンセル（両 session 横断）
+        let bg = BackgroundDownloadManager.shared
+        bg.cancelAllTasks(for: gid, session: bg.nhSession)
+        bg.cancelAllTasks(for: gid, session: bg.ehSession)
     }
 
     /// 未完了ダウンロードをすべて手動再開（キャンセル済みも含めてリセット）
@@ -867,15 +876,21 @@ class DownloadManager: ObservableObject {
 
     func deleteDownload(gid: Int) {
         // 進行中タスクキャンセル + isCancelled 永続化（saveMetadata 経由で復活しない）
+        // 注意: activeDownloads[gid] は削除しない。削除すると isCancelled チェックが
+        // nil == true で false 扱いされ、URL 解決/stream/2ndpass がゾンビ化する。
+        // performDownload 終端で self-cleanup される (activeDownloads.removeValue)。
         if activeDownloads[gid] != nil {
             activeDownloads[gid]?.isCancelled = true
         }
+        // enqueue 済み URLSessionTask も即キャンセル（両 session 横断）
+        let bg = BackgroundDownloadManager.shared
+        bg.cancelAllTasks(for: gid, session: bg.nhSession)
+        bg.cancelAllTasks(for: gid, session: bg.ehSession)
         // LiveActivity 終了（通知センター/Dynamic Islandから消す）
         endLiveActivity(gid: gid, success: false)
         let dir = galleryDirectory(gid: gid)
         try? fileManager.removeItem(at: dir)
         downloads.removeValue(forKey: gid)
-        activeDownloads.removeValue(forKey: gid)
         coverCache.removeObject(forKey: NSNumber(value: gid))
     }
 
@@ -1298,7 +1313,12 @@ class DownloadManager: ObservableObject {
         let finalMeta = meta
         let completed = meta.isComplete
         await MainActor.run {
-            saveMetadata(finalMeta)
+            // 途中で deleteDownload された場合、downloads から entry が消えている。
+            // そのまま saveMetadata すると ensureDirectory + 再挿入で蘇生してしまう。
+            let wasDeleted = downloads[gid] == nil
+            if !wasDeleted {
+                saveMetadata(finalMeta)
+            }
             // 再代入で @Published 通知を確実発火
             var updatedActive = activeDownloads
             updatedActive.removeValue(forKey: gid)
