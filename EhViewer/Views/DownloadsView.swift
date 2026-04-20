@@ -219,7 +219,7 @@ struct DownloadsView: View {
 
     @ViewBuilder
     private func downloadingRow(gid: Int, progress: DownloadManager.DownloadProgress) -> some View {
-        let title = manager.downloads[gid]?.title ?? "ダウンロード中..."
+        let title = manager.downloads[gid]?.title ?? String(localized: "ダウンロード中...")
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 coverThumbnail(gid: gid)
@@ -231,42 +231,17 @@ struct DownloadsView: View {
                         ProgressView()
                             .scaleEffect(0.7)
                     }
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Text("\(progress.current) / \(progress.total) ページ")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            let remainingPages = max(progress.total - progress.current, 0)
-                            if remainingPages > 0 {
-                                Text("残り\(remainingPages)枚")
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.orange)
-                            }
-                        }
-                        TimelineView(.periodic(from: .now, by: 0.5)) { _ in
-                            let live = manager.liveDownloadedBytes(gid: gid)
-                            let estimated = manager.estimatedTotalBytes(gid: gid, totalPages: progress.total, currentPages: progress.current)
-                            let bps = BackgroundDownloadManager.shared.sampleBytesPerSecond(for: gid)
-                            HStack(spacing: 6) {
-                                if let est = estimated, est > live {
-                                    let remaining = est - live
-                                    Text("残り ~\(formatByteSize(remaining))")
-                                        .font(.caption.monospacedDigit())
-                                        .foregroundStyle(.primary)
-                                    if bps > 0 {
-                                        let etaSec = Int(Double(remaining) / Double(bps))
-                                        Text(formatETA(etaSec))
-                                            .font(.caption.monospacedDigit())
-                                            .foregroundStyle(.green)
-                                    }
-                                }
-                                if bps > 0 {
-                                    Text(formatSpeed(bps))
-                                        .font(.caption.monospacedDigit())
-                                        .foregroundStyle(.blue)
-                                }
-                            }
-                        }
+                    // phase 別表示切替
+                    switch progress.phase {
+                    case .preparing:
+                        // URL 取得中: 数値ゼロでスパイラルだけだと「何も起きてない」印象になる
+                        Text("DL準備中…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    case .active:
+                        activeProgressDetails(gid: gid, progress: progress)
+                    case .retrying:
+                        retryingInfo()
                     }
                 }
                 Spacer()
@@ -278,10 +253,69 @@ struct DownloadsView: View {
                 }
                 .buttonStyle(.plain)
             }
-            ProgressView(value: progress.fraction)
-                .tint(.blue)
+            // preparing 時は bar hide (0% のまま表示するより意味ある)
+            if progress.phase != .preparing {
+                ProgressView(value: progress.fraction)
+                    .tint(progress.phase == .retrying ? .orange : .blue)
+            }
         }
         .padding(.vertical, 4)
+    }
+
+    /// .active 時の詳細 (枚数/速度/ETA): 従来の UI
+    @ViewBuilder
+    private func activeProgressDetails(gid: Int, progress: DownloadManager.DownloadProgress) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text("\(progress.current) / \(progress.total) ページ")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                let remainingPages = max(progress.total - progress.current, 0)
+                if remainingPages > 0 {
+                    Text("残り\(remainingPages)枚")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.orange)
+                }
+            }
+            TimelineView(.periodic(from: .now, by: 0.5)) { _ in
+                let live = manager.liveDownloadedBytes(gid: gid)
+                let estimated = manager.estimatedTotalBytes(gid: gid, totalPages: progress.total, currentPages: progress.current)
+                let bps = BackgroundDownloadManager.shared.sampleBytesPerSecond(for: gid)
+                HStack(spacing: 6) {
+                    if let est = estimated, est > live {
+                        let remaining = est - live
+                        Text("残り ~\(formatByteSize(remaining))")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.primary)
+                        if bps > 0 {
+                            let etaSec = Int(Double(remaining) / Double(bps))
+                            Text(formatETA(etaSec))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.green)
+                        }
+                    }
+                    if bps > 0 {
+                        Text(formatSpeed(bps))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.blue)
+                    }
+                }
+            }
+        }
+    }
+
+    /// .retrying 時の info マーク + 説明文
+    @ViewBuilder
+    private func retryingInfo() -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "info.circle.fill")
+                .foregroundStyle(.orange)
+                .font(.caption)
+            Text("別ミラーから再試行中…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
     }
 
     // MARK: - 完了済みの行
