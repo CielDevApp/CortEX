@@ -422,12 +422,15 @@ struct LocalReaderView: View {
     @ViewBuilder
     private func localPageCell(index: Int) -> some View {
         #if canImport(UIKit)
-        // アニメGIF/WebPはMP4変換→AVPlayerで再生（ディスクベース、Dataメモリ持たない）
+        // アニメGIF/WebP: 田中 testimony (Day14) で「再生ボタン押下許可式の方が安定する」
+        // → Gallery と同じ GalleryAnimatedWebPView (▶ 手動再生) に統一。
+        // staticImage は loadLocalImage で 1 フレーム目を取得、ポスター表示。
         let fileURL = DownloadManager.shared.imageFilePath(gid: meta.gid, page: index)
         if FileManager.default.fileExists(atPath: fileURL.path),
            AnimatedImageDecoder.isAnimatedFile(url: fileURL) {
-            AnimatedVideoView(
-                sourceURL: fileURL,
+            GalleryAnimatedWebPView(
+                source: .url(fileURL),
+                staticImage: DownloadManager.shared.loadLocalImage(gid: meta.gid, page: index),
                 gid: meta.gid,
                 page: index,
                 onToggleControls: {
