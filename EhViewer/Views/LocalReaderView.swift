@@ -272,10 +272,6 @@ struct LocalReaderView: View {
                             .frame(maxWidth: .infinity)
                             #if canImport(UIKit)
                             .background(
-                                // iPad 限定: GeometryReader で自セルの scroll 座標系での
-                                // midY を親に通知。LazyVStack プリロード範囲内で手動
-                                // スクロールしても onAppear は再発火しないため、.onAppear
-                                // 補助 (8dcbf6f) は効かなかった。位置情報ベースで追随する。
                                 Group {
                                     if UIDevice.current.userInterfaceIdiom == .pad {
                                         GeometryReader { geo in
