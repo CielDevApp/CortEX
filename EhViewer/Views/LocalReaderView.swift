@@ -171,6 +171,32 @@ struct LocalReaderView: View {
             pageCheckTimer?.invalidate()
             pageCheckTimer = nil
         }
+        .focusable()
+        .focusEffectDisabled()
+        .onKeyPress(.upArrow) {
+            guard readerDirection == 0 else { return .ignored }
+            let target = max(0, currentIndex - 1)
+            scrolledID = target
+            return .handled
+        }
+        .onKeyPress(.downArrow) {
+            guard readerDirection == 0 else { return .ignored }
+            let maxPage = max(meta.pageCount - 1, 0)
+            let target = min(maxPage, currentIndex + 1)
+            scrolledID = target
+            return .handled
+        }
+        .onKeyPress(.leftArrow) {
+            guard readerDirection == 1 else { return .ignored }
+            horizontalPage = max(0, horizontalPage - 1)
+            return .handled
+        }
+        .onKeyPress(.rightArrow) {
+            guard readerDirection == 1 else { return .ignored }
+            let maxPage = max(meta.pageCount - 1, 0)
+            horizontalPage = min(maxPage, horizontalPage + 1)
+            return .handled
+        }
     }
 
     // MARK: - ライブDL監視
