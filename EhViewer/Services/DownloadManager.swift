@@ -1006,6 +1006,19 @@ class DownloadManager: ObservableObject {
     ) async {
         LogManager.shared.log("Download", "performDownload START: gid=\(gid) pageCount=\(pageCount) url=\(galleryURLStr)")
 
+        // レート制限計測フラグを前回 DL のぶんクリア（新規 DL 開始につき解除）
+        BackgroundDownloadManager.shared.clearRateLimit(gid: gid)
+
+        // DL 開始時に /home.php を叩いてアカウント状態を観測ログに落とす（失敗しても続行）
+        Task.detached(priority: .utility) { [client, host] in
+            if let html = await client.getHomePage(host: host) {
+                let snippet = Self.extractHomePageSnippet(html: html)
+                LogManager.shared.log("eh-rate", "home.php BEFORE gid=\(gid): \(snippet)")
+            } else {
+                LogManager.shared.log("eh-rate", "home.php BEFORE gid=\(gid): fetch failed")
+            }
+        }
+
         // 残り容量推定用にバイト累計を初期化（既存ファイル込み）
         initializeBytesCounter(gid: gid)
 
@@ -1199,25 +1212,32 @@ class DownloadManager: ObservableObject {
         let urlResolveSem = AsyncSemaphore(limit: 5)
         let weakSelf = self
         let resolveClient = self.client
+        // enqueue 計測: counter をスレッド安全に扱うため actor で包む
+        let enqueueStats = EnqueueStatsCounter(total: pendingIndices.count)
         Task.detached(priority: .utility) {
             await withTaskGroup(of: Void.self) { group in
                 for index in pendingIndices {
                     if weakSelf.activeDownloads[gid]?.isCancelled == true { break }
+                    // 509/HTML 検知で halted gid はこれ以上 enqueue しない
+                    if BackgroundDownloadManager.shared.isRateLimited(gid: gid) {
+                        LogManager.shared.log("bgdl", "gid=\(gid) enqueue loop halted (rateLimited)")
+                        break
+                    }
                     let pageURL = allPageURLs[index]
                     let filePath = weakSelf.imageFilePath(gid: gid, page: index)
                     group.addTask {
                         await urlResolveSem.wait()
                         defer { urlResolveSem.signal() }
+                        // wait で待機している間に trip した可能性あるので再チェック
+                        if BackgroundDownloadManager.shared.isRateLimited(gid: gid) { return }
                         do {
                             let imageURL = try await resolveClient.fetchImageURL(pageURL: pageURL)
+                            if BackgroundDownloadManager.shared.isRateLimited(gid: gid) { return }
                             BackgroundDownloadManager.shared.enqueue(
                                 url: imageURL, gid: gid, pageIndex: index, finalPath: filePath,
                                 session: session, headers: ehHeaders
                             )
-                            // 末尾 5 ページは stuck 検知用にログ
-                            if index >= totalPages - 5 {
-                                LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) enqueue OK url=\(imageURL.absoluteString.suffix(80))")
-                            }
+                            await enqueueStats.bump(gid: gid, page: index, urlTail: imageURL.absoluteString.suffix(60))
                         } catch {
                             LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) URL解決失敗: \(error.localizedDescription)")
                             // 失敗もstream経由で通知（mirror再試行はsecondpassで）
@@ -1226,6 +1246,7 @@ class DownloadManager: ObservableObject {
                                 gid: gid, pageIndex: index, finalPath: filePath,
                                 session: session, headers: ehHeaders
                             )
+                            await enqueueStats.bump(gid: gid, page: index, urlTail: "(resolve-failed)")
                         }
                     }
                 }
@@ -1352,6 +1373,16 @@ class DownloadManager: ObservableObject {
             endLiveActivity(gid: gid, success: completed)
         }
         LogManager.shared.log("Download", "gid=\(gid) finished: \(state.downloadedSet.count)/\(totalPages) isComplete=\(completed)")
+
+        // DL 完了 / 中断後に /home.php を叩いてアカウント状態の前後比較ログ（失敗しても無視）
+        Task.detached(priority: .utility) { [client, host] in
+            if let html = await client.getHomePage(host: host) {
+                let snippet = Self.extractHomePageSnippet(html: html)
+                LogManager.shared.log("eh-rate", "home.php AFTER gid=\(gid): \(snippet)")
+            } else {
+                LogManager.shared.log("eh-rate", "home.php AFTER gid=\(gid): fetch failed")
+            }
+        }
 
         if completed {
             #if canImport(UIKit)
@@ -1488,6 +1519,44 @@ class DownloadManager: ObservableObject {
     private final class StallBox: @unchecked Sendable {
         var value: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()
         func update() { value = CFAbsoluteTimeGetCurrent() }
+    }
+
+    /// /home.php HTML から観測ポイントの該当行を抜き出す（50文字前後）
+    nonisolated static func extractHomePageSnippet(html: String) -> String {
+        let patterns = ["IP-based limits", "restriction in effect", "Image Limits", "Image Restrictions", "Hath Perks"]
+        var hits: [String] = []
+        for p in patterns {
+            guard let range = html.range(of: p) else { continue }
+            let start = html.index(range.lowerBound, offsetBy: -30, limitedBy: html.startIndex) ?? html.startIndex
+            let end = html.index(range.upperBound, offsetBy: 120, limitedBy: html.endIndex) ?? html.endIndex
+            let raw = String(html[start..<end])
+            let cleaned = raw.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            hits.append("…\(cleaned)…")
+        }
+        if hits.isEmpty { return "len=\(html.count), no quota keyword" }
+        return hits.joined(separator: " | ")
+    }
+
+    /// 並列 enqueue のカウント + 10 枚ごとの進捗サマリ出力
+    fileprivate actor EnqueueStatsCounter {
+        let total: Int
+        let startTime: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()
+        private var count: Int = 0
+
+        init(total: Int) {
+            self.total = total
+        }
+
+        func bump(gid: Int, page: Int, urlTail: Substring) {
+            count += 1
+            let n = count
+            LogManager.shared.log("bgdl", "enqueued \(n)/\(total) gid=\(gid) page=\(page + 1) url=...\(urlTail)")
+            if n % 10 == 0 || n == total {
+                let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+                let avgMs = elapsed / Double(n) * 1000
+                LogManager.shared.log("bgdl", "progress \(n)/\(total) elapsed=\(String(format: "%.2f", elapsed))s avg=\(String(format: "%.1f", avgMs))ms/img")
+            }
+        }
     }
 
     /// 完了通知

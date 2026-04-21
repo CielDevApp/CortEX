@@ -81,6 +81,20 @@ final class BackgroundDownloadManager: NSObject {
     /// アプリ復帰時にシステムから受け取るcompletionHandler
     var systemCompletionHandlers: [String: () -> Void] = [:]
 
+    /// レート制限検知で DL 強制停止された gid（509 GIF / HTTP 509 / HTML レスポンス）
+    /// DownloadManager 側の URL 解決ループが毎回 isRateLimited を見て break 判断する
+    private var rateLimitTripped: Set<Int> = []
+
+    /// 外部から「この gid は HTTP 509 or 509 GIF or HTML レスポンスを踏んだ」と判定する
+    func isRateLimited(gid: Int) -> Bool {
+        stateQueue.sync { rateLimitTripped.contains(gid) }
+    }
+
+    /// DL 開始時にフラグ解除（再試行時にリセット）
+    func clearRateLimit(gid: Int) {
+        stateQueue.sync { _ = rateLimitTripped.remove(gid) }
+    }
+
     /// 速度ベース stall 検出 (個別 task 単位)
     /// 既存の stream watchdog (DownloadManager 側、20秒 completion 無しで強制終了) は
     /// 「そもそも completion が来ない」ケース用。SpeedTracker は「通信はしてるが遅すぎる」
@@ -317,7 +331,7 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
             LogManager.shared.log("bgdl", "finished taskId=\(taskId) but no registry entry")
             return
         }
-        handleBatchTaskFinished(taskId: taskId, task: downloadTask, location: location, entry: entry)
+        handleBatchTaskFinished(taskId: taskId, task: downloadTask, location: location, entry: entry, session: session)
     }
 
     private func handleSingleTaskFinished(taskId: Int, task: URLSessionDownloadTask, location: URL, finalPath: URL, continuation: CheckedContinuation<Bool, Never>) {
@@ -343,7 +357,7 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
         }
     }
 
-    private func handleBatchTaskFinished(taskId: Int, task: URLSessionDownloadTask, location: URL, entry: TaskEntry) {
+    private func handleBatchTaskFinished(taskId: Int, task: URLSessionDownloadTask, location: URL, entry: TaskEntry, session: URLSession) {
         var success = false
         var retriable = false
 
@@ -365,6 +379,27 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
             if !(200...299).contains(httpResp.statusCode) {
                 LogManager.shared.log("bgdl", "http \(httpResp.statusCode) gid=\(entry.gid) page=\(entry.pageIndex)")
                 retriable = httpResp.statusCode == 503 || httpResp.statusCode == 429
+                // HTTP 509 検知 → 該当 gid 即停止（retriable=false、2ndpass にも回さない）
+                if httpResp.statusCode == 509 {
+                    stateQueue.sync { _ = rateLimitTripped.insert(entry.gid) }
+                    LogManager.shared.log("bgdl-err", "509 detected at page \(entry.pageIndex + 1) gid=\(entry.gid) — HALTING new enqueues")
+                    retriable = false
+                    emitCompletion(gid: entry.gid, pageIndex: entry.pageIndex, success: false, retriable: false)
+                    cancelAllTasks(for: entry.gid, session: session)
+                    finishStream(for: entry.gid)
+                    return
+                }
+                // 画像を期待して HTML が返ってきた（text/html Content-Type）→ redirect 扱い、即停止
+                if let ct = httpResp.value(forHTTPHeaderField: "Content-Type"),
+                   ct.lowercased().hasPrefix("text/html") {
+                    stateQueue.sync { _ = rateLimitTripped.insert(entry.gid) }
+                    LogManager.shared.log("bgdl-err", "HTML redirect at page \(entry.pageIndex + 1) gid=\(entry.gid) status=\(httpResp.statusCode) — HALTING")
+                    retriable = false
+                    emitCompletion(gid: entry.gid, pageIndex: entry.pageIndex, success: false, retriable: false)
+                    cancelAllTasks(for: entry.gid, session: session)
+                    finishStream(for: entry.gid)
+                    return
+                }
             } else {
                 do {
                     if FileManager.default.fileExists(atPath: entry.finalPath.path) {
