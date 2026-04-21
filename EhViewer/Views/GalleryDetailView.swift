@@ -658,6 +658,7 @@ struct GalleryDetailView: View {
                     showLargeDLWarning = true
                 } else {
                     dm.startDownload(gallery: detail.gallery, host: host)
+                    NotificationCenter.default.post(name: .navigateToDownloadsTab, object: nil)
                 }
             } label: {
                 Label("ダウンロード", systemImage: "arrow.down.circle.fill")
@@ -671,6 +672,7 @@ struct GalleryDetailView: View {
             .alert("大規模 DL の確認", isPresented: $showLargeDLWarning) {
                 Button("続行") {
                     dm.startDownload(gallery: detail.gallery, host: host)
+                    NotificationCenter.default.post(name: .navigateToDownloadsTab, object: nil)
                 }
                 Button("キャンセル", role: .cancel) {}
             } message: {

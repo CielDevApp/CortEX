@@ -278,9 +278,14 @@ struct DownloadsView: View {
                     case .preparing:
                         // URL 解決中: got/expected が入ってれば具体値表示、未開始ならスピナーのみ
                         if progress.total > 0 {
-                            Text("URL解決中 \(progress.current)/\(progress.total)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("URL解決中 \(progress.current)/\(progress.total)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text("アプリをアクティブのままにしてください")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
                         } else {
                             Text("DL準備中…")
                                 .font(.caption)
@@ -291,7 +296,7 @@ struct DownloadsView: View {
                     case .active:
                         activeProgressDetails(gid: gid, progress: progress)
                     case .retrying:
-                        retryingInfo(progress: progress)
+                        retryingInfo(gid: gid, progress: progress)
                     }
                 }
                 Spacer()
@@ -367,9 +372,12 @@ struct DownloadsView: View {
         TimelineView(.periodic(from: .now, by: 1)) { timeline in
             let remaining = max(Int((progress.coolingUntil ?? timeline.date).timeIntervalSince(timeline.date)), 0)
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text("URL解決中 \(progress.current)/\(progress.total)")
                         .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("アプリをアクティブのままにしてください")
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
                 HStack(spacing: 4) {
@@ -387,7 +395,7 @@ struct DownloadsView: View {
 
     /// .retrying 時の info マーク + 説明文 + 残り枚数
     @ViewBuilder
-    private func retryingInfo(progress: DownloadManager.DownloadProgress) -> some View {
+    private func retryingInfo(gid: Int, progress: DownloadManager.DownloadProgress) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 Text("\(progress.current) / \(progress.total) ページ")
@@ -398,6 +406,31 @@ struct DownloadsView: View {
                     Text("残り\(remainingPages)枚")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.orange)
+                }
+            }
+            // 2ndpass (mirror DL) 中も 1stpass と同じ速度 / ETA 表示
+            TimelineView(.periodic(from: .now, by: 0.5)) { _ in
+                let live = manager.liveDownloadedBytes(gid: gid)
+                let estimated = manager.estimatedTotalBytes(gid: gid, totalPages: progress.total, currentPages: progress.current)
+                let bps = BackgroundDownloadManager.shared.sampleBytesPerSecond(for: gid)
+                HStack(spacing: 6) {
+                    if let est = estimated, est > live {
+                        let remaining = est - live
+                        Text("残り ~\(formatByteSize(remaining))")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.primary)
+                        if bps > 0 {
+                            let etaSec = Int(Double(remaining) / Double(bps))
+                            Text(formatETA(etaSec))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.green)
+                        }
+                    }
+                    if bps > 0 {
+                        Text(formatSpeed(bps))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.blue)
+                    }
                 }
             }
             HStack(spacing: 4) {

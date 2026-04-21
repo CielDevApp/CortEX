@@ -120,7 +120,53 @@ class DownloadManager: ObservableObject {
         var failedPages: [(index: Int, pageURL: URL)] = []
     }
 
+    /// Foreground 復帰時の「爆速復帰」実装
+    /// 田中要望:「URL解決をし直す、DL 済みはスキップ」= アプリ再起動時と同じ挙動。
+    /// ただし URL 解決中 (preparing phase) は cancel しない: 頭から再解決の後退を避ける。
+    /// - active (batch DL 中): cancel → resumeIncompleteDownloads で爆速 batch 再起動
+    /// - preparing (URL 解決中) / cooling / retrying (2ndpass): reconcile のみ、継続させる
+    func resumeActiveDownloadsOnForeground() {
+        let activeGids = activeDownloads.keys.filter { gid in
+            activeDownloads[gid]?.isCancelled != true
+        }
+        guard !activeGids.isEmpty else { return }
+        var gidsToRestart: [Int] = []
+        for gid in activeGids {
+            // disk scan → meta.downloadedPages 更新 (全 phase 共通)
+            reconcileGallery(gid: gid)
+            let phase = activeDownloads[gid]?.phase ?? .preparing
+            if phase == .active {
+                gidsToRestart.append(gid)
+            }
+        }
+        guard !gidsToRestart.isEmpty else {
+            LogManager.shared.log("Download", "foreground resume: reconcile only, \(activeGids.count) DLs not in active phase (continue as-is)")
+            return
+        }
+        LogManager.shared.log("Download", "foreground resume: restart \(gidsToRestart.count) DLs in active phase (URL resolve 再実行, disk skip)")
+        let bg = BackgroundDownloadManager.shared
+        for gid in gidsToRestart {
+            activeDownloads[gid]?.isCancelled = true
+            bg.cancelAllTasks(for: gid, session: bg.nhSession)
+            bg.cancelAllTasks(for: gid, session: bg.ehSession)
+        }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard let self = self else { return }
+            for gid in gidsToRestart {
+                self.activeDownloads.removeValue(forKey: gid)
+            }
+            await self.resumeIncompleteDownloads()
+        }
+    }
+
     private init() {
+        // BackgroundDownloadManager の復帰 hook を設定 (案 4)
+        BackgroundDownloadManager.shared.onForegroundResume = { [weak self] in
+            Task { @MainActor in
+                self?.resumeActiveDownloadsOnForeground()
+            }
+        }
         loadAllMetadata()
         repairBrokenDownloads()
         cleanupTrashDownloads()
@@ -159,7 +205,17 @@ class DownloadManager: ObservableObject {
         if incompleteItems.isEmpty { return }
         LogManager.shared.log("Download", "found \(incompleteItems.count) incomplete downloads to resume")
 
-        for (gid, meta) in incompleteItems {
+        // 起動時 reconcile: BG session DROPPED completion 救済
+        // meta 上は未完でも実ディスクにファイルがあるケースを downloadedPages に反映
+        for (gid, _) in incompleteItems {
+            reconcileGallery(gid: gid)
+        }
+
+        // reconcile 後に meta を取り直す (reconcileGallery が downloads を更新してる)
+        let refreshedItems = downloads.filter {
+            !$0.value.isComplete && !$0.value.token.isEmpty && $0.value.isCancelled != true
+        }
+        for (gid, meta) in refreshedItems {
             guard activeDownloads[gid] == nil else { continue }
             let total = max(meta.pageCount, 1)
             let current = meta.downloadedPages.count
@@ -826,9 +882,39 @@ class DownloadManager: ObservableObject {
 
     /// 未完了ダウンロードをすべて手動再開（キャンセル済みも含めてリセット）
     /// nhentai と E-Hentai で再開経路が違うので分岐する
+    /// 未完了 gallery の downloadedPages を実ディスクと照合。
+    /// BG session で DROPPED completion が発生した結果「ファイルはあるが meta 上は未完」
+    /// になったケースを救済する。page_NNNN.jpg が存在 + マジックバイト valid なら
+    /// downloadedPages に追加、全部揃ったら isComplete=true に昇格。
+    /// 呼び出し: resumeAllIncomplete の前、or 起動時 1 回。
+    func reconcileGallery(gid: Int) {
+        guard var meta = downloads[gid] else { return }
+        var detected: Set<Int> = Set(meta.downloadedPages)
+        let before = detected.count
+        for page in 0..<meta.pageCount {
+            if detected.contains(page) { continue }
+            let path = imageFilePath(gid: gid, page: page)
+            guard fileManager.fileExists(atPath: path.path) else { continue }
+            if BackgroundDownloadManager.isValidImageFile(at: path) {
+                detected.insert(page)
+            }
+        }
+        let added = detected.count - before
+        guard added > 0 else { return }
+        meta.downloadedPages = Array(detected).sorted()
+        meta.isComplete = meta.pageCount > 0 && detected.count >= meta.pageCount
+        saveMetadata(meta)
+        LogManager.shared.log("Download", "reconcileGallery gid=\(gid) +\(added) pages → \(detected.count)/\(meta.pageCount) isComplete=\(meta.isComplete)")
+    }
+
     func resumeAllIncomplete() {
         // ゴミ（0/0 や token空）は先に掃除して対象から外す
         cleanupTrashDownloads()
+        // resume 前に全未完 gallery を reconcile (BG session DROPPED completion 救済)
+        let incompleteForReconcile = downloads.filter { !$0.value.isComplete }.map { $0.key }
+        for gid in incompleteForReconcile {
+            reconcileGallery(gid: gid)
+        }
         let incomplete = downloads.filter {
             !$0.value.isComplete && !$0.value.token.isEmpty && activeDownloads[$0.key] == nil
         }
@@ -1057,7 +1143,12 @@ class DownloadManager: ObservableObject {
                     let data = try await client.fetchImageData(url: coverURL, host: host)
                     try data.write(to: coverPath)
                 } catch {
-                    LogManager.shared.log("Download", "cover failed: \(error)")
+                    if case EhError.banned(let remaining) = error {
+                        LogManager.shared.log("Download", "gid=\(gid) BANNED (cover DL), remaining=\(remaining ?? "unknown")")
+                        BackgroundDownloadManager.shared.tripRateLimit(gid: gid)
+                    } else {
+                        LogManager.shared.log("Download", "cover failed: \(error)")
+                    }
                 }
             }
         }
@@ -1080,11 +1171,89 @@ class DownloadManager: ObservableObject {
         var urlResolveReleased = false
         defer { if !urlResolveReleased { urlResolveSemaphore.signal() } }
 
+        // URL 解決も disk 実体を見て必要分だけに限定:
+        // ehentai の ?p=N は 1 ページ 20 thumbnail。N*20..(N+1)*20 の range が
+        // 全部 disk にあれば URL fetch 自体 skip して placeholder URL を入れる。
+        // meta 依存ではなく fileManager 直接で判定 (reconcile 未完でも正しく skip)。
+        let urlFetchPageSize = 20
+        let placeholderURL = URL(string: "about:blank")!
+        let fm = self.fileManager
+        let imagePathForIndex: (Int) -> URL = { [weak self] idx in
+            guard let self = self else { return URL(fileURLWithPath: "/dev/null") }
+            return self.imageFilePath(gid: gid, page: idx)
+        }
+        // 事前 disk scan: 先頭から連続する disk 済み URL fetch page は一括 skip、
+        // かつ disk 済み総数を集計して LiveActivity 表示の初期値に使う。
+        // (prefix skip が効かなくても 0 から表示しない = 「ダメや」対策)
+        var diskDoneCount = 0
+        if pageCount > 0 {
+            // 1) 全 index を scan して disk 済み件数カウント (表示初期化用)
+            for idx in 0..<pageCount {
+                let path = imagePathForIndex(idx)
+                if fm.fileExists(atPath: path.path)
+                    && BackgroundDownloadManager.isValidImageFile(at: path) {
+                    diskDoneCount += 1
+                }
+            }
+            // 2) prefix skip: 先頭の URL fetch page 単位で全 disk なら placeholder 投入
+            var preStart = 0
+            while true {
+                let rangeStart = preStart * urlFetchPageSize
+                let rangeEnd = min(rangeStart + urlFetchPageSize, pageCount)
+                if rangeStart >= pageCount { break }
+                let rangeAllOnDisk = (rangeStart..<rangeEnd).allSatisfy { idx in
+                    let path = imagePathForIndex(idx)
+                    return fm.fileExists(atPath: path.path)
+                        && BackgroundDownloadManager.isValidImageFile(at: path)
+                }
+                if !rangeAllOnDisk { break }
+                for _ in rangeStart..<rangeEnd {
+                    allPageURLs.append(placeholderURL)
+                }
+                preStart += 1
+            }
+            if preStart > 0 {
+                page = preStart
+                LogManager.shared.log("Download", "URL 解決 prefix skip: 先頭 \(preStart) pages (\(allPageURLs.count) images) already on disk, start from page=\(preStart)")
+            }
+            // 3) 表示初期化: disk 済み件数で LiveActivity 進捗を更新 (allPageURLs より多ければ多い方)
+            let displayCurrent = max(allPageURLs.count, diskDoneCount)
+            if displayCurrent > 0 {
+                LogManager.shared.log("Download", "URL 解決 開始表示: \(displayCurrent)/\(pageCount) (disk 済み \(diskDoneCount), prefix skip \(allPageURLs.count))")
+                updateProgress(gid: gid, current: displayCurrent, total: pageCount)
+            }
+        }
+        // URL 解決中にロック復帰で一時失敗があっても、頭から再実行にならないよう
+        // 失敗は連続 10 回までは同じ page を retry (break せず続行)。
+        var consecutiveFail = 0
         while true {
+            // この URL fetch page が覆う image index の range
+            let rangeStart = page * urlFetchPageSize
+            let rangeEnd = pageCount > 0 ? min(rangeStart + urlFetchPageSize, pageCount) : rangeStart + urlFetchPageSize
+            // 範囲内の全ページが disk にあるなら URL fetch skip (fileManager 直接判定)
+            if pageCount > 0 && rangeStart < pageCount && rangeEnd > rangeStart {
+                let rangeAllOnDisk = (rangeStart..<rangeEnd).allSatisfy { idx in
+                    let path = imagePathForIndex(idx)
+                    return fm.fileExists(atPath: path.path)
+                        && BackgroundDownloadManager.isValidImageFile(at: path)
+                }
+                if rangeAllOnDisk {
+                    LogManager.shared.log("Download", "URL 解決 skip page=\(page) (pages \(rangeStart + 1)-\(rangeEnd) already on disk)")
+                    for _ in rangeStart..<rangeEnd {
+                        allPageURLs.append(placeholderURL)
+                    }
+                    page += 1
+                    let metaDoneSkip = downloads[gid]?.downloadedPages.count ?? 0
+                    updateProgress(gid: gid, current: max(allPageURLs.count, max(diskDoneCount, metaDoneSkip)), total: pageCount > 0 ? pageCount : max(pageCount, allPageURLs.count))
+                    if allPageURLs.count >= pageCount { break }
+                    continue
+                }
+            }
             do {
                 let urlString = page > 0 ? galleryURLStr + "?p=\(page)" : galleryURLStr
                 LogManager.shared.log("Download", "fetching page URLs: \(urlString)")
-                let html = try await client.fetchHTML(urlString: urlString, host: host)
+                // BG session 経由 (suspend 中も継続) で gallery page HTML 取得
+                let html = try await client.fetchHTMLViaBGOrFallback(urlString: urlString, host: host)
                 let urls = HTMLParser.parseImagePageURLs(html: html)
                 LogManager.shared.log("Download", "  got \(urls.count) URLs from page \(page), total so far: \(allPageURLs.count + urls.count)")
 
@@ -1095,10 +1264,13 @@ class DownloadManager: ObservableObject {
 
                 allPageURLs.append(contentsOf: urls)
                 page += 1
+                consecutiveFail = 0
 
                 // preparing 期の進捗として URL 解決数を current/total に反映
                 // (UI: 「URL解決中 got/expected」表示、バーも出す)
-                updateProgress(gid: gid, current: allPageURLs.count, total: max(pageCount, allPageURLs.count))
+                // LiveActivity 表示後退防止: disk 済み数 (meta 直参照) と max を取る
+                let metaDoneForUpdate = downloads[gid]?.downloadedPages.count ?? 0
+                updateProgress(gid: gid, current: max(allPageURLs.count, max(diskDoneCount, metaDoneForUpdate)), total: pageCount > 0 ? pageCount : max(pageCount, allPageURLs.count))
 
                 if pageCount > 0 && allPageURLs.count >= pageCount {
                     LogManager.shared.log("Download", "  reached expected pageCount=\(pageCount), stopping")
@@ -1129,8 +1301,21 @@ class DownloadManager: ObservableObject {
                     await SafetyMode.shared.delay(nanoseconds: requestDelay)
                 }
             } catch {
-                LogManager.shared.log("Download", "page URL fetch failed: \(error)")
-                break
+                // BAN 検知時は即停止 (retry で BAN 時間延長を防ぐ)
+                if case EhError.banned(let remaining) = error {
+                    LogManager.shared.log("Download", "gid=\(gid) BANNED (URL resolve), remaining=\(remaining ?? "unknown"), halt 1stpass")
+                    BackgroundDownloadManager.shared.tripRateLimit(gid: gid)
+                    break
+                }
+                consecutiveFail += 1
+                LogManager.shared.log("Download", "page URL fetch fail \(consecutiveFail)/10 page=\(page): \(error)")
+                if consecutiveFail >= 10 {
+                    LogManager.shared.log("Download", "page URL fetch give up after 10 consecutive fails page=\(page)")
+                    break
+                }
+                // 短 sleep で同じ page を再試行 (break せず続行)
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                continue
             }
         }
 
@@ -1157,7 +1342,12 @@ class DownloadManager: ObservableObject {
                     if page > 200 { break }
                     await SafetyMode.shared.delay(nanoseconds: requestDelay)
                 } catch {
-                    LogManager.shared.log("Download", "fallback page URL fetch failed: \(error)")
+                    if case EhError.banned(let remaining) = error {
+                        LogManager.shared.log("Download", "gid=\(gid) BANNED (fallback URL resolve), remaining=\(remaining ?? "unknown"), halt")
+                        BackgroundDownloadManager.shared.tripRateLimit(gid: gid)
+                    } else {
+                        LogManager.shared.log("Download", "fallback page URL fetch failed: \(error)")
+                    }
                     break
                 }
             }
@@ -1265,6 +1455,12 @@ class DownloadManager: ObservableObject {
                             )
                             await enqueueStats.bump(gid: gid, page: index, urlTail: imageURL.absoluteString.suffix(60))
                         } catch {
+                            // BAN 検知時は即 trip: 他の並列 task も次回 check で halt + 2ndpass も skip
+                            if case EhError.banned(let remaining) = error {
+                                BackgroundDownloadManager.shared.tripRateLimit(gid: gid)
+                                LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) BANNED (URL resolve), remaining=\(remaining ?? "unknown"), tripping rateLimit")
+                                return  // ダミー enqueue せず即抜ける
+                            }
                             LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) URL解決失敗: \(error.localizedDescription)")
                             // 失敗もstream経由で通知（mirror再試行はsecondpassで）
                             BackgroundDownloadManager.shared.enqueue(
@@ -1288,7 +1484,7 @@ class DownloadManager: ObservableObject {
 
         let watchdog = Task {
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 5_000_000_000)  // 5秒毎チェック (元 10秒)
+                try? await Task.sleep(nanoseconds: 5_000_000_000)  // 5秒毎チェック
                 if Task.isCancelled { break }
                 let elapsed = CFAbsoluteTimeGetCurrent() - lastProgressBox.value
                 if elapsed > stallThreshold {
@@ -1338,9 +1534,12 @@ class DownloadManager: ObservableObject {
             }
         }
 
-        // セカンドパス: 失敗ページを再試行
+        // セカンドパス: 失敗ページを再試行 (BAN 中は skip、BAN 期間延長を防ぐ)
+        if BackgroundDownloadManager.shared.isRateLimited(gid: gid) {
+            LogManager.shared.log("Download", "gid=\(gid) 2ndpass SKIP: rate limited (BAN 中は再試行しない)")
+        }
         let allFailed = state.failedPages.filter { !state.downloadedSet.contains($0.index) }
-        if !allFailed.isEmpty {
+        if !allFailed.isEmpty && !BackgroundDownloadManager.shared.isRateLimited(gid: gid) {
             let failedPageNums = allFailed.map { $0.index + 1 }
             LogManager.shared.log("Download", "gid=\(gid) 2ndpass START retry=\(failedPageNums) (5s wait)")
             // UI: 「別ミラーから再試行中」に切替 (info マーク表示用)
@@ -1351,30 +1550,90 @@ class DownloadManager: ObservableObject {
                 await SafetyMode.shared.delay(nanoseconds: 500_000_000)
             }
 
-            for (index, pageURL) in allFailed {
-                if activeDownloads[gid]?.isCancelled == true { break }
-                if state.downloadedSet.contains(index) { continue }
+            // 並列度 5 で 2ndpass を回す (TaskGroup、常時 5 枚分の download を並走)
+            // - 各 task 内で isCancelled check、SafetyMode.delay は維持
+            // - state.downloadedSet / progress の write は主 task 側 (await group.next() 受信点) で集約 → race 回避
+            // - 動画 WebP 用途: mirror DL 数が多く、並列化の効果大
+            let maxConcurrent = 5
+            var iterator = allFailed.makeIterator()
+            await withTaskGroup(of: (Int, Bool?).self) { group in
+                // ファイル既存 skip を先に全件捌いて、本当に DL 必要なものだけ task 化
+                func enqueueNext() -> Bool {
+                    while let (index, pageURL) = iterator.next() {
+                        if activeDownloads[gid]?.isCancelled == true { return false }
+                        if state.downloadedSet.contains(index) { continue }
 
-                let filePath = imageFilePath(gid: gid, page: index)
-                LogManager.shared.log("Download", "gid=\(gid) 2ndpass page \(index + 1) start url=\(pageURL.absoluteString.suffix(60))")
-                // 2ndpass は 1stpass で死んだ mirror が判明済み → 最初から別 mirror 要求
-                // attempt 1 の 120秒 timeout × 全ページ分を回避（32ページ × 2分 = 64分削減）
-                let success = await downloadSinglePage(
-                    gid: gid, index: index, pageURL: pageURL,
-                    filePath: filePath, host: host, maxRetries: 3,
-                    forceMirror: true
-                )
-                if success {
-                    state.downloadedSet.insert(index)
-                    addDownloadedBytes(gid: gid, page: index)
-                    updateProgress(gid: gid, current: state.downloadedSet.count, total: totalPages)
-                    LogManager.shared.log("Download", "gid=\(gid) 2ndpass page \(index + 1) OK")
-                } else {
-                    LogManager.shared.log("Download", "gid=\(gid) page \(index + 1)/\(totalPages) PERMANENTLY FAILED")
+                        let filePath = imageFilePath(gid: gid, page: index)
+                        if fileManager.fileExists(atPath: filePath.path),
+                           BackgroundDownloadManager.isValidImageFile(at: filePath) {
+                            state.downloadedSet.insert(index)
+                            addDownloadedBytes(gid: gid, page: index)
+                            updateProgress(gid: gid, current: state.downloadedSet.count, total: totalPages)
+                            LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) already on disk, skip 2ndpass")
+                            continue
+                        }
+                        LogManager.shared.log("Download", "gid=\(gid) 2ndpass page \(index + 1) start url=\(pageURL.absoluteString.suffix(60))")
+                        group.addTask { [self] in
+                            let ok = await downloadSinglePage(
+                                gid: gid, index: index, pageURL: pageURL,
+                                filePath: filePath, host: host, maxRetries: 3,
+                                forceMirror: true
+                            )
+                            await SafetyMode.shared.delay(nanoseconds: requestDelay)
+                            return (index, ok)
+                        }
+                        return true
+                    }
+                    return false
                 }
-                await SafetyMode.shared.delay(nanoseconds: requestDelay)
+
+                // 初期スロット埋め (最大 3)
+                for _ in 0..<maxConcurrent {
+                    if activeDownloads[gid]?.isCancelled == true { break }
+                    _ = enqueueNext()
+                }
+
+                // 完了次第、次の task を投入
+                while let (index, okOpt) = await group.next() {
+                    if let ok = okOpt {
+                        if ok {
+                            state.downloadedSet.insert(index)
+                            addDownloadedBytes(gid: gid, page: index)
+                            // 速度表示用: 2ndpass は delegate 経由で bytes が届かないため
+                            // ファイルサイズを直接累積へ加算する
+                            let filePath = imageFilePath(gid: gid, page: index)
+                            if let attrs = try? fileManager.attributesOfItem(atPath: filePath.path),
+                               let size = attrs[.size] as? Int64 {
+                                BackgroundDownloadManager.shared.addCumulativeBytes(gid: gid, bytes: size)
+                            }
+                            updateProgress(gid: gid, current: state.downloadedSet.count, total: totalPages)
+                            LogManager.shared.log("Download", "gid=\(gid) 2ndpass page \(index + 1) OK")
+                        } else {
+                            LogManager.shared.log("Download", "gid=\(gid) page \(index + 1)/\(totalPages) PERMANENTLY FAILED")
+                        }
+                    }
+                    if activeDownloads[gid]?.isCancelled == true { continue }
+                    _ = enqueueNext()
+                }
             }
             LogManager.shared.log("Download", "gid=\(gid) 2ndpass END: done=\(state.downloadedSet.count)/\(totalPages)")
+        }
+
+        // BG session DROPPED completion 救済: meta 保存前にディスク上の実ファイルを scan して
+        // downloadedSet に追加 (完了通知取りこぼしても実体は保存済みのケース)
+        var reconciledAdded = 0
+        for idx in 0..<totalPages where !state.downloadedSet.contains(idx) {
+            let p = imageFilePath(gid: gid, page: idx)
+            if fileManager.fileExists(atPath: p.path),
+               BackgroundDownloadManager.isValidImageFile(at: p) {
+                state.downloadedSet.insert(idx)
+                addDownloadedBytes(gid: gid, page: idx)
+                reconciledAdded += 1
+            }
+        }
+        if reconciledAdded > 0 {
+            LogManager.shared.log("Download", "gid=\(gid) reconcile before save: +\(reconciledAdded) pages → \(state.downloadedSet.count)/\(totalPages)")
+            updateProgress(gid: gid, current: state.downloadedSet.count, total: totalPages)
         }
 
         // 完了処理: @Published dict は subscript mutation だとSwiftUI更新が不確実
@@ -1531,6 +1790,12 @@ class DownloadManager: ObservableObject {
                     await SafetyMode.shared.delay(nanoseconds: backoff)
                 }
             } catch {
+                // BAN 検知時は即 trip + 全 retry 中断 (BAN 期間延長を防ぐ)
+                if case EhError.banned(let remaining) = error {
+                    LogManager.shared.log("Download", "gid=\(gid) page \(index + 1): BANNED, remaining=\(remaining ?? "unknown"), halt 2ndpass")
+                    BackgroundDownloadManager.shared.tripRateLimit(gid: gid)
+                    return false
+                }
                 LogManager.shared.log("Download", "gid=\(gid) page \(index + 1): \(error) (attempt \(attempt)/\(maxRetries))")
                 if attempt < maxRetries {
                     let backoff = UInt64(attempt) * 3_000_000_000
