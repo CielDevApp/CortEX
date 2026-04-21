@@ -276,10 +276,16 @@ struct DownloadsView: View {
                     // phase 別表示切替
                     switch progress.phase {
                     case .preparing:
-                        // URL 取得中: 数値ゼロでスパイラルだけだと「何も起きてない」印象になる
-                        Text("DL準備中…")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        // URL 解決中: got/expected が入ってれば具体値表示、未開始ならスピナーのみ
+                        if progress.total > 0 {
+                            Text("URL解決中 \(progress.current)/\(progress.total)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("DL準備中…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     case .active:
                         activeProgressDetails(gid: gid, progress: progress)
                     case .retrying:
@@ -295,10 +301,10 @@ struct DownloadsView: View {
                 }
                 .buttonStyle(.plain)
             }
-            // preparing 時は bar hide (0% のまま表示するより意味ある)
-            if progress.phase != .preparing {
+            // preparing 中でも URL 解決進捗が入ってれば bar 出す（0% 張り付き対策）
+            if progress.phase != .preparing || progress.total > 0 {
                 ProgressView(value: progress.fraction)
-                    .tint(progress.phase == .retrying ? .orange : .blue)
+                    .tint(progress.phase == .retrying ? .orange : (progress.phase == .preparing ? .gray : .blue))
             }
         }
         .padding(.vertical, 4)
