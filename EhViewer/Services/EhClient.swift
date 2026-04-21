@@ -399,6 +399,27 @@ final class EhClient: Sendable {
         return html
     }
 
+    // MARK: - レート実測用 /home.php 生 fetch
+
+    /// /home.php を既存 Cookie / UA で fetch し生 HTML を返す。
+    /// fetchHTML の ban 検知 throw を避けて、観測ログ用に常に String を返す。
+    /// 失敗時は nil（呼び出し側で log 出して無視する想定）
+    nonisolated func getHomePage(host: GalleryHost) async -> String? {
+        let urlStr = host.baseURL + "/home.php"
+        guard let url = URL(string: urlStr) else { return nil }
+        var request = URLRequest(url: url)
+        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(Self.buildCookieHeader(for: host), forHTTPHeaderField: "Cookie")
+        do {
+            let (data, _) = try await session.data(for: request)
+            return String(data: data, encoding: .utf8)
+                ?? String(data: data, encoding: .shiftJIS)
+                ?? String(data: data, encoding: .ascii)
+        } catch {
+            return nil
+        }
+    }
+
     // MARK: - Ban残り時間抽出
 
     /// レスポンスbodyからban残り時間を抽出
