@@ -1092,6 +1092,10 @@ class DownloadManager: ObservableObject {
                 allPageURLs.append(contentsOf: urls)
                 page += 1
 
+                // preparing 期の進捗として URL 解決数を current/total に反映
+                // (UI: 「URL解決中 got/expected」表示、バーも出す)
+                updateProgress(gid: gid, current: allPageURLs.count, total: max(pageCount, allPageURLs.count))
+
                 if pageCount > 0 && allPageURLs.count >= pageCount {
                     LogManager.shared.log("Download", "  reached expected pageCount=\(pageCount), stopping")
                     break
