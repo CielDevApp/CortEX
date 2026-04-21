@@ -166,6 +166,32 @@ struct GalleryReaderView: View {
 
             await viewModel.loadImagePages()
         }
+        .focusable()
+        .focusEffectDisabled()
+        .onKeyPress(.upArrow) {
+            guard readerDirection == 0 else { return .ignored }
+            let target = max(0, viewModel.currentIndex - 1)
+            viewModel.scrollTarget = target
+            return .handled
+        }
+        .onKeyPress(.downArrow) {
+            guard readerDirection == 0 else { return .ignored }
+            let maxPage = max(viewModel.totalPages - 1, 0)
+            let target = min(maxPage, viewModel.currentIndex + 1)
+            viewModel.scrollTarget = target
+            return .handled
+        }
+        .onKeyPress(.leftArrow) {
+            guard readerDirection == 1 else { return .ignored }
+            horizontalPage = max(0, horizontalPage - 1)
+            return .handled
+        }
+        .onKeyPress(.rightArrow) {
+            guard readerDirection == 1 else { return .ignored }
+            let maxPage = max(viewModel.totalPages - 1, 0)
+            horizontalPage = min(maxPage, horizontalPage + 1)
+            return .handled
+        }
         .onChange(of: verticalSizeClass) { _, newClass in
             if newClass == .compact && zoomImage != nil {
                 withAnimation(.easeOut(duration: 0.2)) { zoomImage = nil }
