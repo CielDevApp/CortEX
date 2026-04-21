@@ -157,7 +157,7 @@ class FavoritesViewModel: ObservableObject {
 
             while hasMorePages {
                 guard let url = nextURL else { break }
-                await ExtremeMode.shared.delay(nanoseconds: 2_000_000_000)
+                await SafetyMode.shared.delay(nanoseconds: 2_000_000_000)
 
                 let result = try await client.fetchByURL(urlString: url, host: host)
                 if result.galleries.isEmpty { break }
@@ -201,7 +201,8 @@ class FavoritesViewModel: ObservableObject {
         guard !urls.isEmpty else { return }
         LogManager.shared.log("Download", "\(urls.count) thumbnails to prefetch")
 
-        let batchSize = 15
+        // セーフティ ON (default): 6 並列で保守的 / OFF: 15 並列 (旧 Extreme 相当)
+        let batchSize = SafetyMode.shared.isEnabled ? 6 : 15
         for batchStart in stride(from: 0, to: urls.count, by: batchSize) {
             let batchEnd = min(batchStart + batchSize, urls.count)
             let batch = Array(urls[batchStart..<batchEnd])
@@ -239,8 +240,9 @@ class FavoritesViewModel: ObservableObject {
     static func prefetchCachedFavorites() {
         let cached = FavoritesCache.shared.load()
         guard !cached.isEmpty else { return }
-        // GPU化済みなので多めにプリフェッチ（network律速のため上限は維持）
-        let visible = Array(cached.prefix(50))
+        // セーフティ ON: 20 件まで絞る (BAN 予防) / OFF: 50 件 (旧挙動)
+        let limit = SafetyMode.shared.isEnabled ? 20 : 50
+        let visible = Array(cached.prefix(limit))
         Task(priority: .background) {
             await prefetchThumbnails(visible)
         }

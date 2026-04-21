@@ -9,7 +9,7 @@ extension ReaderViewModel {
     func requestLoad(_ index: Int) {
         guard index >= 0, index < totalPages else { return }
         // currentIndex から遠すぎるページはロードしない（スライダージャンプ時のスパム防止）
-        let maxDistance = ExtremeMode.shared.isEnabled ? 10 : 5
+        let maxDistance = SafetyMode.shared.isEnabled ? 5 : 10
         if abs(index - currentIndex) > maxDistance { return }
         if rawImages[index] != nil { return }
         if completedPages.contains(index) { return }
@@ -233,7 +233,7 @@ extension ReaderViewModel {
 
             let isVisible = abs(index - currentIndex) <= 2
             if !isVisible {
-                await ExtremeMode.shared.delay(nanoseconds: requestDelay)
+                await SafetyMode.shared.delay(nanoseconds: requestDelay)
             }
 
             let fetchStart = CFAbsoluteTimeGetCurrent()
@@ -299,7 +299,7 @@ extension ReaderViewModel {
                 }
             }
         } catch {
-            if resolvedHit && !ExtremeMode.shared.isEnabled {
+            if resolvedHit && SafetyMode.shared.isEnabled {
                 LogManager.shared.log("Reader", "loadSingle \(index): resolved URL expired, retrying fresh")
                 resolvedImageURLs.removeValue(forKey: index)
                 Self.saveResolvedURLs(resolvedImageURLs, gid: gallery.gid)
@@ -308,7 +308,7 @@ extension ReaderViewModel {
                     resolvedImageURLs[index] = freshURL
                     Self.saveResolvedURLs(resolvedImageURLs, gid: gallery.gid)
                     let isVisible = abs(index - currentIndex) <= 2
-                    if !isVisible { await ExtremeMode.shared.delay(nanoseconds: requestDelay) }
+                    if !isVisible { await SafetyMode.shared.delay(nanoseconds: requestDelay) }
                     let imageData = try await client.fetchImageData(url: freshURL, host: host)
 
                     // 自動保存（リトライ時、設定ONの場合のみ）
@@ -483,7 +483,7 @@ extension ReaderViewModel {
                 imagePageURLs = allPageURLs
                 if knownTotal > 0 && seenURLs.count >= knownTotal { break }
                 if page > 200 { break }
-                await ExtremeMode.shared.delay(nanoseconds: requestDelay)
+                await SafetyMode.shared.delay(nanoseconds: requestDelay)
             }
 
             imagePageURLs = allPageURLs
@@ -506,7 +506,7 @@ extension ReaderViewModel {
         var page = 1
         var seenIndices = Set(thumbnails.map(\.index))
         while page <= 100 {
-            await ExtremeMode.shared.delay(nanoseconds: requestDelay)
+            await SafetyMode.shared.delay(nanoseconds: requestDelay)
             do {
                 let infos = try await client.fetchThumbnailInfos(host: host, gallery: gallery, page: page)
                 if infos.isEmpty { break }

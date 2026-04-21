@@ -36,20 +36,7 @@ struct GachaSwipeTip: Tip {
     var image: Image? { Image(systemName: "hand.draw") }
 }
 
-// MARK: - エクストリームTip
-
-struct ExtremeAutoOffTip: Tip {
-    @Parameter
-    static var extremeEnabled: Bool = false
-
-    var title: Text { Text("自動OFF") }
-    var message: Text? { Text("エクストリームモードはアプリ再起動で自動的にOFFになります") }
-    var image: Image? { Image(systemName: "bolt.slash") }
-
-    var rules: [Tips.Rule] {
-        [#Rule(Self.$extremeEnabled) { $0 }]
-    }
-}
+// (旧 ExtremeAutoOffTip は SafetyMode 化に伴い削除。自動 OFF 仕様は廃止)
 
 // MARK: - 自動保存Tip
 

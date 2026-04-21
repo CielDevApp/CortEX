@@ -33,10 +33,9 @@ struct SettingsView: View {
     @State private var showLogViewer = false
     @AppStorage("debugLogEnabled") private var debugLogEnabled = false
     @StateObject private var favVM = FavoritesViewModel()
-    @ObservedObject private var extremeMode = ExtremeMode.shared
+    @ObservedObject private var safetyMode = SafetyMode.shared
     @ObservedObject private var ecoMode = EcoMode.shared
-    @State private var showExtremeConfirm = false
-    @State private var showExtremeNeedBackup = false
+    @State private var showDisableSafetyConfirm = false
     @State private var tipsReset = false
     @State private var showNhLogin = false
     @State private var showNhCDNVerify = false
@@ -394,46 +393,43 @@ struct SettingsView: View {
                     Text("CIFilter vs Metal の処理速度を計測します。").font(.caption2).foregroundStyle(.secondary)
                 }
 
-                // 9. EXTREME MODE（最下部）
+                // 9. SAFETY MODE (最下部)
                 Section {
-                    Toggle("エクストリームモード", isOn: Binding(
-                        get: { extremeMode.isEnabled },
+                    Toggle("セーフティモード", isOn: Binding(
+                        get: { safetyMode.isEnabled },
                         set: { newValue in
                             if newValue {
-                                if FavoritesBackup.hasBackup {
-                                    showExtremeConfirm = true
-                                } else {
-                                    showExtremeNeedBackup = true
-                                }
+                                safetyMode.isEnabled = true
                             } else {
-                                extremeMode.isEnabled = false
+                                showDisableSafetyConfirm = true
                             }
                         }
-                    )).tint(.red)
-                    if extremeMode.isEnabled {
+                    )).tint(.green)
+                    if !safetyMode.isEnabled {
                         HStack {
-                            Image(systemName: "bolt.fill").foregroundStyle(.red)
-                            Text("EXTREME MODE ENABLED").font(.caption.bold()).foregroundStyle(.red)
-                            Text("‼︎").foregroundStyle(.red)
+                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
+                            Text("セーフティモード OFF — BAN リスクあり").font(.caption.bold()).foregroundStyle(.red)
                         }
-                        TipView(ExtremeAutoOffTip(), arrowEdge: .top)
+                    } else {
+                        HStack {
+                            Image(systemName: "checkmark.shield.fill").foregroundStyle(.green)
+                            Text("セーフティモード ON — BAN 予防機能が有効").font(.caption.bold()).foregroundStyle(.green)
+                        }
                     }
                     Text("""
-                    EXTREME MODE を有効にすると全リミッターが解除されます:
-                    • Delay: ALL DISABLED（閲覧・DL・お気に入り）
-                    • Download: NO SPEED LIMIT
-                    • Connections: 6 → 20 parallel
-                    • Prefetch: ±1 → ±5 pages
-                    • Gallery Preview: FULL IMAGE PRELOAD
-                    • OCR Batch: 3 → 6 parallel
-                    • URL Cache: EXPIRY CHECK DISABLED
+                    セーフティモード ON 時の動作:
+                    • サムネ並列接続: 6 (OFF: 20)
+                    • サムネ prefetch: 50 件上限 (OFF: 100)
+                    • DL URL 解決: 50 画面毎に 60s cooldown
+                    • fetchThumbData に BAN 検知
+                    • 全ネットワークに 2s delay 適用
 
-                    ⚠️ BAN RISK. Auto-OFF on restart.
+                    画像 DL 本体 (H@H 経由) はモードに関わらず通常速度を維持。
                     """).font(.caption2).foregroundStyle(.secondary)
                 } header: {
-                    if extremeMode.isEnabled {
-                        Label("EXTREME MODE", systemImage: "bolt.fill").foregroundStyle(.red)
-                    } else { Text("EXTREME") }
+                    if !safetyMode.isEnabled {
+                        Label("セーフティモード", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red)
+                    } else { Text("セーフティモード") }
                 }
 
                 } // end advanced settings
@@ -479,18 +475,13 @@ struct SettingsView: View {
             } message: {
                 Text("サーバーから全ページ取得します。BANされる可能性があります。続行しますか？")
             }
-            .alert("⚠️ エクストリームモード", isPresented: $showExtremeConfirm) {
-                Button("有効化する", role: .destructive) {
-                    extremeMode.isEnabled = true
+            .alert("セーフティモードを OFF にしますか？", isPresented: $showDisableSafetyConfirm) {
+                Button("OFF にする (自己責任)", role: .destructive) {
+                    safetyMode.isEnabled = false
                 }
-                Button("キャンセル", role: .cancel) {}
+                Button("ON のまま維持", role: .cancel) {}
             } message: {
-                Text("BAN対策（リクエストディレイ・レート制限）を全て無効化します。アカウントBANのリスクがあります。自己責任で使用してください。")
-            }
-            .alert("バックアップが必要です", isPresented: $showExtremeNeedBackup) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text("エクストリームモードはBANリスクがあります。先にPHOENIX MODEでお気に入りのバックアップを作成してください。")
+                Text("セーフティモードを OFF にすると BAN 対策ディレイとレート制限が無効化されます。E-Hentai アカウントで BAN を踏むと 1 時間 (2 回目同日は 5 時間) サービスが使えなくなります。\n\n画像本体 DL は影響を受けませんが、サムネ取得・URL 解決・お気に入り取得などで BAN リスクが大幅に増えます。自己責任で進めてください。")
             }
             .overlay {
                 if favVM.isLoading {

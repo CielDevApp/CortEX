@@ -28,7 +28,7 @@ class ReaderViewModel: ObservableObject {
     var urlResolvingPages: Set<Int> = []
     var maxConcurrent: Int {
         if EcoMode.shared.isEnabled { return 3 }
-        return ExtremeMode.shared.isEnabled ? 20 : 5
+        return SafetyMode.shared.isEnabled ? 5 : 20
     }
     let gallery: Gallery
     let host: GalleryHost
@@ -80,7 +80,7 @@ class ReaderViewModel: ObservableObject {
         currentIndex = index
         requestLoad(index)
         if !isScrolling && !EcoMode.shared.isEnabled {
-            let prefetchRange = ExtremeMode.shared.isEnabled ? 5 : 1
+            let prefetchRange = SafetyMode.shared.isEnabled ? 1 : 5
             for offset in 1...prefetchRange {
                 requestLoad(index + offset)
                 requestLoad(index - offset)

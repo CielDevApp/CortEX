@@ -22,7 +22,7 @@ final class EhClient: Sendable {
         thumbConfig.httpShouldSetCookies = false
         thumbConfig.httpCookieStorage = nil
         thumbConfig.timeoutIntervalForRequest = 10
-        thumbConfig.httpMaximumConnectionsPerHost = ExtremeMode.shared.isEnabled ? 20 : 6
+        thumbConfig.httpMaximumConnectionsPerHost = SafetyMode.shared.isEnabled ? 6 : 20
         thumbConfig.requestCachePolicy = .returnCacheDataElseLoad
         self.thumbSession = URLSession(configuration: thumbConfig)
     }
@@ -251,16 +251,42 @@ final class EhClient: Sendable {
     }
 
     /// サムネ高速取得（並列15接続、短タイムアウト）
+    /// BAN 検知: 画像のはずが HTML (text/html or 小サイズ HTML 本文) が返ってきたら
+    /// The ban expires in... をパースして EhError.banned throw
     nonisolated func fetchThumbData(url: URL, host: GalleryHost) async throws -> Data {
         var request = URLRequest(url: url)
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue(Self.buildCookieHeader(for: host), forHTTPHeaderField: "Cookie")
 
         let (data, response) = try await thumbSession.data(for: request)
+        let httpResponse = response as? HTTPURLResponse
+        let status = httpResponse?.statusCode ?? 0
 
-        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
+        // 503 / 429 / 509 / その他非 2xx: HTML 本文から BAN 文言を探す
+        if !(200...299).contains(status) {
+            let body = String(data: data.prefix(2000), encoding: .utf8) ?? ""
+            if body.contains("The ban expires in") || body.contains("temporarily banned") {
+                let remaining = Self.extractBanRemaining(from: data)
+                LogManager.shared.log("eh-rate", "fetchThumbData BAN detected url=\(url.lastPathComponent) status=\(status) remaining=\(remaining ?? "nil")")
+                throw EhError.banned(remaining: remaining)
+            }
+            LogManager.shared.log("eh-rate", "fetchThumbData http \(status) url=\(url.lastPathComponent)")
             throw EhError.parseFailed
         }
+
+        // 200 だが Content-Type が text/html (本来は画像が返るはず): BAN ページ疑い
+        if let ct = httpResponse?.value(forHTTPHeaderField: "Content-Type"),
+           ct.lowercased().hasPrefix("text/html") {
+            let body = String(data: data.prefix(2000), encoding: .utf8) ?? ""
+            if body.contains("The ban expires in") || body.contains("temporarily banned") {
+                let remaining = Self.extractBanRemaining(from: data)
+                LogManager.shared.log("eh-rate", "fetchThumbData BAN (HTML 200) url=\(url.lastPathComponent) remaining=\(remaining ?? "nil")")
+                throw EhError.banned(remaining: remaining)
+            }
+            LogManager.shared.log("eh-rate", "fetchThumbData unexpected HTML url=\(url.lastPathComponent) size=\(data.count)")
+            throw EhError.parseFailed
+        }
+
         guard !data.isEmpty else { throw EhError.parseFailed }
         return data
     }

@@ -115,7 +115,7 @@ struct TranslationManagerView: View {
         LogManager.shared.log("Translation", "processAllPages start (completed=\(completedPages.count)/\(viewModel.totalPages))")
 
         // バッチOCR: 最大N(通常3/エクストリーム6)ページ同時にOCRを実行してからシリアルに翻訳
-        let batchSize = ExtremeMode.shared.isEnabled ? 6 : 3
+        let batchSize = SafetyMode.shared.isEnabled ? 3 : 6
         while isActive && !Task.isCancelled {
             var batch: [Int] = []
             let center = viewModel.currentIndex

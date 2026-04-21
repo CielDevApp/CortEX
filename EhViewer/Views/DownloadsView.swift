@@ -286,6 +286,8 @@ struct DownloadsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                    case .cooling:
+                        coolingInfo(progress: progress)
                     case .active:
                         activeProgressDetails(gid: gid, progress: progress)
                     case .retrying:
@@ -304,7 +306,14 @@ struct DownloadsView: View {
             // preparing 中でも URL 解決進捗が入ってれば bar 出す（0% 張り付き対策）
             if progress.phase != .preparing || progress.total > 0 {
                 ProgressView(value: progress.fraction)
-                    .tint(progress.phase == .retrying ? .orange : (progress.phase == .preparing ? .gray : .blue))
+                    .tint({
+                        switch progress.phase {
+                        case .retrying: return .orange
+                        case .cooling: return .orange
+                        case .preparing: return .gray
+                        case .active: return .blue
+                        }
+                    }())
             }
         }
         .padding(.vertical, 4)
@@ -347,6 +356,30 @@ struct DownloadsView: View {
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.blue)
                     }
+                }
+            }
+        }
+    }
+
+    /// .cooling 時の info + 残り秒カウントダウン (1s 毎)
+    @ViewBuilder
+    private func coolingInfo(progress: DownloadManager.DownloadProgress) -> some View {
+        TimelineView(.periodic(from: .now, by: 1)) { timeline in
+            let remaining = max(Int((progress.coolingUntil ?? timeline.date).timeIntervalSince(timeline.date)), 0)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text("URL解決中 \(progress.current)/\(progress.total)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                HStack(spacing: 4) {
+                    Image(systemName: "shield.lefthalf.filled")
+                        .foregroundStyle(.orange)
+                        .font(.caption)
+                    Text("BAN 回避中 残り\(remaining)秒 — 設定からセーフティ OFF で強制再開")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
             }
         }

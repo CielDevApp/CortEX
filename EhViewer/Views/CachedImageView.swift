@@ -67,8 +67,8 @@ struct CachedImageView: View {
 
         ImageCache.shared.setLoading(url)
 
-        // 同時ダウンロード数制限（エクストリーム時はスキップ）
-        let useSlot = !ExtremeMode.shared.isEnabled
+        // 同時ダウンロード数制限 (セーフティ ON 時のみスロット確保、OFF はスキップ)
+        let useSlot = SafetyMode.shared.isEnabled
         if useSlot { await ImageCache.shared.acquireThumbSlot() }
         defer { if useSlot { ImageCache.shared.releaseThumbSlot() } }
 
