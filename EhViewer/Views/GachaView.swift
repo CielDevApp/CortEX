@@ -263,7 +263,7 @@ struct GachaView: View {
 
     private func singleResultOverlay(gallery: Gallery) -> some View {
         VStack(spacing: 12) {
-            CachedImageView(url: gallery.coverURL, host: .exhentai)
+            CachedImageView(url: gallery.coverURL, host: .exhentai, gid: gallery.gid)
                 .frame(width: 200, height: 280)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .shadow(color: .purple.opacity(0.5), radius: 16)
@@ -335,7 +335,7 @@ struct GachaView: View {
                     ForEach(multiResults) { gallery in
                         NavigationLink(value: gallery) {
                             VStack(spacing: 6) {
-                                CachedImageView(url: gallery.coverURL, host: .exhentai)
+                                CachedImageView(url: gallery.coverURL, host: .exhentai, gid: gallery.gid)
                                     .aspectRatio(contentMode: .fill)
                                     .frame(minWidth: 0, maxWidth: .infinity, minHeight: 200, maxHeight: 200)
                                     .clipped()

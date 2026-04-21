@@ -383,7 +383,7 @@ struct GalleryDetailView: View {
     @ViewBuilder
     private func headerSection(_ detail: GalleryDetail) -> some View {
         HStack(alignment: .top, spacing: 16) {
-            CachedImageView(url: detail.gallery.coverURL, host: host)
+            CachedImageView(url: detail.gallery.coverURL, host: host, gid: detail.gallery.gid)
                 .frame(width: 140, height: 200)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 

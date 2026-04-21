@@ -719,6 +719,17 @@ struct CharacterCensusView: View {
         return nil
     }
 
+    /// coverURL と同じロジックで代表作 gid を返す（DL 済みならローカル流用のため）
+    private func coverGid(for characterName: String) -> Int? {
+        let ehFavs = FavoritesCache.shared.load()
+        if let gallery = ehFavs.first(where: {
+            $0.tags.contains(where: { $0.hasPrefix("character:") && $0.dropFirst("character:".count).localizedCaseInsensitiveContains(characterName) })
+        }) {
+            return gallery.gid
+        }
+        return nil
+    }
+
     private func exportAges() -> URL? {
         guard !ages.isEmpty else { return nil }
         let dir = FileManager.default.temporaryDirectory
@@ -801,7 +812,7 @@ struct CharacterCensusView: View {
                                     .frame(width: 24, alignment: .trailing)
 
                                 // 代表作サムネ
-                                CachedImageView(url: coverURL(for: stat.name), host: KeychainService.load(key: "igneous") != nil ? .exhentai : .ehentai)
+                                CachedImageView(url: coverURL(for: stat.name), host: KeychainService.load(key: "igneous") != nil ? .exhentai : .ehentai, gid: coverGid(for: stat.name))
                                     .frame(width: 32, height: 45)
                                     .clipShape(RoundedRectangle(cornerRadius: 3))
 
@@ -985,7 +996,7 @@ struct CharacterWorksView: View {
                                 selectedEhGallery = gallery
                             } label: {
                                 HStack(spacing: 10) {
-                                    CachedImageView(url: gallery.coverURL, host: KeychainService.load(key: "igneous") != nil ? .exhentai : .ehentai)
+                                    CachedImageView(url: gallery.coverURL, host: KeychainService.load(key: "igneous") != nil ? .exhentai : .ehentai, gid: gallery.gid)
                                         .frame(width: 45, height: 64)
                                         .clipShape(RoundedRectangle(cornerRadius: 4))
                                     VStack(alignment: .leading, spacing: 2) {

@@ -125,7 +125,7 @@ struct HistoryView: View {
     @ViewBuilder
     private func ehHistoryRow(entry: HistoryEntry) -> some View {
         HStack(spacing: 12) {
-            CachedImageView(url: entry.coverURL, host: .exhentai)
+            CachedImageView(url: entry.coverURL, host: .exhentai, gid: entry.gid)
                 .frame(width: 80, height: 110)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .background(
