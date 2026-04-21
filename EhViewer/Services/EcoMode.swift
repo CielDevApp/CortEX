@@ -10,8 +10,8 @@ final class EcoMode: ObservableObject {
         didSet {
             UserDefaults.standard.set(isEnabled, forKey: "ecoMode")
             if isEnabled {
-                // エクストリームと排他
-                ExtremeMode.shared.isEnabled = false
+                // セーフティと排他とは逆: ECO ON 時は safety ON 強制 (攻撃的設定と不整合回避)
+                SafetyMode.shared.isEnabled = true
             }
         }
     }

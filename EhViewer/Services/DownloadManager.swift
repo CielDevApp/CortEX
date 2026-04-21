@@ -72,11 +72,14 @@ class DownloadManager: ObservableObject {
         var total: Int
         var isCancelled: Bool = false
         var phase: Phase = .preparing
+        /// cooling phase のとき、cooldown 終了予定時刻 (UI カウントダウン用)
+        var coolingUntil: Date? = nil
         nonisolated var fraction: Double { total > 0 ? Double(current) / Double(total) : 0 }
 
-        /// DL フェーズ: UI 側で「準備中」「通常DL」「リトライ中」を区別するため
+        /// DL フェーズ: UI 側で「準備中」「通常DL」「リトライ中」「cooldown」を区別するため
         enum Phase: Sendable {
             case preparing   // URL 取得中など、progress 0/0 で見える期間
+            case cooling     // URL 解決中の BAN 予防 cooldown (safetyMode ON 時 50 画面毎に 60s)
             case active      // 1stpass 通常 DL 中
             case retrying    // 2ndpass に入った (低速 mirror 再試行中)
         }
@@ -168,7 +171,7 @@ class DownloadManager: ObservableObject {
                 activeDownloads[gid] = DownloadProgress(current: current, total: total)
                 startLiveActivity(gid: gid, title: meta.title, totalPages: total, initialPage: current)
                 Task(priority: .utility) {
-                    await ExtremeMode.shared.delay(nanoseconds: 3_000_000_000)
+                    await SafetyMode.shared.delay(nanoseconds: 3_000_000_000)
                     if let nhGallery = try? await NhentaiClient.fetchGallery(id: nhId) {
                         await performNhentaiDownload(nhGallery: nhGallery)
                     } else {
@@ -181,7 +184,7 @@ class DownloadManager: ObservableObject {
                 activeDownloads[gid] = DownloadProgress(current: current, total: total)
                 startLiveActivity(gid: gid, title: meta.title, totalPages: total, initialPage: current)
                 Task(priority: .utility) {
-                    await ExtremeMode.shared.delay(nanoseconds: 3_000_000_000)
+                    await SafetyMode.shared.delay(nanoseconds: 3_000_000_000)
                     await performDownload(
                         gid: gid, token: meta.token, title: meta.title,
                         coverURL: nil, pageCount: meta.pageCount,
@@ -922,17 +925,18 @@ class DownloadManager: ObservableObject {
         var updated = activeDownloads
         let prevPhase = updated[gid]?.phase ?? .preparing
         let prevCancelled = updated[gid]?.isCancelled ?? false
-        updated[gid] = DownloadProgress(current: current, total: total, isCancelled: prevCancelled, phase: prevPhase)
+        let prevCoolingUntil = updated[gid]?.coolingUntil
+        updated[gid] = DownloadProgress(current: current, total: total, isCancelled: prevCancelled, phase: prevPhase, coolingUntil: prevCoolingUntil)
         activeDownloads = updated
         updateLiveActivity(gid: gid, current: current, total: total)
     }
 
     /// DL phase のみを更新 (UI 表示切替用)
-    /// preparing → active → retrying の遷移に対応
-    private func updatePhase(gid: Int, phase: DownloadProgress.Phase) {
+    /// preparing → cooling → preparing → active → retrying の遷移に対応
+    private func updatePhase(gid: Int, phase: DownloadProgress.Phase, coolingUntil: Date? = nil) {
         guard var entry = activeDownloads[gid] else { return }
-        guard entry.phase != phase else { return }
         entry.phase = phase
+        entry.coolingUntil = coolingUntil
         var updated = activeDownloads
         updated[gid] = entry
         activeDownloads = updated
@@ -1105,7 +1109,25 @@ class DownloadManager: ObservableObject {
                     break
                 }
 
-                await ExtremeMode.shared.delay(nanoseconds: requestDelay)
+                // === BAN 予防 cooldown: 50 画面毎に 60s sleep (safetyMode ON 時のみ) ===
+                // 閾値は ehentai-ban-criteria SKILL.md 実測データ由来 (60 画面安全 / 100 画面 BAN)
+                // 残り 10 画面以下なら終了間近なので cooldown 省略 (冗長回避)
+                let expectedScreens = pageCount > 0 ? (pageCount + 19) / 20 : Int.max
+                let remainingScreens = max(expectedScreens - page, 0)
+                if SafetyMode.shared.isEnabled && page > 0 && page % 50 == 0 && remainingScreens >= 10 {
+                    let cooldownEnd = Date().addingTimeInterval(60)
+                    LogManager.shared.log("eh-rate", "cooldown start after \(page) screens, 60s sleep")
+                    updatePhase(gid: gid, phase: .cooling, coolingUntil: cooldownEnd)
+                    // 500ms x 120 回分割: cancel 即反映
+                    for _ in 0..<120 {
+                        if activeDownloads[gid]?.isCancelled == true { break }
+                        try? await Task.sleep(nanoseconds: 500_000_000)
+                    }
+                    updatePhase(gid: gid, phase: .preparing, coolingUntil: nil)
+                    LogManager.shared.log("eh-rate", "cooldown end, resuming URL resolve")
+                } else {
+                    await SafetyMode.shared.delay(nanoseconds: requestDelay)
+                }
             } catch {
                 LogManager.shared.log("Download", "page URL fetch failed: \(error)")
                 break
@@ -1133,7 +1155,7 @@ class DownloadManager: ObservableObject {
                     page += 1
                     if pageCount > 0 && allPageURLs.count >= pageCount { break }
                     if page > 200 { break }
-                    await ExtremeMode.shared.delay(nanoseconds: requestDelay)
+                    await SafetyMode.shared.delay(nanoseconds: requestDelay)
                 } catch {
                     LogManager.shared.log("Download", "fallback page URL fetch failed: \(error)")
                     break
@@ -1176,11 +1198,11 @@ class DownloadManager: ObservableObject {
         // 既存ページ数を反映
         updateProgress(gid: gid, current: state.downloadedSet.count, total: totalPages)
 
-        // エクストリームモードなら後方DLを同時起動（ECOモード時は無効）
-        if ExtremeMode.shared.isEnabled && !EcoMode.shared.isEnabled {
+        // セーフティ OFF (旧エクストリーム) なら後方DLを同時起動（ECOモード時は無効）
+        if !SafetyMode.shared.isEnabled && !EcoMode.shared.isEnabled {
             state.backwardRunning = true
             state.backwardCancelled = false
-            LogManager.shared.log("Download", "gid=\(gid) EXTREME: starting backward download")
+            LogManager.shared.log("Download", "gid=\(gid) SAFETY-OFF: starting backward download")
             Task(priority: .high) {
                 await self.performBackwardDownload(gid: gid, host: host)
             }
@@ -1326,7 +1348,7 @@ class DownloadManager: ObservableObject {
             // 5s 待機中に cancelDownload されたら即脱出（小刻みに分割してチェック）
             for _ in 0..<10 {
                 if activeDownloads[gid]?.isCancelled == true { break }
-                await ExtremeMode.shared.delay(nanoseconds: 500_000_000)
+                await SafetyMode.shared.delay(nanoseconds: 500_000_000)
             }
 
             for (index, pageURL) in allFailed {
@@ -1350,7 +1372,7 @@ class DownloadManager: ObservableObject {
                 } else {
                     LogManager.shared.log("Download", "gid=\(gid) page \(index + 1)/\(totalPages) PERMANENTLY FAILED")
                 }
-                await ExtremeMode.shared.delay(nanoseconds: requestDelay)
+                await SafetyMode.shared.delay(nanoseconds: requestDelay)
             }
             LogManager.shared.log("Download", "gid=\(gid) 2ndpass END: done=\(state.downloadedSet.count)/\(totalPages)")
         }
@@ -1435,7 +1457,7 @@ class DownloadManager: ObservableObject {
             }
 
             // エクストリームモードではディレイなし（delay内部でスキップ）
-            await ExtremeMode.shared.delay(nanoseconds: requestDelay)
+            await SafetyMode.shared.delay(nanoseconds: requestDelay)
 
             // 全ページ完了チェック
             if state.downloadedSet.count >= totalPages { break }
@@ -1473,7 +1495,7 @@ class DownloadManager: ObservableObject {
                 if activeDownloads[gid]?.isCancelled == true { return false }
                 LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) attempt \(attempt): resolved → \(imageURL.absoluteString.suffix(80))")
 
-                await ExtremeMode.shared.delay(nanoseconds: requestDelay)
+                await SafetyMode.shared.delay(nanoseconds: requestDelay)
                 if activeDownloads[gid]?.isCancelled == true { return false }
 
                 // Background URLSession経由（アプリsuspend中もDL継続）
@@ -1494,7 +1516,7 @@ class DownloadManager: ObservableObject {
                     try? FileManager.default.removeItem(at: filePath)
                     LogManager.shared.log("Download", "gid=\(gid) page \(index + 1): invalid/empty (attempt \(attempt)/\(maxRetries))")
                     if attempt < maxRetries {
-                        await ExtremeMode.shared.delay(nanoseconds: 3_000_000_000)
+                        await SafetyMode.shared.delay(nanoseconds: 3_000_000_000)
                     }
                     continue
                 }
@@ -1506,13 +1528,13 @@ class DownloadManager: ObservableObject {
                 usedMirror = true
                 if attempt < maxRetries {
                     let backoff = UInt64(attempt) * 3_000_000_000
-                    await ExtremeMode.shared.delay(nanoseconds: backoff)
+                    await SafetyMode.shared.delay(nanoseconds: backoff)
                 }
             } catch {
                 LogManager.shared.log("Download", "gid=\(gid) page \(index + 1): \(error) (attempt \(attempt)/\(maxRetries))")
                 if attempt < maxRetries {
                     let backoff = UInt64(attempt) * 3_000_000_000
-                    await ExtremeMode.shared.delay(nanoseconds: backoff)
+                    await SafetyMode.shared.delay(nanoseconds: backoff)
                 }
             }
         }

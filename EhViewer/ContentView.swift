@@ -17,10 +17,10 @@ struct ContentView: View {
     @State private var lockScrollOffset: CGFloat = 0
     @StateObject private var lockDisplayLink = DisplayLinkDriver()
     @AppStorage("appTheme") private var appTheme = 0
-    @ObservedObject private var extremeMode = ExtremeMode.shared
+    @ObservedObject private var safetyMode = SafetyMode.shared
     @ObservedObject private var ecoMode = EcoMode.shared
     @ObservedObject private var networkMonitor = NetworkMonitor.shared
-    @State private var extremePulse = false
+    @State private var dangerPulse = false
     @State private var greenFlash = false
     @State private var greenOpacity: Double = 0
     @State private var importToast: String?
@@ -46,18 +46,19 @@ struct ContentView: View {
 
         }
         .overlay {
-            if extremeMode.isEnabled {
+            // safety OFF = 旧 EXTREME 相当で危険、赤ボーダー
+            if !safetyMode.isEnabled {
                 RoundedRectangle(cornerRadius: Self.screenCornerRadius)
                     .stroke(Color.red, lineWidth: 2.5)
-                    .opacity(extremePulse ? 1.0 : 0.5)
+                    .opacity(dangerPulse ? 1.0 : 0.5)
                     .ignoresSafeArea()
                     .allowsHitTesting(false)
                     .onAppear {
                         withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
-                            extremePulse = true
+                            dangerPulse = true
                         }
                     }
-                    .onDisappear { extremePulse = false }
+                    .onDisappear { dangerPulse = false }
             }
             if greenFlash {
                 RoundedRectangle(cornerRadius: Self.screenCornerRadius)
@@ -73,18 +74,16 @@ struct ContentView: View {
                 .padding(.trailing, 8)
                 .allowsHitTesting(false)
         }
-        .onChange(of: extremeMode.isEnabled) { old, new in
-            if old && !new {
-                // OFF時: 緑フラッシュ2回
+        .onChange(of: safetyMode.isEnabled) { old, new in
+            // safety OFF → ON = 安全に戻った = 緑フラッシュ 2 回で安心 feedback
+            if !old && new {
                 greenFlash = true
                 greenOpacity = 0
                 Task {
-                    // 1回目
                     withAnimation(.easeIn(duration: 0.4)) { greenOpacity = 1 }
                     try? await Task.sleep(nanoseconds: 400_000_000)
                     withAnimation(.easeOut(duration: 0.4)) { greenOpacity = 0 }
                     try? await Task.sleep(nanoseconds: 500_000_000)
-                    // 2回目
                     withAnimation(.easeIn(duration: 0.4)) { greenOpacity = 1 }
                     try? await Task.sleep(nanoseconds: 400_000_000)
                     withAnimation(.easeOut(duration: 0.4)) { greenOpacity = 0 }

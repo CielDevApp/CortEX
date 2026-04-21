@@ -142,6 +142,8 @@ struct GalleryDetailView: View {
     @State private var thumbnails: [ThumbnailInfo] = []
     @State private var croppedThumbs: [Int: PlatformImage] = [:]
     @State private var visibleThumbCount = 50
+    /// 大規模 DL 警告ダイアログ (70 画面 = 1400p 以上)
+    @State private var showLargeDLWarning = false
 
     private let columns = [
         GridItem(.flexible(), spacing: 4),
@@ -650,7 +652,13 @@ struct GalleryDetailView: View {
             .clipShape(RoundedRectangle(cornerRadius: 12))
         } else {
             Button {
-                dm.startDownload(gallery: detail.gallery, host: host)
+                // 画面数 = ceil(pageCount / 20)。70 画面 = 1400p で警告。
+                let screens = (detail.gallery.pageCount + 19) / 20
+                if screens >= 70 {
+                    showLargeDLWarning = true
+                } else {
+                    dm.startDownload(gallery: detail.gallery, host: host)
+                }
             } label: {
                 Label("ダウンロード", systemImage: "arrow.down.circle.fill")
                     .frame(maxWidth: .infinity)
@@ -659,6 +667,17 @@ struct GalleryDetailView: View {
                     .foregroundStyle(.white)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .bold()
+            }
+            .alert("大規模 DL の確認", isPresented: $showLargeDLWarning) {
+                Button("続行") {
+                    dm.startDownload(gallery: detail.gallery, host: host)
+                }
+                Button("キャンセル", role: .cancel) {}
+            } message: {
+                let screens = (detail.gallery.pageCount + 19) / 20
+                let cooldowns = max(0, (screens - 1) / 50)
+                let minutes = (screens * 2 + cooldowns * 60) / 60
+                Text("この作品は \(detail.gallery.pageCount) ページ (約 \(screens) 画面) です。100 画面超で E-Hentai 側から一時 BAN (約 4 分) を踏む可能性があります。\n\nセーフティモード ON の場合、50 画面毎に 60 秒の cooldown を自動挿入します (推定所要: 約 \(minutes) 分)。\n\nセーフティ OFF にすると cooldown はスキップされますが BAN リスクが上がります。続行しますか？")
             }
         }
     }
@@ -834,10 +853,10 @@ struct GalleryDetailView: View {
     }
 
     /// サムネイル情報を逐次取得（1ページ目即表示、残りバックグラウンド）
-    /// エクストリームモード: フル画像URLを解決してメモリキャッシュに先読み
+    /// セーフティ OFF (旧エクストリーム): フル画像URLを解決してメモリキャッシュに先読み
     /// 動画WebP/GIF ギャラリーは UIImage(data:) で全フレーム展開→OOM 発生するのでスキップ
     private func prefetchFullImages() {
-        guard ExtremeMode.shared.isEnabled, let detail else { return }
+        guard !SafetyMode.shared.isEnabled, let detail else { return }
         let gallery = detail.gallery
         // 動画ギャラリー判定（タイトル heuristic）→ prefetch 無効化
         let titleLower = gallery.title.lowercased()
