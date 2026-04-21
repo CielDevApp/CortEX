@@ -5,6 +5,8 @@ import LocalAuthentication
 extension Notification.Name {
     /// 設定タブへ遷移を要求する通知（NhentaiDetailView などから）
     static let navigateToSettingsTab = Notification.Name("Cortex.navigateToSettingsTab")
+    /// 保存済みタブへ遷移を要求する通知（詳細画面でDL開始時）
+    static let navigateToDownloadsTab = Notification.Name("Cortex.navigateToDownloadsTab")
 }
 
 struct ContentView: View {
@@ -116,6 +118,9 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToSettingsTab)) { _ in
             withAnimation { selectedTab = 6 }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .navigateToDownloadsTab)) { _ in
+            withAnimation { selectedTab = 3 }
         }
         .overlay {
             if let toast = importToast {

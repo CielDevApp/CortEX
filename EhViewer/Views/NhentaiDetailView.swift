@@ -354,6 +354,7 @@ struct NhentaiDetailView: View {
         } else {
             Button {
                 downloadManager.startNhentaiDownload(gallery: gallery)
+                NotificationCenter.default.post(name: .navigateToDownloadsTab, object: nil)
             } label: {
                 Label("ダウンロード", systemImage: "arrow.down.circle.fill")
                     .frame(maxWidth: .infinity)

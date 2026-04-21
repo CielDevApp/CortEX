@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 final class EhClient: Sendable {
     static let shared = EhClient()
@@ -202,7 +203,7 @@ final class EhClient: Sendable {
     nonisolated func fetchImageURL(pageURL: URL) async throws -> URL {
         // 画像ページURLからホストを判定
         let host: GalleryHost = pageURL.host?.contains("exhentai") == true ? .exhentai : .ehentai
-        let html = try await fetchHTML(urlString: pageURL.absoluteString, host: host)
+        let html = try await fetchHTMLViaBGOrFallback(urlString: pageURL.absoluteString, host: host)
         if let url = HTMLParser.parseFullImageURL(html: html) {
             return url
         }
@@ -214,12 +215,12 @@ final class EhClient: Sendable {
         let host: GalleryHost = pageURL.host?.contains("exhentai") == true ? .exhentai : .ehentai
 
         // まずページHTMLを取得してnlトークンを探す
-        let html = try await fetchHTML(urlString: pageURL.absoluteString, host: host)
+        let html = try await fetchHTMLViaBGOrFallback(urlString: pageURL.absoluteString, host: host)
         if let nlToken = HTMLParser.parseNLToken(html: html) {
             // nlトークンで別サーバーを要求
             let mirrorURLStr = pageURL.absoluteString + (pageURL.query != nil ? "&" : "?") + "nl=\(nlToken)"
             LogManager.shared.log("Download", "requesting mirror: \(mirrorURLStr)")
-            let mirrorHTML = try await fetchHTML(urlString: mirrorURLStr, host: host)
+            let mirrorHTML = try await fetchHTMLViaBGOrFallback(urlString: mirrorURLStr, host: host)
             if let url = HTMLParser.parseFullImageURL(html: mirrorHTML) {
                 return url
             }
@@ -229,6 +230,60 @@ final class EhClient: Sendable {
             return url
         }
         throw EhError.parseFailed
+    }
+
+    /// 案 4 の HTML fetch: 通常 fetchHTML (FG session) を直呼び。
+    /// 以前は BG session 経由で lock 中継続を試みたが、BG session が空/不正 body を返す
+    /// 不具合が発覚したため revert。lock 中は await が blocked、unlock で自然に resume される。
+    /// ban 検知は fetchHTML 内で実装済み。
+    ///
+    /// 根因: FG URLSession はアプリが background 中に empty body (0B) を返し、
+    /// fetchHTML は `notLoggedIn` を throw する。通常の指数バックオフでは background 期間を
+    /// 乗り越えられず URL 解決が途中打ち切りになる。
+    /// 対処: 0B 系失敗時に UIApplication.state を確認し、`.active` でなければ
+    /// foreground 復帰まで最大 300 秒待機 (= ロック画面継続) → 復帰後に再試行。
+    /// banned / galleryRemoved は即時 throw (retry 無意味)。
+    nonisolated func fetchHTMLViaBGOrFallback(urlString: String, host: GalleryHost) async throws -> String {
+        let maxFgRetries = 3
+        let maxBgWaitCycles = 5
+        var fgRetries = 0
+        var bgWaitCycles = 0
+        var lastError: Error = EhError.parseFailed
+        while true {
+            do {
+                return try await fetchHTML(urlString: urlString, host: host)
+            } catch EhError.banned(let remaining) {
+                throw EhError.banned(remaining: remaining)
+            } catch EhError.galleryRemoved {
+                throw EhError.galleryRemoved
+            } catch EhError.invalidURL {
+                throw EhError.invalidURL
+            } catch {
+                lastError = error
+                let isBackgrounded = await MainActor.run { UIApplication.shared.applicationState != .active }
+                if isBackgrounded {
+                    bgWaitCycles += 1
+                    if bgWaitCycles > maxBgWaitCycles { break }
+                    LogManager.shared.log("Download", "fetchHTML backgrounded (cycle \(bgWaitCycles)/\(maxBgWaitCycles)), waiting foreground (err=\(error)) url=\(urlString.suffix(60))")
+                    var waited = 0
+                    while waited < 300 {
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                        waited += 1
+                        let nowActive = await MainActor.run { UIApplication.shared.applicationState == .active }
+                        if nowActive { break }
+                    }
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    continue
+                } else {
+                    if fgRetries >= maxFgRetries { break }
+                    let backoffMs: UInt64 = UInt64(500 * (1 << fgRetries))
+                    LogManager.shared.log("Download", "fetchHTML retry \(fgRetries+1)/\(maxFgRetries) after \(backoffMs)ms (err=\(error)) url=\(urlString.suffix(60))")
+                    try? await Task.sleep(nanoseconds: backoffMs * 1_000_000)
+                    fgRetries += 1
+                }
+            }
+        }
+        throw lastError
     }
 
     /// 画像データをcookie付きでダウンロード（AsyncImageの代わりに使用）

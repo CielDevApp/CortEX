@@ -10,14 +10,18 @@ final class BackgroundDownloadManager: NSObject {
 
     static let nhSessionId = "com.kanayayuutou.CortEX.nhdl"
     static let ehSessionId = "com.kanayayuutou.CortEX.ehdl"
+    static let htmlFetchSessionId = "com.kanayayuutou.CortEX.htmlfetch"
 
     private var _nhSession: URLSession?
     private var _ehSession: URLSession?
+    private var _htmlFetchSession: URLSession?
 
-    /// foreground session（URLSessionConfiguration.default）で 4 並列 DL を実現。
-    /// iOS の background session は 1/host の hard limit があり、動画WebPがシリアル化するため
-    /// foreground に切替。アプリが background に落ちた時は iOS が suspend→DL 一時停止、
-    /// foreground 復帰時に自動再開。アプリ完全終了後は起動時 auto-resume で続行。
+    /// 案 4 採用 (Day15 深夜): FG session 戻し + 復帰時 re-enqueue 方式。
+    /// 田中 testimony:「ロック解除にまた爆速復帰がいい」
+    /// - FG 中: 4/host で爆速 (80ms/img)
+    /// - 画面オフ: iOS 猶予 30-60s で suspend → DL 停止 (トレードオフ)
+    /// - 画面オン復帰: willEnterForeground で reconcile + 未完分 re-enqueue → 即爆速再開
+    /// identifier はレガシー維持 (クラス名変更の churn 回避)
     var nhSession: URLSession {
         if let s = _nhSession { return s }
         let config = URLSessionConfiguration.default
@@ -27,7 +31,7 @@ final class BackgroundDownloadManager: NSObject {
         config.waitsForConnectivity = false
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 120
-        config.httpMaximumConnectionsPerHost = 4  // 4並列
+        config.httpMaximumConnectionsPerHost = 4
         let s = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         _nhSession = s
         return s
@@ -45,6 +49,26 @@ final class BackgroundDownloadManager: NSObject {
         config.httpMaximumConnectionsPerHost = 4
         let s = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         _ehSession = s
+        return s
+    }
+
+    /// HTML fetch 専用 BG session (downloadTask → tmp → String)
+    /// URL 解決をロック中も生き延びさせるため、画像 DL 用 session とは別立て。
+    /// 1/host 制限があるが HTML fetch は数十回なので許容。
+    var htmlFetchSession: URLSession {
+        if let s = _htmlFetchSession { return s }
+        let config = URLSessionConfiguration.background(withIdentifier: Self.htmlFetchSessionId)
+        config.httpCookieStorage = HTTPCookieStorage.shared
+        config.httpCookieAcceptPolicy = .always
+        config.httpShouldSetCookies = true
+        config.isDiscretionary = false
+        config.sessionSendsLaunchEvents = true
+        config.allowsCellularAccess = true
+        config.waitsForConnectivity = false
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 120
+        let s = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        _htmlFetchSession = s
         return s
     }
 
@@ -95,12 +119,22 @@ final class BackgroundDownloadManager: NSObject {
         stateQueue.sync { _ = rateLimitTripped.remove(gid) }
     }
 
+    /// BAN 検知等で外部から強制的に rateLimit を立てる
+    func tripRateLimit(gid: Int) {
+        stateQueue.sync { _ = rateLimitTripped.insert(gid) }
+    }
+
     /// 速度ベース stall 検出 (個別 task 単位)
     /// 既存の stream watchdog (DownloadManager 側、20秒 completion 無しで強制終了) は
     /// 「そもそも completion が来ない」ケース用。SpeedTracker は「通信はしてるが遅すぎる」
     /// ケースを別軸で検知する。責務分離でダブルキルを回避
     private let speedTracker = SpeedTracker()
     private var speedCheckTimer: DispatchSourceTimer?
+
+    /// 復帰時の reconcile + re-enqueue hook (案 4)
+    /// FG session は iOS suspend で止まる → 復帰時にディスク実体を scan して
+    /// 未完分だけ再 enqueue する。DownloadManager が設定するコールバック。
+    var onForegroundResume: (() -> Void)?
 
     private override init() {
         super.init()
@@ -116,6 +150,19 @@ final class BackgroundDownloadManager: NSObject {
         }
         timer.resume()
         speedCheckTimer = timer
+
+        #if canImport(UIKit)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleWillEnterForeground),
+            name: UIApplication.willEnterForegroundNotification, object: nil
+        )
+        #endif
+    }
+
+    @objc private func handleWillEnterForeground() {
+        LogManager.shared.log("bgdl", "app returning to foreground, triggering reconcile + re-enqueue")
+        // DownloadManager 側の hook (未完分を reconcile + 再 enqueue)
+        onForegroundResume?()
     }
 
     private func evaluateSpeedStalls() {
@@ -153,6 +200,22 @@ final class BackgroundDownloadManager: NSObject {
             speedTracker.start(taskId: task.taskIdentifier, task: task)
             task.resume()
         }
+    }
+
+    /// BG session 経由で HTML を fetch (downloadTask → tmp file → String 読み)
+    /// URLSessionDataTask が BG session で非対応のため、downloadTask + tmp file 経由で代替。
+    /// 用途: DL 中の URL 解決 (fetchImageURL) を suspend 中も継続させるため。
+    /// 失敗時は nil 返し、呼び出し側で fallback 判断。
+    func fetchHTMLViaBG(url: URL, session: URLSession, headers: [String: String] = [:]) async -> String? {
+        let tmpDir = FileManager.default.temporaryDirectory
+        let tmpURL = tmpDir.appendingPathComponent("bg-html-\(UUID().uuidString).tmp")
+        let ok = await downloadToFile(url: url, session: session, finalPath: tmpURL, headers: headers)
+        defer { try? FileManager.default.removeItem(at: tmpURL) }
+        guard ok else { return nil }
+        guard let data = try? Data(contentsOf: tmpURL) else { return nil }
+        return String(data: data, encoding: .utf8)
+            ?? String(data: data, encoding: .shiftJIS)
+            ?? String(data: data, encoding: .ascii)
     }
 
     // MARK: - Batch API
@@ -257,6 +320,8 @@ final class BackgroundDownloadManager: NSObject {
             _ = nhSession
         } else if identifier == Self.ehSessionId {
             _ = ehSession
+        } else if identifier == Self.htmlFetchSessionId {
+            _ = htmlFetchSession
         }
     }
 }
@@ -284,6 +349,16 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
         bytesLock.lock()
         defer { bytesLock.unlock() }
         return cumulativeBytesReceived[gid, default: 0]
+    }
+
+    /// 2ndpass (downloadSinglePage) 等、delegate 経由で bytes が届かない経路用。
+    /// 呼び出し側がファイルサイズを渡して累積に加算する。sampleBytesPerSecond に反映。
+    func addCumulativeBytes(gid: Int, bytes: Int64) {
+        guard bytes > 0 else { return }
+        bytesLock.lock()
+        bytesAccumulator[gid, default: 0] += bytes
+        cumulativeBytesReceived[gid, default: 0] += bytes
+        bytesLock.unlock()
     }
 
     /// ギャラリー DL 開始時に呼ぶ: 累計バイトをリセット
@@ -422,7 +497,26 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
                             success = true
                         }
                     } else {
+                        // BAN body 検知: 小サイズ (< 500B) + "temporarily banned" 文字列があれば BAN 扱い
+                        var isBanBody = false
+                        if let attrs = try? FileManager.default.attributesOfItem(atPath: entry.finalPath.path),
+                           let size = attrs[.size] as? Int64, size < 500 {
+                            if let data = try? Data(contentsOf: entry.finalPath),
+                               let str = String(data: data, encoding: .utf8),
+                               str.contains("temporarily banned") || str.contains("ban expires") {
+                                isBanBody = true
+                            }
+                        }
                         try? FileManager.default.removeItem(at: entry.finalPath)
+                        if isBanBody {
+                            stateQueue.sync { _ = rateLimitTripped.insert(entry.gid) }
+                            LogManager.shared.log("bgdl-err", "BAN body detected at page \(entry.pageIndex + 1) gid=\(entry.gid) — HALTING (tripping rateLimit)")
+                            retriable = false
+                            emitCompletion(gid: entry.gid, pageIndex: entry.pageIndex, success: false, retriable: false)
+                            cancelAllTasks(for: entry.gid, session: session)
+                            finishStream(for: entry.gid)
+                            return
+                        }
                         LogManager.shared.log("bgdl", "invalid image gid=\(entry.gid) page=\(entry.pageIndex)")
                         retriable = true
                     }
@@ -535,6 +629,8 @@ final class SpeedTracker: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         trackers.removeValue(forKey: taskId)
     }
+
+    // (案 4 採用で suspend-aware shift/reset は不要化、削除)
 
     /// 全 task を評価、kill すべきなら task.cancel() 発動
     /// 返り値: (taskId, 理由) のリスト
