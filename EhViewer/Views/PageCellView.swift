@@ -20,12 +20,39 @@ struct PageCellView: View {
     /// true = GalleryReader 経由、アニメ WebP は全て ▶ ボタン手動再生扱い
     /// false = LocalReader / NhentaiReader 経由、既存の自動再生挙動維持
     var manualPlayForAnimated: Bool = false
+    /// 動画ページ専用 HDR 補正 (AVPlayer で videoComposition 経由)。静止画は既存 hdrEnhancement とは別系統。
+    var isAnimationHDREnabled: Bool = false
+    /// 動画ページ長押しメニュー: UI 非表示
+    var onHideUI: (() -> Void)? = nil
+    /// 動画ページ長押しメニュー: HDR トグル
+    var onToggleAnimationHDR: (() -> Void)? = nil
+
+    /// このページが動画 WebP かどうか (long-press context menu 表示判定用)
+    private var isAnimatedPage: Bool {
+        holder.animatedFileURL != nil || holder.animatedWebPData != nil
+    }
 
     var body: some View {
         if isHorizontalMode {
             horizontalBody
         } else {
             verticalBody
+        }
+    }
+
+    /// 動画ページ専用 context menu。静止画ページには適用しない（spec 禁則）。
+    @ViewBuilder
+    private func animatedContextMenuItems() -> some View {
+        Button {
+            onHideUI?()
+        } label: {
+            Label("UI 非表示", systemImage: "eye.slash")
+        }
+        Button {
+            onToggleAnimationHDR?()
+        } label: {
+            Label(isAnimationHDREnabled ? "HDR 無効化" : "HDR 有効化",
+                  systemImage: isAnimationHDREnabled ? "sparkles.slash" : "sparkles")
         }
     }
 
@@ -49,12 +76,15 @@ struct PageCellView: View {
                         staticImage: holder.image,
                         gid: mp4Gid,
                         page: index,
-                        onToggleControls: onToggleControls
+                        onToggleControls: onToggleControls,
+                        isHDREnabled: isAnimationHDREnabled
                     )
                     .frame(width: Self.screenSize.width, height: Self.screenSize.height)
+                    .contextMenu { animatedContextMenuItems() }
                 } else {
-                    AnimatedVideoView(sourceURL: animURL, gid: mp4Gid, page: index, onToggleControls: onToggleControls)
+                    AnimatedVideoView(sourceURL: animURL, gid: mp4Gid, page: index, onToggleControls: onToggleControls, isHDREnabled: isAnimationHDREnabled)
                         .frame(width: Self.screenSize.width, height: Self.screenSize.height)
+                        .contextMenu { animatedContextMenuItems() }
                 }
             } else if let animData = holder.animatedWebPData {
                 GalleryAnimatedWebPView(
@@ -62,9 +92,11 @@ struct PageCellView: View {
                     staticImage: holder.image,
                     gid: mp4Gid,
                     page: index,
-                    onToggleControls: onToggleControls
+                    onToggleControls: onToggleControls,
+                    isHDREnabled: isAnimationHDREnabled
                 )
                 .frame(width: Self.screenSize.width, height: Self.screenSize.height)
+                .contextMenu { animatedContextMenuItems() }
             } else if let image = holder.image {
                 Image(platformImage: image)
                     .resizable()
@@ -121,16 +153,19 @@ struct PageCellView: View {
                         staticImage: holder.image,
                         gid: mp4Gid,
                         page: index,
-                        onToggleControls: onToggleControls
+                        onToggleControls: onToggleControls,
+                        isHDREnabled: isAnimationHDREnabled
                     )
                     .frame(maxWidth: .infinity)
+                    .contextMenu { animatedContextMenuItems() }
                 } else {
-                    AnimatedVideoView(sourceURL: animURL, gid: mp4Gid, page: index, onToggleControls: onToggleControls)
+                    AnimatedVideoView(sourceURL: animURL, gid: mp4Gid, page: index, onToggleControls: onToggleControls, isHDREnabled: isAnimationHDREnabled)
                         .frame(maxWidth: .infinity)
                         .contentShape(Rectangle())
                         .onTapGesture {
                             if verticalSizeClass == .regular, let img = holder.image { onTap(img) }
                         }
+                        .contextMenu { animatedContextMenuItems() }
                 }
             } else if let animData = holder.animatedWebPData {
                 GalleryAnimatedWebPView(
@@ -138,9 +173,11 @@ struct PageCellView: View {
                     staticImage: holder.image,
                     gid: mp4Gid,
                     page: index,
-                    onToggleControls: onToggleControls
+                    onToggleControls: onToggleControls,
+                    isHDREnabled: isAnimationHDREnabled
                 )
                 .frame(maxWidth: .infinity)
+                .contextMenu { animatedContextMenuItems() }
             } else if let image = holder.image {
                 ZStack(alignment: .top) {
                     Image(platformImage: image)

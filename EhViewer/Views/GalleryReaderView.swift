@@ -35,6 +35,8 @@ struct GalleryReaderView: View {
     @State private var showAnimationDialog = false
     /// 一度ランタイム検知 dialog を出したら以降抑止（複数ページの動画で再度発火させない）
     @State private var animationDetectionHandled = false
+    /// 動画ページ HDR (長押しメニューで切替、ギャラリー離脱時 State 自動破棄でリセット)
+    @State private var galleryAnimationHDREnabled = false
     @ObservedObject private var downloadManager = DownloadManager.shared
     @State private var showAutoSavePrompt = false
     @State private var autoSaveInfo: (saved: Int, total: Int) = (0, 0)
@@ -479,7 +481,12 @@ struct GalleryReaderView: View {
             onToggleControls: {
                 withAnimation(.easeInOut(duration: 0.2)) { showControls.toggle() }
             },
-            manualPlayForAnimated: true
+            manualPlayForAnimated: true,
+            isAnimationHDREnabled: galleryAnimationHDREnabled,
+            onHideUI: {
+                withAnimation(.easeInOut(duration: 0.2)) { showControls = false }
+            },
+            onToggleAnimationHDR: { galleryAnimationHDREnabled.toggle() }
         )
         #else
         PageCellView(
