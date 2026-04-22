@@ -209,6 +209,17 @@ extension ReaderViewModel {
                 }
                 #endif
 
+                // ImageCache は JPEG 再エンコードでアニメ情報を捨てる。別ディレクトリに保存した
+                // 生 WebP バイトを参照し、過去にアニメ判定済みなら animatedWebPData を復元する。
+                if let animData = ImageCache.shared.loadAnimatedWebPData(for: imageURL),
+                   WebPAnimationDetector.isAnimatedWebP(data: animData) {
+                    let heldData = animData
+                    await MainActor.run {
+                        self.holder(for: index).animatedWebPData = heldData
+                    }
+                    LogManager.shared.log("Anim", "cache hit page \(index) restored animatedWebPData (\(animData.count)B)")
+                }
+
                 let display = Self.downsample(cached)
                 rawImages[index] = display
                 applyFilterPipeline(index: index, raw: display)
@@ -255,6 +266,9 @@ extension ReaderViewModel {
                 await MainActor.run {
                     self.holder(for: index).animatedWebPData = heldData
                 }
+                // 次回キャッシュヒット時に animatedWebPData を復元できるよう生 Data を別 dir に永続化
+                ImageCache.shared.saveAnimatedWebPData(imageData, for: imageURL)
+                LogManager.shared.log("Anim", "page \(index) detected animated WebP, persisted raw (\(imageData.count)B)")
             }
 
             let decodeStart = CFAbsoluteTimeGetCurrent()

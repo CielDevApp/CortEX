@@ -44,19 +44,28 @@ struct NhentaiReaderView: View {
         self._isFavorited = State(initialValue: NhentaiFavoritesCache.shared.contains(id: gallery.id))
     }
     @ObservedObject private var downloadManager = DownloadManager.shared
-    @AppStorage("readerDirection") private var readerDirection = 0
+    @AppStorage("readerDirection") private var userReaderDirection = 0
     @AppStorage("readingOrder") private var readingOrder = 1
+    /// 動画 WebP per-gallery モード解決結果。nil = 未解決
+    @State private var resolvedDirection: Int? = nil
+    @State private var showAnimationDialog = false
+    /// ランタイム検知 dialog 発火済みフラグ
+    @State private var animationDetectionHandled = false
 
     private var totalPages: Int { gallery.num_pages }
+    /// 動画 WebP モード解決後の有効方向。未解決時は黒画面で待機
+    private var effectiveDirection: Int { resolvedDirection ?? userReaderDirection }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if readerDirection == 0 {
-                verticalReader
-            } else {
-                horizontalReader
+            if resolvedDirection != nil {
+                if effectiveDirection == 0 {
+                    verticalReader
+                } else {
+                    horizontalReader
+                }
             }
 
             if showControls {
@@ -64,14 +73,14 @@ struct NhentaiReaderView: View {
 
                 VStack(spacing: 8) {
                     TipView(ReaderControlsTip(), arrowEdge: .bottom)
-                    if readerDirection == 1 {
+                    if effectiveDirection == 1 {
                         TipView(ReaderSwipeDismissTip(), arrowEdge: .bottom)
                         TipView(HorizontalReaderTip(), arrowEdge: .bottom)
                     }
-                    if readerDirection == 1 && readingOrder == 1 {
+                    if effectiveDirection == 1 && readingOrder == 1 {
                         TipView(RTLSliderTip(), arrowEdge: .bottom)
                     }
-                    if UIDevice.current.userInterfaceIdiom == .pad && readerDirection == 1 {
+                    if UIDevice.current.userInterfaceIdiom == .pad && effectiveDirection == 1 {
                         TipView(SpreadModeTip(), arrowEdge: .bottom)
                     }
                 }
@@ -159,12 +168,21 @@ struct NhentaiReaderView: View {
         .task {
             // リーダー表示開始 → DL側に減速ヒント
             DownloadManager.setReaderActive(gid: -gallery.id, active: true)
+            await resolveReaderMode()
+            // 純オンライン保険: 最初の数ページの実バイト判定で dialog 発火
+            Task { await monitorAnimationDetection() }
             // 初期表示: 現在ページ優先 + 前後5ページ先読み（爆速ページめくり用）
             loadPage(initialPage)
             for offset in 1...5 {
                 loadPage(initialPage + offset)
                 loadPage(initialPage - offset)
             }
+        }
+        .animationModeDialog(isPresented: $showAnimationDialog) { mode, dontAskAgain in
+            if dontAskAgain {
+                downloadManager.setReaderModeOverride(gid: -gallery.id, mode: mode)
+            }
+            resolvedDirection = (mode == .horizontal) ? 1 : 0
         }
         .onDisappear {
             DownloadManager.setReaderActive(gid: -gallery.id, active: false)
@@ -174,6 +192,69 @@ struct NhentaiReaderView: View {
         .onChange(of: denoiseEnabled) { _, _ in reapplyFilters() }
         .onChange(of: hdrEnhancement) { _, _ in reapplyFilters() }
         .onChange(of: aiImageProcessing) { _, _ in reapplyFilters() }
+    }
+
+    /// オンライン読み中のランタイム検知。pageDataCache を polling し、
+    /// 最初の数ページのいずれかが動画 WebP なら dialog 発火。
+    @MainActor
+    private func monitorAnimationDetection() async {
+        guard userReaderDirection == 1 else { return }
+        let nhGid = -gallery.id
+        for _ in 0..<60 {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if animationDetectionHandled { return }
+            if showAnimationDialog { return }
+            if let m = downloadManager.downloads[nhGid], m.readerModeOverride != nil { return }
+            for page in 0..<min(5, totalPages) {
+                if let data = pageDataCache[page], WebPAnimationDetector.isAnimatedWebP(data: data) {
+                    animationDetectionHandled = true
+                    LogManager.shared.log("Anim", "Online runtime detect (nh): page=\(page) gid=\(nhGid) → SHOW DIALOG")
+                    showAnimationDialog = true
+                    return
+                }
+            }
+        }
+    }
+
+    // MARK: - 動画 WebP モード解決
+
+    @MainActor
+    private func resolveReaderMode() async {
+        guard userReaderDirection == 1 else {
+            resolvedDirection = userReaderDirection
+            return
+        }
+        let nhGid = -gallery.id
+        // 1) DL 済み meta があれば実走査結果を優先
+        if downloadManager.downloads[nhGid] != nil {
+            await downloadManager.ensureAnimatedWebpScanned(gid: nhGid)
+            if let m = downloadManager.downloads[nhGid] {
+                if let ov = m.readerModeOverride {
+                    resolvedDirection = (ov == .horizontal) ? 1 : 0
+                    return
+                }
+                if m.hasAnimatedWebp == true {
+                    showAnimationDialog = true
+                    return
+                }
+                if m.hasAnimatedWebp == false {
+                    resolvedDirection = 1
+                    return
+                }
+            }
+        }
+        // 2) DL 前のオンライン読みは title + tags heuristic
+        let title = gallery.displayTitle
+        let titleHit = title.contains("Animated") || title.contains("GIF") || title.contains("gif") || title.contains("🎥")
+        let tagHit = (gallery.tags ?? []).contains { tag in
+            let n = tag.name.lowercased()
+            return n == "animated" || n.contains("gif")
+        }
+        if titleHit || tagHit {
+            showAnimationDialog = true
+        } else {
+            resolvedDirection = 1
+        }
     }
 
     // MARK: - 画質設定パネル
@@ -668,7 +749,7 @@ struct NhentaiReaderView: View {
     /// 見開き対応ページラベル
     private var nhSpreadLabel: String {
         let page = isSliding ? Int(sliderValue) : currentIndex
-        if readerDirection == 1 {
+        if effectiveDirection == 1 {
             return PagedReaderView.spreadPageLabel(
                 currentPage: page,
                 totalPages: totalPages,
@@ -779,7 +860,7 @@ struct NhentaiReaderView: View {
                         if editing {
                             withAnimation(.easeIn(duration: 0.15)) { showPageOverlay = true }
                         } else {
-                            if readerDirection == 1 {
+                            if effectiveDirection == 1 {
                                 horizontalPage = Int(sliderValue)
                             } else {
                                 sliderJumpTarget = Int(sliderValue)
@@ -791,7 +872,7 @@ struct NhentaiReaderView: View {
                     }
                     .tint(.white)
                     .padding(.horizontal)
-                    .environment(\.layoutDirection, readingOrder == 1 && readerDirection == 1 ? .rightToLeft : .leftToRight)
+                    .environment(\.layoutDirection, readingOrder == 1 && effectiveDirection == 1 ? .rightToLeft : .leftToRight)
                 }
 
                 HStack {

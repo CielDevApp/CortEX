@@ -10873,6 +10873,76 @@
     "動画キャッシュを削除" : {
 
     },
+    "動画ギャラリーのモード選択をリセット" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reset Animated Gallery Mode Choices"
+          }
+        }
+      }
+    },
+    "動画 WebP を含むギャラリー毎に保存した「横/縦」選択を全て消去します。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clears the saved horizontal/vertical choice for every gallery containing animated WebP."
+          }
+        }
+      }
+    },
+    "動画 WebP を含む全ギャラリーで保存した「横/縦」選択を削除します。次回 Reader 起動時に再度ダイアログが表示されます。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All saved horizontal/vertical choices for galleries containing animated WebP will be deleted. The dialog will appear again the next time you open the reader."
+          }
+        }
+      }
+    },
+    "動画を含むギャラリー" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gallery Contains Animation"
+          }
+        }
+      }
+    },
+    "横開きモードでは動画は再生されません。\n縦スクロール表示に切り替えますか？" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Animations don't play in horizontal page mode.\nSwitch to vertical scrolling?"
+          }
+        }
+      }
+    },
+    "横開きで開く" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Horizontally"
+          }
+        }
+      }
+    },
+    "次回から聞かない" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Don't ask again"
+          }
+        }
+      }
+    },
     "単行本" : {
       "extractionState" : "stale",
       "localizations" : {

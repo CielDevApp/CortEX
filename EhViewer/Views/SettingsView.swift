@@ -23,6 +23,7 @@ struct SettingsView: View {
     @State private var showClearConfirm = false
     @State private var showClearDownloads = false
     @State private var showFullRefresh = false
+    @State private var showAnimationModeResetConfirm = false
     @State private var showPINSetup = false
     @State private var isPINChange = false
     @AppStorage("useMetalPipeline") private var useMetalPipeline = false
@@ -159,6 +160,13 @@ struct SettingsView: View {
                         }
                         .pickerStyle(.segmented)
                     }
+
+                    Button("動画ギャラリーのモード選択をリセット") {
+                        showAnimationModeResetConfirm = true
+                    }
+                    .foregroundStyle(.orange)
+                    Text("動画 WebP を含むギャラリー毎に保存した「横/縦」選択を全て消去します。")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
 
                 // 5. お気に入り
@@ -474,6 +482,15 @@ struct SettingsView: View {
                 Button("キャンセル", role: .cancel) {}
             } message: {
                 Text("サーバーから全ページ取得します。BANされる可能性があります。続行しますか？")
+            }
+            .alert("動画ギャラリーのモード選択をリセット", isPresented: $showAnimationModeResetConfirm) {
+                Button("リセット", role: .destructive) {
+                    DownloadManager.shared.resetAllReaderModeOverrides()
+                    UserDefaults.standard.set(true, forKey: "animationDialogDontAskDefault")
+                }
+                Button("キャンセル", role: .cancel) {}
+            } message: {
+                Text("動画 WebP を含む全ギャラリーで保存した「横/縦」選択を削除します。次回 Reader 起動時に再度ダイアログが表示されます。")
             }
             .alert("セーフティモードを OFF にしますか？", isPresented: $showDisableSafetyConfirm) {
                 Button("OFF にする (自己責任)", role: .destructive) {
