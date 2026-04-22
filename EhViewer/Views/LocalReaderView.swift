@@ -39,8 +39,6 @@ struct LocalReaderView: View {
     /// 動画 WebP ギャラリーの per-gallery モード解決結果 (nil = 未解決、ダイアログ待ち or scan 中)
     @State private var resolvedDirection: Int? = nil
     @State private var showAnimationDialog = false
-    /// 動画ページ HDR (長押しメニューで切替、ギャラリー離脱時 State 自動破棄でリセット)
-    @State private var galleryAnimationHDREnabled = false
 
     init(meta: DownloadedGallery, isLiveDownload: Bool = false, initialPage: Int = 0) {
         self.meta = meta
@@ -544,20 +542,9 @@ struct LocalReaderView: View {
                     withAnimation(.easeInOut(duration: 0.2)) { showControls.toggle() }
                 },
                 autoPlayIfActive: currentIndex == index,
-                isHDREnabled: galleryAnimationHDREnabled
+                isHDREnabled: storedHDR
             )
             .frame(maxWidth: .infinity, maxHeight: isHorizontal ? .infinity : nil, alignment: isHorizontal ? .center : .top)
-            .contextMenu {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { showControls = false }
-                } label: { Label("UI 非表示", systemImage: "eye.slash") }
-                Button {
-                    galleryAnimationHDREnabled.toggle()
-                } label: {
-                    Label(galleryAnimationHDREnabled ? "HDR 無効化" : "HDR 有効化",
-                          systemImage: galleryAnimationHDREnabled ? "sparkles.slash" : "sparkles")
-                }
-            }
         } else {
             animatedOrStaticBody(index: index)
         }

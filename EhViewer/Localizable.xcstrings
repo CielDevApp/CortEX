@@ -2504,26 +2504,6 @@
     "GID: %lld" : {
 
     },
-    "HDR 有効化" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Enable HDR"
-          }
-        }
-      }
-    },
-    "HDR 無効化" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Disable HDR"
-          }
-        }
-      }
-    },
     "HDR補正" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3972,16 +3952,6 @@
     },
     "Translating..." : {
 
-    },
-    "UI 非表示" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hide UI"
-          }
-        }
-      }
     },
     "URL解決中 %lld/%lld" : {
       "localizations" : {
