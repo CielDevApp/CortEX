@@ -11,6 +11,19 @@ import UIKit
 /// - 変換完了で AVPlayer へシームレス切替（ポスター同アスペクト比で黒帯なし）
 /// - キャッシュあれば即 AVPlayer
 /// - onDisappear で Task キャンセル（高速スクロール時のキュー詰まり回避）
+/// aspectSize が有効 (両辺 > 0) のときだけ aspectRatio(.fit) を適用するヘルパー。
+/// 未取得時は何もしない (natural fit に戻る)。
+private struct AspectRatioIfKnown: ViewModifier {
+    let size: CGSize
+    func body(content: Content) -> some View {
+        if size.width > 0 && size.height > 0 {
+            content.aspectRatio(size, contentMode: .fit)
+        } else {
+            content
+        }
+    }
+}
+
 struct AnimatedVideoView: View {
     /// WebP/GIFのファイルパス（ディスクベース、Dataメモリ保持しない）
     let sourceURL: URL
@@ -27,14 +40,26 @@ struct AnimatedVideoView: View {
     @State private var showReconvertDialog: Bool = false
     @State private var convertTask: Task<Void, Never>?
     @State private var progress: Double = 0
-    /// ポスター/プレイヤー共通のアスペクト比（黒帯回避）
-    /// WebPヘッダから同期取得 → AVPlayer 生成前にすでに確定している
-    @State private var aspectSize: CGSize = .zero
+    /// ポスター/プレイヤー共通のアスペクト比（黒帯回避 + LazyVStack reflow 防止）。
+    /// init で WebP ヘッダから同期取得し、ZStack 外側に固定 aspectRatio を適用することで
+    /// converting → ready 切替時の cell 高さ変化を防ぐ (再生ボタン押下でスクロール位置が
+    /// 飛ぶ問題の根本対策)。
+    @State private var aspectSize: CGSize
 
     enum Status {
         case converting   // = ポスター静止表示 + 裏で MP4 変換
         case ready
         case failed(String)
+    }
+
+    init(sourceURL: URL, gid: Int, page: Int, onToggleControls: (() -> Void)? = nil, isHDREnabled: Bool = false) {
+        self.sourceURL = sourceURL
+        self.gid = gid
+        self.page = page
+        self.onToggleControls = onToggleControls
+        self.isHDREnabled = isHDREnabled
+        // WebP VP8X canvas サイズを同期読み (256B 以内ヘッダ) → cell 高さが最初から確定
+        self._aspectSize = State(initialValue: WebPFileDetector.readCanvasSize(url: sourceURL) ?? .zero)
     }
 
     var body: some View {
@@ -61,19 +86,12 @@ struct AnimatedVideoView: View {
 
             case .ready:
                 if let url = convertedURL {
-                    // ポスターと同じアスペクト比で AVPlayer を frame 化 → 黒帯消失
-                    Group {
-                        if aspectSize.width > 0 && aspectSize.height > 0 {
-                            LoopingPlayerView(url: url, isHDREnabled: isHDREnabled)
-                                .aspectRatio(aspectSize, contentMode: .fit)
-                        } else {
-                            LoopingPlayerView(url: url, isHDREnabled: isHDREnabled)
+                    // 外側 ZStack に aspectRatio 固定済み → LoopingPlayerView は素で親 frame に収まる
+                    LoopingPlayerView(url: url, isHDREnabled: isHDREnabled)
+                        .onLongPressGesture(minimumDuration: 0.6) {
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                            showReconvertDialog = true
                         }
-                    }
-                    .onLongPressGesture(minimumDuration: 0.6) {
-                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                        showReconvertDialog = true
-                    }
                 }
 
             case .failed(let msg):
@@ -86,12 +104,11 @@ struct AnimatedVideoView: View {
                 }
             }
         }
+        // ZStack 全体を aspectSize で固定 → converting/ready 切替でも cell 高さ変わらない。
+        // aspectSize 未取得 (未知 WebP 等) のフォールバックは natural fit (aspectRatio なし)。
+        .modifier(AspectRatioIfKnown(size: aspectSize))
         .onAppear {
             loadPoster()
-            // AVPlayer 生成前にアスペクト比を確定させる
-            if aspectSize == .zero, let s = WebPFileDetector.readCanvasSize(url: sourceURL) {
-                aspectSize = s
-            }
             if WebPToMP4Converter.isFullyConverted(gid: gid, page: page) {
                 convertedURL = WebPToMP4Converter.mp4Path(gid: gid, page: page)
                 status = .ready
