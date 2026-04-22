@@ -362,7 +362,9 @@ struct GalleryScrollList: View {
                         }
                     }
 
+                    #if !targetEnvironment(macCatalyst)
                     Divider().padding(.leading)
+                    #endif
                 }
 
                 if viewModel.hasMore {
@@ -630,7 +632,9 @@ struct NhentaiScrollList: View {
                             previewGallery = nh
                         }
 
+                    #if !targetEnvironment(macCatalyst)
                     Divider().padding(.leading)
+                    #endif
                 }
 
                 if viewModel.hasMore {
