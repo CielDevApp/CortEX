@@ -596,7 +596,7 @@ struct GalleryReaderView: View {
                     .tint(.blue)
 
             HStack {
-                Toggle("HDR風補正", isOn: $hdrEnhancement)
+                Toggle("HDR風補正（カラー作品推奨）", isOn: $hdrEnhancement)
                     .font(.subheadline)
                     .tint(.blue)
                 if imageEnhanceFilter {

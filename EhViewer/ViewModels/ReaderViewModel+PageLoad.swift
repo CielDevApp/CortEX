@@ -209,15 +209,15 @@ extension ReaderViewModel {
                 }
                 #endif
 
-                // ImageCache は JPEG 再エンコードでアニメ情報を捨てる。別ディレクトリに保存した
-                // 生 WebP バイトを参照し、過去にアニメ判定済みなら animatedWebPData を復元する。
-                if let animData = ImageCache.shared.loadAnimatedWebPData(for: imageURL),
-                   WebPAnimationDetector.isAnimatedWebP(data: animData) {
-                    let heldData = animData
+                // ImageCache は JPEG 再エンコードでアニメ情報を捨てる。別 dir に保存した生 WebP を
+                // ファイル URL 経由で holder に注ぐ (Data をメモリ常駐させると 1ページ 5-10MB × 全アニメ
+                // ページで数百 MB に膨らむため URL 経由で disk 直 stream を AVPlayer に任せる)。
+                if let animURL = ImageCache.shared.animatedWebPFileURL(for: imageURL),
+                   WebPAnimationDetector.isAnimatedWebP(url: animURL) {
                     await MainActor.run {
-                        self.holder(for: index).animatedWebPData = heldData
+                        self.holder(for: index).animatedFileURL = animURL
                     }
-                    LogManager.shared.log("Anim", "cache hit page \(index) restored animatedWebPData (\(animData.count)B)")
+                    LogManager.shared.log("Anim", "cache hit page \(index) restored animatedFileURL from disk")
                 }
 
                 let display = Self.downsample(cached)
@@ -259,18 +259,15 @@ extension ReaderViewModel {
                 )
             }
 
-            // アニメ WebP 判定: 該当ページのみ生 Data を holder に保持、
-            // GalleryAnimatedWebPView の ▶ ボタンで再生起動用。静止画は Data 破棄（OOM 回避）。
-            // 検出は VP8X flag bit で行う (WebPFileDetector の ANIM 文字列検索は ICCP/XMP chunk で
-            // 256B 窓を超えると誤陰性になるため、WebPAnimationDetector に統一)。
+            // アニメ WebP 判定: VP8X flag bit で判定 (ICCP/XMP chunk で ANIM 文字列が 256B 窓を
+            // 超えるケースの誤陰性を回避)。検知時は disk に永続化し holder.animatedFileURL に設定。
+            // Data をメモリに持たず AVPlayer が disk 直読みする方針でメモリ常駐を削る (数百 MB 削減)。
             if WebPAnimationDetector.isAnimatedWebP(data: imageData) {
-                let heldData = imageData
+                let animURL = ImageCache.shared.saveAnimatedWebPData(imageData, for: imageURL)
                 await MainActor.run {
-                    self.holder(for: index).animatedWebPData = heldData
+                    self.holder(for: index).animatedFileURL = animURL
                 }
-                // 次回キャッシュヒット時に animatedWebPData を復元できるよう生 Data を別 dir に永続化
-                ImageCache.shared.saveAnimatedWebPData(imageData, for: imageURL)
-                LogManager.shared.log("Anim", "page \(index) detected animated WebP, persisted raw (\(imageData.count)B)")
+                LogManager.shared.log("Anim", "page \(index) detected animated WebP, persisted \(imageData.count)B → disk URL")
             }
 
             let decodeStart = CFAbsoluteTimeGetCurrent()
