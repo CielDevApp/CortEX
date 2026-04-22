@@ -36,6 +36,9 @@ struct LocalReaderView: View {
     /// 縦モードでトップに見えてるセル id を Apple 公式 .scrollPosition(id:) で追跡。
     /// 旧実装の ForEach.onAppear 上書きは mount 順非決定 → スライダー値が「明後日」になる欠陥があった。
     @State private var scrolledID: Int?
+    /// 動画 WebP ギャラリーの per-gallery モード解決結果 (nil = 未解決、ダイアログ待ち or scan 中)
+    @State private var resolvedDirection: Int? = nil
+    @State private var showAnimationDialog = false
 
     init(meta: DownloadedGallery, isLiveDownload: Bool = false, initialPage: Int = 0) {
         self.meta = meta
@@ -47,14 +50,19 @@ struct LocalReaderView: View {
         self._scrolledID = State(initialValue: initialPage)
     }
 
+    /// 動画 WebP migration / override 解決後の有効モード。未解決なら一瞬黒画面。
+    private var effectiveDirection: Int { resolvedDirection ?? readerDirection }
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if readerDirection == 0 {
-                verticalReader
-            } else {
-                localHorizontalReader
+            if resolvedDirection != nil {
+                if effectiveDirection == 0 {
+                    verticalReader
+                } else {
+                    localHorizontalReader
+                }
             }
 
             if showControls && zoomImage == nil {
@@ -167,6 +175,15 @@ struct LocalReaderView: View {
                 startPageCheckTimer()
             }
         }
+        .task {
+            await resolveReaderMode()
+        }
+        .animationModeDialog(isPresented: $showAnimationDialog) { mode, dontAskAgain in
+            if dontAskAgain {
+                downloadManager.setReaderModeOverride(gid: meta.gid, mode: mode)
+            }
+            resolvedDirection = (mode == .horizontal) ? 1 : 0
+        }
         .onDisappear {
             pageCheckTimer?.invalidate()
             pageCheckTimer = nil
@@ -174,29 +191,59 @@ struct LocalReaderView: View {
         .focusable()
         .focusEffectDisabled()
         .onKeyPress(.upArrow) {
-            guard readerDirection == 0 else { return .ignored }
+            guard effectiveDirection == 0 else { return .ignored }
             let target = max(0, currentIndex - 1)
             scrolledID = target
             return .handled
         }
         .onKeyPress(.downArrow) {
-            guard readerDirection == 0 else { return .ignored }
+            guard effectiveDirection == 0 else { return .ignored }
             let maxPage = max(meta.pageCount - 1, 0)
             let target = min(maxPage, currentIndex + 1)
             scrolledID = target
             return .handled
         }
         .onKeyPress(.leftArrow) {
-            guard readerDirection == 1 else { return .ignored }
+            guard effectiveDirection == 1 else { return .ignored }
             horizontalPage = max(0, horizontalPage - 1)
             return .handled
         }
         .onKeyPress(.rightArrow) {
-            guard readerDirection == 1 else { return .ignored }
+            guard effectiveDirection == 1 else { return .ignored }
             let maxPage = max(meta.pageCount - 1, 0)
             horizontalPage = min(maxPage, horizontalPage + 1)
             return .handled
         }
+    }
+
+    // MARK: - 動画 WebP モード解決
+
+    @MainActor
+    private func resolveReaderMode() async {
+        LogManager.shared.log("Anim", "Local resolve start gid=\(meta.gid) userDir=\(readerDirection)")
+        // 縦設定 → 即解決 (どのみち WebP アニメ再生可能)
+        guard readerDirection == 1 else {
+            resolvedDirection = readerDirection
+            LogManager.shared.log("Anim", "Local resolve: vertical setting, skip dialog")
+            return
+        }
+        // 既存ギャラリー migration (hasAnimatedWebp が nil なら scan + 保存)
+        await downloadManager.ensureAnimatedWebpScanned(gid: meta.gid)
+        let m = downloadManager.downloads[meta.gid] ?? meta
+        let hasAnim = m.hasAnimatedWebp ?? false
+        let ov = m.readerModeOverride
+        LogManager.shared.log("Anim", "Local resolve gid=\(meta.gid) hasAnim=\(hasAnim) override=\(ov?.rawValue ?? "nil")")
+        if !hasAnim {
+            resolvedDirection = 1
+            return
+        }
+        // 動画 WebP あり + 横設定: override 確認 → なければダイアログ
+        if let ov = m.readerModeOverride {
+            resolvedDirection = (ov == .horizontal) ? 1 : 0
+            return
+        }
+        LogManager.shared.log("Anim", "Local resolve: SHOW DIALOG gid=\(meta.gid)")
+        showAnimationDialog = true
     }
 
     // MARK: - ライブDL監視
@@ -231,7 +278,7 @@ struct LocalReaderView: View {
                 pageCheckTimer = nil
             }
             // 横モードの更新
-            if changed && readerDirection == 1 {
+            if changed && effectiveDirection == 1 {
                 reprocessTrigger += 1
             }
         }
@@ -475,7 +522,7 @@ struct LocalReaderView: View {
 
     // MARK: - ページセル
 
-    private var isHorizontal: Bool { readerDirection == 1 }
+    private var isHorizontal: Bool { effectiveDirection == 1 }
 
     @ViewBuilder
     private func localPageCell(index: Int) -> some View {

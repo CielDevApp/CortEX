@@ -27,9 +27,15 @@ struct GalleryReaderView: View {
     @AppStorage("translationMode") private var translationMode = false
     @AppStorage("translationLang") private var translationLang = "ja"
     @AppStorage("translationSourceLang") private var translationSourceLang = "auto"
-    @AppStorage("readerDirection") private var readerDirection = 0 // 0:縦, 1:横
+    @AppStorage("readerDirection") private var userReaderDirection = 0 // 0:縦, 1:横
     @AppStorage("readingOrder") private var readingOrder = 1 // 0:左綴じ, 1:右綴じ
     @State private var horizontalPage: Int = 0
+    /// 動画 WebP per-gallery モード解決結果。nil = 未解決（ダイアログ待ち）
+    @State private var resolvedDirection: Int? = nil
+    @State private var showAnimationDialog = false
+    /// 一度ランタイム検知 dialog を出したら以降抑止（複数ページの動画で再度発火させない）
+    @State private var animationDetectionHandled = false
+    @ObservedObject private var downloadManager = DownloadManager.shared
     @State private var showAutoSavePrompt = false
     @State private var autoSaveInfo: (saved: Int, total: Int) = (0, 0)
     @AppStorage("autoSaveOnRead") private var autoSaveOnRead = false
@@ -41,14 +47,19 @@ struct GalleryReaderView: View {
         self._viewModel = StateObject(wrappedValue: ReaderViewModel(gallery: gallery, host: host, initialPage: initialPage, thumbnails: thumbnails))
     }
 
+    /// 動画 WebP モード解決後の有効方向。未解決時は userReaderDirection (一瞬黒画面)
+    private var effectiveDirection: Int { resolvedDirection ?? userReaderDirection }
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if readerDirection == 0 {
-                verticalReader
-            } else {
-                horizontalReader
+            if resolvedDirection != nil {
+                if effectiveDirection == 0 {
+                    verticalReader
+                } else {
+                    horizontalReader
+                }
             }
 
             // 翻訳マネージャー（非表示、画像処理のみ）
@@ -109,7 +120,7 @@ struct GalleryReaderView: View {
         .opacity(dragOffset > 0 ? max(0, 1.0 - dragOffset / 400.0) : 1.0)
         .overlay(alignment: .leading) {
             // 横モード時は左エッジスワイプ無効（ページ送りと干渉防止）
-            if zoomImage == nil && readerDirection == 0 {
+            if zoomImage == nil && effectiveDirection == 0 {
                 Color.clear
                     .frame(width: 24)
                     .contentShape(Rectangle())
@@ -141,14 +152,14 @@ struct GalleryReaderView: View {
             if showControls {
                 VStack(spacing: 8) {
                     TipView(ReaderControlsTip(), arrowEdge: .bottom)
-                    if readerDirection == 1 {
+                    if effectiveDirection == 1 {
                         TipView(ReaderSwipeDismissTip(), arrowEdge: .bottom)
                         TipView(HorizontalReaderTip(), arrowEdge: .bottom)
                     }
-                    if readerDirection == 1 && readingOrder == 1 {
+                    if effectiveDirection == 1 && readingOrder == 1 {
                         TipView(RTLSliderTip(), arrowEdge: .bottom)
                     }
-                    if UIDevice.current.userInterfaceIdiom == .pad && readerDirection == 1 {
+                    if UIDevice.current.userInterfaceIdiom == .pad && effectiveDirection == 1 {
                         TipView(SpreadModeTip(), arrowEdge: .bottom)
                     }
                     if autoSaveOnRead {
@@ -161,33 +172,42 @@ struct GalleryReaderView: View {
         }
         .task {
             // TipKit パラメータ更新
-            RTLSliderTip.isRTLMode = (readingOrder == 1 && readerDirection == 1)
+            RTLSliderTip.isRTLMode = (readingOrder == 1 && effectiveDirection == 1)
             AutoSaveTip.autoSaveEnabled = autoSaveOnRead
 
+            await resolveReaderMode()
+            // 純オンラインで heuristic 不発のときの保険: 最初の数ページの実バイト判定で dialog 発火
+            Task { await monitorAnimationDetection() }
             await viewModel.loadImagePages()
+        }
+        .animationModeDialog(isPresented: $showAnimationDialog) { mode, dontAskAgain in
+            if dontAskAgain {
+                downloadManager.setReaderModeOverride(gid: gallery.gid, mode: mode)
+            }
+            resolvedDirection = (mode == .horizontal) ? 1 : 0
         }
         .focusable()
         .focusEffectDisabled()
         .onKeyPress(.upArrow) {
-            guard readerDirection == 0 else { return .ignored }
+            guard effectiveDirection == 0 else { return .ignored }
             let target = max(0, viewModel.currentIndex - 1)
             viewModel.scrollTarget = target
             return .handled
         }
         .onKeyPress(.downArrow) {
-            guard readerDirection == 0 else { return .ignored }
+            guard effectiveDirection == 0 else { return .ignored }
             let maxPage = max(viewModel.totalPages - 1, 0)
             let target = min(maxPage, viewModel.currentIndex + 1)
             viewModel.scrollTarget = target
             return .handled
         }
         .onKeyPress(.leftArrow) {
-            guard readerDirection == 1 else { return .ignored }
+            guard effectiveDirection == 1 else { return .ignored }
             horizontalPage = max(0, horizontalPage - 1)
             return .handled
         }
         .onKeyPress(.rightArrow) {
-            guard readerDirection == 1 else { return .ignored }
+            guard effectiveDirection == 1 else { return .ignored }
             let maxPage = max(viewModel.totalPages - 1, 0)
             horizontalPage = min(maxPage, horizontalPage + 1)
             return .handled
@@ -257,6 +277,71 @@ struct GalleryReaderView: View {
             Button("キャンセル", role: .cancel) {}
         } message: {
             Text("\(autoSaveInfo.saved)/\(autoSaveInfo.total) ページ保存済み。残りをダウンロードしますか？")
+        }
+    }
+
+    // MARK: - 動画 WebP モード解決
+
+    @MainActor
+    private func resolveReaderMode() async {
+        LogManager.shared.log("Anim", "Online resolve start gid=\(gallery.gid) userDir=\(userReaderDirection) hasMeta=\(downloadManager.downloads[gallery.gid] != nil)")
+        guard userReaderDirection == 1 else {
+            resolvedDirection = userReaderDirection
+            return
+        }
+        // 1) DL 済み meta があれば実走査結果を優先 (確実)
+        if downloadManager.downloads[gallery.gid] != nil {
+            await downloadManager.ensureAnimatedWebpScanned(gid: gallery.gid)
+            if let m = downloadManager.downloads[gallery.gid] {
+                LogManager.shared.log("Anim", "Online resolve meta gid=\(gallery.gid) hasAnim=\(m.hasAnimatedWebp ?? false) override=\(m.readerModeOverride?.rawValue ?? "nil")")
+                if let ov = m.readerModeOverride {
+                    resolvedDirection = (ov == .horizontal) ? 1 : 0
+                    return
+                }
+                if m.hasAnimatedWebp == true {
+                    LogManager.shared.log("Anim", "Online resolve: SHOW DIALOG (meta) gid=\(gallery.gid)")
+                    showAnimationDialog = true
+                    return
+                }
+                if m.hasAnimatedWebp == false {
+                    resolvedDirection = 1
+                    return
+                }
+            }
+        }
+        // 2) DL 前のオンライン読みはタイトル/カテゴリ heuristic でフォールバック判定
+        let title = gallery.title
+        let isLikelyAnimated = title.contains("Animated") || title.contains("GIF") || title.contains("gif") || title.contains("🎥")
+        LogManager.shared.log("Anim", "Online resolve heuristic gid=\(gallery.gid) titleHit=\(isLikelyAnimated) title=\(title.prefix(40))")
+        if isLikelyAnimated {
+            // online 状態では override 保存先がないので毎回ダイアログ (DL 後に override 永続化される)
+            showAnimationDialog = true
+        } else {
+            resolvedDirection = 1
+        }
+    }
+
+    /// オンライン読み中、最初の数ページ分のロード結果を polling して
+    /// `animatedFileURL` / `animatedWebPData` が立ったら dialog 発火。
+    /// 横モード設定 + 未解決 + override 無し のときだけ動く。
+    @MainActor
+    private func monitorAnimationDetection() async {
+        guard userReaderDirection == 1 else { return }
+        // 最大 30 秒 (500ms x 60) 監視。最初の 5 ページのいずれかでアニメ検知すれば dialog 発火。
+        for _ in 0..<60 {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if animationDetectionHandled { return }
+            if showAnimationDialog { return }
+            if let m = downloadManager.downloads[gallery.gid], m.readerModeOverride != nil { return }
+            for page in 0..<min(5, viewModel.totalPages) {
+                let h = viewModel.holder(for: page)
+                if h.animatedWebPData != nil || h.animatedFileURL != nil {
+                    animationDetectionHandled = true
+                    LogManager.shared.log("Anim", "Online runtime detect: page=\(page) gid=\(gallery.gid) → SHOW DIALOG")
+                    showAnimationDialog = true
+                    return
+                }
+            }
         }
     }
 
@@ -357,7 +442,7 @@ struct GalleryReaderView: View {
             .onChange(of: viewModel.currentIndex) { _, newIndex in
                 if !isSliding {
                     sliderValue = Double(newIndex)
-                    if readerDirection == 1 { horizontalPage = newIndex }
+                    if effectiveDirection == 1 { horizontalPage = newIndex }
                 }
                 HistoryManager.shared.updateLastPage(gid: gallery.gid, page: newIndex)
             }
@@ -388,7 +473,7 @@ struct GalleryReaderView: View {
             verticalSizeClass: verticalSizeClass,
             onTap: { img in zoomImage = img },
             onRetry: { viewModel.retry(index: index) },
-            isHorizontalMode: readerDirection == 1,
+            isHorizontalMode: effectiveDirection == 1,
             isActiveAnimation: index == viewModel.currentIndex,
             mp4Gid: gallery.gid,
             onToggleControls: {
@@ -405,7 +490,7 @@ struct GalleryReaderView: View {
             verticalSizeClass: verticalSizeClass,
             onTap: { img in zoomImage = img },
             onRetry: { viewModel.retry(index: index) },
-            isHorizontalMode: readerDirection == 1
+            isHorizontalMode: effectiveDirection == 1
         )
         #endif
     }
@@ -621,8 +706,8 @@ struct GalleryReaderView: View {
 
     /// 見開き対応ページラベル
     private var spreadPageLabelText: String {
-        let page = isSliding ? Int(sliderValue) : (readerDirection == 1 ? horizontalPage : viewModel.currentIndex)
-        if readerDirection == 1 { // 横モード
+        let page = isSliding ? Int(sliderValue) : (effectiveDirection == 1 ? horizontalPage : viewModel.currentIndex)
+        if effectiveDirection == 1 { // 横モード
             return PagedReaderView.spreadPageLabel(
                 currentPage: page,
                 totalPages: viewModel.totalPages,
@@ -703,7 +788,7 @@ struct GalleryReaderView: View {
                             }
                         } else {
                             let target = Int(sliderValue)
-                            if readerDirection == 1 {
+                            if effectiveDirection == 1 {
                                 horizontalPage = target
                                 viewModel.currentIndex = target
                             } else {
@@ -718,7 +803,7 @@ struct GalleryReaderView: View {
                     }
                     .tint(.white)
                     .padding(.horizontal)
-                    .environment(\.layoutDirection, readingOrder == 1 && readerDirection == 1 ? .rightToLeft : .leftToRight)
+                    .environment(\.layoutDirection, readingOrder == 1 && effectiveDirection == 1 ? .rightToLeft : .leftToRight)
                 }
 
                 HStack {

@@ -66,6 +66,30 @@ final class ImageCache {
         return dir
     }
 
+    /// 動画 WebP の生バイト保存先。ImageCache が JPEG 再エンコードして保存するため
+    /// アニメ情報が失われる問題への対策。loadFromDisk の前にここを参照する。
+    var animatedWebPCacheDir: URL {
+        let dir = baseDir.appendingPathComponent("animated_webp", isDirectory: true)
+        if !fileManager.fileExists(atPath: dir.path) {
+            try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir
+    }
+
+    /// アニメ WebP 生 Data を URL 単位で永続化。再アクセス時 loadAnimatedWebPData(for:) で読める。
+    func saveAnimatedWebPData(_ data: Data, for url: URL) {
+        let path = animatedWebPCacheDir.appendingPathComponent(cacheFileHash(for: url))
+        Self.diskWriteQueue.async {
+            try? data.write(to: path)
+        }
+    }
+
+    /// 過去にアニメ WebP として保存された URL の生 Data を取得 (なければ nil)。
+    func loadAnimatedWebPData(for url: URL) -> Data? {
+        let path = animatedWebPCacheDir.appendingPathComponent(cacheFileHash(for: url))
+        return try? Data(contentsOf: path)
+    }
+
     // 後方互換: 旧cache/直下のファイルも読める
     private var legacyCacheDir: URL {
         baseDir

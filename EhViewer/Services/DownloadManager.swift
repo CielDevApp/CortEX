@@ -11,6 +11,13 @@ import UIKit
 import AppKit
 #endif
 
+/// リーダー表示方向。静止画ギャラリーは全体設定 readerDirection に従うが、
+/// 動画 WebP 含みで横開き不可のギャラリーのみ per-gallery の override を保持する。
+enum GalleryReaderMode: String, Codable, Sendable {
+    case horizontal
+    case vertical
+}
+
 struct DownloadedGallery: Codable, Identifiable, Sendable {
     var gid: Int
     var token: String
@@ -23,6 +30,10 @@ struct DownloadedGallery: Codable, Identifiable, Sendable {
     var source: String?  // "ehentai" or "nhentai"（nilは旧データ=ehentai）
     /// 明示的にキャンセルされたか（trueなら起動時autoResumeをスキップ）
     var isCancelled: Bool? = nil
+    /// VP8X ANIM flag 走査結果。nil = 未走査（初回 Reader 起動時に migration で埋める）
+    var hasAnimatedWebp: Bool? = nil
+    /// ダイアログで選択された per-gallery モード上書き。nil = 未選択
+    var readerModeOverride: GalleryReaderMode? = nil
 
     var id: Int { gid }
     nonisolated var directoryName: String { "\(gid)" }
@@ -789,6 +800,10 @@ class DownloadManager: ObservableObject {
         meta.downloadedPages = Array(state.downloadedSet)
         meta.isComplete = totalPages > 0 && state.downloadedSet.count >= totalPages
         meta.downloadDate = Date()
+        if meta.isComplete {
+            meta.hasAnimatedWebp = scanHasAnimatedWebp(gid: gid)
+            LogManager.shared.log("Anim", "post-DL scan gid=\(gid) hasAnimatedWebp=\(meta.hasAnimatedWebp ?? false)")
+        }
         let finalMeta = meta
         let completed = meta.isComplete
         await MainActor.run {
@@ -1641,6 +1656,10 @@ class DownloadManager: ObservableObject {
         meta.downloadedPages = Array(state.downloadedSet)
         meta.isComplete = totalPages > 0 && state.downloadedSet.count >= totalPages
         meta.downloadDate = Date()
+        if meta.isComplete {
+            meta.hasAnimatedWebp = scanHasAnimatedWebp(gid: gid)
+            LogManager.shared.log("Anim", "post-DL scan gid=\(gid) hasAnimatedWebp=\(meta.hasAnimatedWebp ?? false)")
+        }
         let finalMeta = meta
         let completed = meta.isComplete
         await MainActor.run {
@@ -1848,6 +1867,51 @@ class DownloadManager: ObservableObject {
                 LogManager.shared.log("bgdl", "progress \(n)/\(total) elapsed=\(String(format: "%.2f", elapsed))s avg=\(String(format: "%.1f", avgMs))ms/img")
             }
         }
+    }
+
+    // MARK: - 動画 WebP 判定 + リーダーモード上書き
+
+    /// ギャラリーディレクトリ内のページを走査しアニメ WebP が 1 枚でもあれば true。
+    /// ページファイルの拡張子は保存時に .jpg 固定だが中身は WebP / JPEG 混在しうるので
+    /// 先頭 32 バイトのマジックで判定。
+    nonisolated func scanHasAnimatedWebp(gid: Int) -> Bool {
+        let dir = baseDirectory.appendingPathComponent("\(gid)", isDirectory: true)
+        return WebPAnimationDetector.directoryContainsAnimated(dir)
+    }
+
+    /// 初回 Reader 起動時の migration。hasAnimatedWebp が nil の場合に走査 + 保存。
+    /// すでに判定済み or meta 未登録なら no-op。
+    @MainActor
+    func ensureAnimatedWebpScanned(gid: Int) async {
+        guard var meta = downloads[gid], meta.hasAnimatedWebp == nil else { return }
+        let flag = await Task.detached(priority: .utility) { [gid, self] in
+            self.scanHasAnimatedWebp(gid: gid)
+        }.value
+        // 走査中に削除された場合は書き戻さない
+        guard downloads[gid] != nil else { return }
+        meta.hasAnimatedWebp = flag
+        saveMetadata(meta)
+        LogManager.shared.log("Anim", "migration scan gid=\(gid) hasAnimatedWebp=\(flag)")
+    }
+
+    /// ダイアログ選択結果を per-gallery 保存。
+    @MainActor
+    func setReaderModeOverride(gid: Int, mode: GalleryReaderMode?) {
+        guard var meta = downloads[gid] else { return }
+        meta.readerModeOverride = mode
+        saveMetadata(meta)
+    }
+
+    /// 設定画面「モード選択をリセット」で全 override を nil に戻す。
+    @MainActor
+    func resetAllReaderModeOverrides() {
+        var count = 0
+        for (_, var meta) in downloads where meta.readerModeOverride != nil {
+            meta.readerModeOverride = nil
+            saveMetadata(meta)
+            count += 1
+        }
+        LogManager.shared.log("Anim", "resetAllReaderModeOverrides: cleared \(count)")
     }
 
     /// 完了通知
