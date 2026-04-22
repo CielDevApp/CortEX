@@ -2504,6 +2504,26 @@
     "GID: %lld" : {
 
     },
+    "HDR 有効化" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enable HDR"
+          }
+        }
+      }
+    },
+    "HDR 無効化" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disable HDR"
+          }
+        }
+      }
+    },
     "HDR補正" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3953,6 +3973,16 @@
     "Translating..." : {
 
     },
+    "UI 非表示" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hide UI"
+          }
+        }
+      }
+    },
     "URL解決中 %lld/%lld" : {
       "localizations" : {
         "ja" : {
@@ -4160,6 +4190,9 @@
           }
         }
       }
+    },
+    "アプリをアクティブのままにしてください" : {
+
     },
     "インポート" : {
       "localizations" : {
@@ -10867,22 +10900,6 @@
         }
       }
     },
-    "動画キャッシュ" : {
-
-    },
-    "動画キャッシュを削除" : {
-
-    },
-    "動画ギャラリーのモード選択をリセット" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Reset Animated Gallery Mode Choices"
-          }
-        }
-      }
-    },
     "動画 WebP を含むギャラリー毎に保存した「横/縦」選択を全て消去します。" : {
       "localizations" : {
         "en" : {
@@ -10903,42 +10920,28 @@
         }
       }
     },
+    "動画キャッシュ" : {
+
+    },
+    "動画キャッシュを削除" : {
+
+    },
+    "動画ギャラリーのモード選択をリセット" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reset Animated Gallery Mode Choices"
+          }
+        }
+      }
+    },
     "動画を含むギャラリー" : {
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Gallery Contains Animation"
-          }
-        }
-      }
-    },
-    "横開きモードでは動画は再生されません。\n縦スクロール表示に切り替えますか？" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Animations don't play in horizontal page mode.\nSwitch to vertical scrolling?"
-          }
-        }
-      }
-    },
-    "横開きで開く" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Open Horizontally"
-          }
-        }
-      }
-    },
-    "次回から聞かない" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Don't ask again"
           }
         }
       }
@@ -12738,6 +12741,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "水平翻頁"
+          }
+        }
+      }
+    },
+    "横開きで開く" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Horizontally"
+          }
+        }
+      }
+    },
+    "横開きモードでは動画は再生されません。\n縦スクロール表示に切り替えますか？" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Animations don't play in horizontal page mode.\nSwitch to vertical scrolling?"
+          }
+        }
+      }
+    },
+    "次回から聞かない" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Don't ask again"
           }
         }
       }

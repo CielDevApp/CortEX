@@ -18,6 +18,8 @@ struct AnimatedVideoView: View {
     let page: Int
     /// 親ビューのツールバー/コントロール表示切替（長押し競合回避: 変換メニューから呼ぶ）
     var onToggleControls: (() -> Void)? = nil
+    /// HDR 補正 (AVVideoComposition 経由でフレーム毎に CIFilter 適用)
+    var isHDREnabled: Bool = false
 
     @State private var status: Status = .converting
     @State private var posterImage: UIImage?
@@ -62,10 +64,10 @@ struct AnimatedVideoView: View {
                     // ポスターと同じアスペクト比で AVPlayer を frame 化 → 黒帯消失
                     Group {
                         if aspectSize.width > 0 && aspectSize.height > 0 {
-                            LoopingPlayerView(url: url)
+                            LoopingPlayerView(url: url, isHDREnabled: isHDREnabled)
                                 .aspectRatio(aspectSize, contentMode: .fit)
                         } else {
-                            LoopingPlayerView(url: url)
+                            LoopingPlayerView(url: url, isHDREnabled: isHDREnabled)
                         }
                     }
                     .onLongPressGesture(minimumDuration: 0.6) {
@@ -208,18 +210,21 @@ struct GalleryAnimatedWebPView: View {
     /// false のページは ▶ ボタン待機。全ページ同時に AVPlayer 起動すると CPU/メモリ飽和で
     /// UI が hang するため、アクティブページのみ自動昇格する方針。
     var autoPlayIfActive: Bool = false
+    /// HDR 補正 (親 Reader の @State から伝播)
+    var isHDREnabled: Bool = false
 
     @State private var playURL: URL?
     @State private var playRequested: Bool
     @State private var ownsTmpFile = false
 
-    init(source: AnimatedSource, staticImage: UIImage?, gid: Int, page: Int, onToggleControls: (() -> Void)? = nil, autoPlayIfActive: Bool = false) {
+    init(source: AnimatedSource, staticImage: UIImage?, gid: Int, page: Int, onToggleControls: (() -> Void)? = nil, autoPlayIfActive: Bool = false, isHDREnabled: Bool = false) {
         self.source = source
         self.staticImage = staticImage
         self.gid = gid
         self.page = page
         self.onToggleControls = onToggleControls
         self.autoPlayIfActive = autoPlayIfActive
+        self.isHDREnabled = isHDREnabled
         // 自動昇格条件: .url 経路 + アクティブページ + 変換済みキャッシュあり。
         // 全ページ同時昇格は LazyVStack 内で AVPlayer が一斉レンダーされて
         // UI フリーズ（田中 iPad 実機で 12 ページ全 cached 作品で再現、ログ確認済み）。
@@ -241,7 +246,8 @@ struct GalleryAnimatedWebPView: View {
                     sourceURL: playURL,
                     gid: gid,
                     page: page,
-                    onToggleControls: onToggleControls
+                    onToggleControls: onToggleControls,
+                    isHDREnabled: isHDREnabled
                 )
             } else {
                 // 静止画 (すでにロード済みの 1 フレーム目) + ▶ ボタン
@@ -355,15 +361,17 @@ struct StreamingFrameView: UIViewRepresentable {
 /// AVPlayerLayer で ループ再生する UIViewRepresentable
 struct LoopingPlayerView: UIViewRepresentable {
     let url: URL
+    /// HDR 補正 (AVVideoComposition で CIFilter パイプライン適用)
+    var isHDREnabled: Bool = false
 
     func makeUIView(context: Context) -> PlayerContainerView {
         let v = PlayerContainerView()
-        v.setURL(url)
+        v.setURL(url, isHDREnabled: isHDREnabled)
         return v
     }
 
     func updateUIView(_ uiView: PlayerContainerView, context: Context) {
-        uiView.setURL(url)
+        uiView.setURL(url, isHDREnabled: isHDREnabled)
     }
 }
 
@@ -371,6 +379,7 @@ final class PlayerContainerView: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
     private var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
     private var player: AVPlayer?
+    private var currentIsHDR: Bool = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -389,15 +398,34 @@ final class PlayerContainerView: UIView {
         CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
     }
 
-    func setURL(_ url: URL) {
-        if currentURL == url, player != nil { return }
+    func setURL(_ url: URL, isHDREnabled: Bool = false) {
+        if currentURL == url, player != nil, currentIsHDR == isHDREnabled { return }
         currentURL = url
-        rebuildPlayer(url: url)
+        currentIsHDR = isHDREnabled
+        rebuildPlayer(url: url, isHDREnabled: isHDREnabled)
     }
 
-    private func rebuildPlayer(url: URL) {
+    private func rebuildPlayer(url: URL, isHDREnabled: Bool) {
         stopInternal()
-        let item = AVPlayerItem(asset: AVURLAsset(url: url))
+        let asset = AVURLAsset(url: url)
+        let item = AVPlayerItem(asset: asset)
+        if isHDREnabled {
+            // HDR 補正 pipeline を AVVideoComposition 経由で GPU composit 中に注入。
+            // async API で生成 → 完了後 item に attach。初回フレームは SDR で出てから HDR に切替わる。
+            Task.detached(priority: .userInitiated) { [weak item] in
+                let vc = try? await AVMutableVideoComposition.videoComposition(
+                    with: asset,
+                    applyingCIFiltersWithHandler: { request in
+                        let src = request.sourceImage.clampedToExtent()
+                        let processed = HDREnhancer.enhanceCI(src).cropped(to: request.sourceImage.extent)
+                        request.finish(with: processed, context: nil)
+                    }
+                )
+                await MainActor.run {
+                    item?.videoComposition = vc
+                }
+            }
+        }
         let p = AVPlayer(playerItem: item)
         p.isMuted = true
         p.actionAtItemEnd = .none
