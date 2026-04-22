@@ -247,6 +247,28 @@ struct ContentView: View {
     @ObservedObject private var downloadManager = DownloadManager.shared
 
     private var mainContent: some View {
+        #if targetEnvironment(macCatalyst)
+        // Catalyst: TabView は macOS ネイティブ tab bar に bridge され、幅不足時に
+        // overflow menu (>>) に畳まれる。常に全タブ横並び表示にするため独自 HStack に置換。
+        VStack(spacing: 0) {
+            CatalystTabBar(selection: $selectedTab, activeDownloadCount: downloadManager.activeDownloadCount)
+            Group {
+                switch selectedTab {
+                case 0: GalleryListView(authVM: authVM)
+                case 1: FavoritesView(authVM: authVM)
+                case 2: GachaView()
+                case 3: DownloadsView()
+                case 4: HistoryView()
+                case 5: CharacterManagementTab()
+                case 6: SettingsView(authVM: authVM)
+                default: EmptyView()
+                }
+            }
+        }
+        .sheet(isPresented: $authVM.showingLogin) {
+            LoginView(authVM: authVM)
+        }
+        #else
         TabView(selection: $selectedTab) {
             GalleryListView(authVM: authVM)
                 .tabItem { Label("ギャラリー", systemImage: "photo.on.rectangle.angled") }
@@ -274,6 +296,7 @@ struct ContentView: View {
         .sheet(isPresented: $authVM.showingLogin) {
             LoginView(authVM: authVM)
         }
+        #endif
     }
 
     // MARK: - ロック画面
@@ -681,4 +704,64 @@ struct CharacterManagementTab: View {
         }
     }
 }
+
+#if targetEnvironment(macCatalyst)
+/// Mac Catalyst 専用の上部タブバー。SwiftUI TabView を使うと overflow menu に
+/// 畳まれる仕様回避のため独自 HStack 実装。iOS は既存 TabView のまま。
+struct CatalystTabBar: View {
+    @Binding var selection: Int
+    let activeDownloadCount: Int
+
+    private let tabs: [(tag: Int, title: String, icon: String)] = [
+        (0, "ギャラリー", "photo.on.rectangle.angled"),
+        (1, "お気に入り", "heart.fill"),
+        (2, "ガチャ", "dice.fill"),
+        (3, "保存済み", "arrow.down.circle.fill"),
+        (4, "履歴", "clock.arrow.circlepath"),
+        (5, "お気に入りキャラクター管理", "person.2.fill"),
+        (6, "設定", "gearshape.fill"),
+    ]
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(tabs, id: \.tag) { tab in
+                Button {
+                    selection = tab.tag
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: tab.icon)
+                            .font(.system(size: 12))
+                        Text(tab.title)
+                            .font(.system(size: 13))
+                            .lineLimit(1)
+                        if tab.tag == 3 && activeDownloadCount > 0 {
+                            Text("\(activeDownloadCount)")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Color.red, in: Capsule())
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity)
+                    .background(
+                        selection == tab.tag
+                            ? Color.accentColor.opacity(0.15)
+                            : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 6)
+                    )
+                    .foregroundStyle(
+                        selection == tab.tag ? Color.accentColor : Color.primary
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+    }
+}
+#endif
 
