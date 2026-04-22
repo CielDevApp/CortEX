@@ -290,7 +290,7 @@ struct NhentaiReaderView: View {
                     .font(.subheadline).tint(.blue)
 
                 HStack {
-                    Toggle("HDR風補正", isOn: $hdrEnhancement)
+                    Toggle("HDR風補正（カラー作品推奨）", isOn: $hdrEnhancement)
                         .font(.subheadline).tint(.blue)
                     if imageEnhanceFilter {
                         Text("(HDR統合済み)")

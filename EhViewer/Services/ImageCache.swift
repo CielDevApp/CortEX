@@ -76,18 +76,28 @@ final class ImageCache {
         return dir
     }
 
-    /// アニメ WebP 生 Data を URL 単位で永続化。再アクセス時 loadAnimatedWebPData(for:) で読める。
-    func saveAnimatedWebPData(_ data: Data, for url: URL) {
+    /// アニメ WebP 生 Data を URL 単位で永続化。保存先のファイル URL を同期返す
+    /// (実ディスク書き込みは background キュー、URL は即返す)。
+    @discardableResult
+    func saveAnimatedWebPData(_ data: Data, for url: URL) -> URL {
         let path = animatedWebPCacheDir.appendingPathComponent(cacheFileHash(for: url))
-        Self.diskWriteQueue.async {
-            try? data.write(to: path)
-        }
+        // 即 sync 書き込み: AVPlayer がすぐ読みに行けるよう一時的に main から書く
+        // (5-10MB の Data write はミリ秒単位、長時間ブロックしない)。
+        try? data.write(to: path)
+        return path
     }
 
     /// 過去にアニメ WebP として保存された URL の生 Data を取得 (なければ nil)。
     func loadAnimatedWebPData(for url: URL) -> Data? {
         let path = animatedWebPCacheDir.appendingPathComponent(cacheFileHash(for: url))
         return try? Data(contentsOf: path)
+    }
+
+    /// 永続化済み生 WebP のファイル URL を返す (存在しなければ nil)。
+    /// Data をメモリに載せず、AVPlayer が disk から直接読めるようにするための API。
+    func animatedWebPFileURL(for url: URL) -> URL? {
+        let path = animatedWebPCacheDir.appendingPathComponent(cacheFileHash(for: url))
+        return fileManager.fileExists(atPath: path.path) ? path : nil
     }
 
     // 後方互換: 旧cache/直下のファイルも読める

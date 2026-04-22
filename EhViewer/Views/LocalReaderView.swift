@@ -533,9 +533,12 @@ struct LocalReaderView: View {
         let fileURL = DownloadManager.shared.imageFilePath(gid: meta.gid, page: index)
         if FileManager.default.fileExists(atPath: fileURL.path),
            AnimatedImageDecoder.isAnimatedFile(url: fileURL) {
+            // ポスター (再生前の 1 フレーム目) も HDR/フィルタ適用済み image を優先使用。
+            // enhancedImages[index] は processPage で HDR パイプラインを通した結果。
+            // 未処理ならオンデマンドで processPage を走らせる (静画経路と同じ挙動)。
             GalleryAnimatedWebPView(
                 source: .url(fileURL),
-                staticImage: DownloadManager.shared.loadLocalImage(gid: meta.gid, page: index),
+                staticImage: enhancedImages[index] ?? DownloadManager.shared.loadLocalImage(gid: meta.gid, page: index),
                 gid: meta.gid,
                 page: index,
                 onToggleControls: {
@@ -545,6 +548,9 @@ struct LocalReaderView: View {
                 isHDREnabled: storedHDR
             )
             .frame(maxWidth: .infinity, maxHeight: isHorizontal ? .infinity : nil, alignment: isHorizontal ? .center : .top)
+            .onAppear {
+                if enhancedImages[index] == nil { processPage(index) }
+            }
         } else {
             animatedOrStaticBody(index: index)
         }
@@ -640,7 +646,7 @@ struct LocalReaderView: View {
                     .tint(.blue)
 
                 HStack {
-                    Toggle("HDR風補正", isOn: $storedHDR)
+                    Toggle("HDR風補正（カラー作品推奨）", isOn: $storedHDR)
                         .font(.subheadline)
                         .tint(.blue)
                     if storedEnhanceFilter {
