@@ -527,6 +527,9 @@ struct SettingsView: View {
             NhentaiLoginView()
                 .onDisappear { nhLoggedIn = NhentaiCookieManager.isLoggedIn() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .nhentaiLoginStateChanged)) { _ in
+            nhLoggedIn = NhentaiCookieManager.isLoggedIn()
+        }
         .sheet(isPresented: $showNhCDNVerify) {
             NhentaiCDNVerifyView()
         }

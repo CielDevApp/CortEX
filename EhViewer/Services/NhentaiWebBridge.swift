@@ -34,10 +34,17 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
         config.websiteDataStore = .default()
         let wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), configuration: config)
         wv.navigationDelegate = self
-        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+        // Catalyst はネイティブ UA 使用 (手動上書きは CF Turnstile を弾く)。iOS は従来通り固定。
+        #if !targetEnvironment(macCatalyst)
+        wv.customUserAgent = Self.platformUA
+        #endif
         webView = wv
         LogManager.shared.log("nhBridge", "WebView created")
     }
+
+    /// iOS 用の固定 UA (cf_clearance は UA に bind されるためアプリ内で統一必要)。
+    /// Catalyst ではネイティブ UA を使うためこれは参照しない。
+    static let platformUA: String = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
 
     /// WebViewを初期化してCloudflareチャレンジを通過させる
     func initialize() async {
@@ -349,7 +356,9 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
         let favWV = WKWebView(frame: CGRect(x: 0, y: 0, width: 375, height: 812), configuration: config)
-        favWV.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+        #if !targetEnvironment(macCatalyst)
+        favWV.customUserAgent = Self.platformUA
+        #endif
 
         let pageUrl = URL(string: "https://nhentai.net/g/\(galleryId)/")!
 
