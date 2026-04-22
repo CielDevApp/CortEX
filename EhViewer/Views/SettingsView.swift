@@ -709,36 +709,36 @@ struct CharacterCensusView: View {
     @State private var ageExportURL: URL?
     @State private var showAgeImport = false
 
-    // キャッシュ: キャラ名 → 代表coverURL（初回アクセス時に構築）
+    // キャッシュ: キャラ名 → (代表coverURL, gid) をまとめてプリコンピュート (O(N*M) を一回で済ます)。
+    // stats / FavoritesCache が変わるまでスクロール中は使い回し。
     @State private var coverURLCache: [String: URL] = [:]
+    @State private var coverGidCache: [String: Int] = [:]
+    /// KeychainService.load の結果も毎 cell 読まないようにキャッシュ。
+    @State private var cachedIsExhentai: Bool = false
 
     private var filteredStats: [(name: String, count: Int)] {
         if searchText.isEmpty { return stats }
         return stats.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
     }
 
-    private func coverURL(for characterName: String) -> URL? {
-        if let cached = coverURLCache[characterName] { return cached }
-        // E-Hentaiキャッシュから探す
+    /// stats が更新された時に一度だけ全キャラの coverURL / gid を構築する。
+    /// ForEach 内で毎回 FavoritesCache.shared.load() を叩くとスクロール重くなるため。
+    private func rebuildCoverCache() {
         let ehFavs = FavoritesCache.shared.load()
-        if let gallery = ehFavs.first(where: {
-            $0.tags.contains(where: { $0.hasPrefix("character:") && $0.dropFirst("character:".count).localizedCaseInsensitiveContains(characterName) })
-        }), let url = gallery.coverURL {
-            DispatchQueue.main.async { coverURLCache[characterName] = url }
-            return url
+        var urlMap: [String: URL] = [:]
+        var gidMap: [String: Int] = [:]
+        for stat in stats {
+            let lowerName = stat.name
+            if let g = ehFavs.first(where: {
+                $0.tags.contains(where: { $0.hasPrefix("character:") && $0.dropFirst("character:".count).localizedCaseInsensitiveContains(lowerName) })
+            }) {
+                if let url = g.coverURL { urlMap[stat.name] = url }
+                gidMap[stat.name] = g.gid
+            }
         }
-        return nil
-    }
-
-    /// coverURL と同じロジックで代表作 gid を返す（DL 済みならローカル流用のため）
-    private func coverGid(for characterName: String) -> Int? {
-        let ehFavs = FavoritesCache.shared.load()
-        if let gallery = ehFavs.first(where: {
-            $0.tags.contains(where: { $0.hasPrefix("character:") && $0.dropFirst("character:".count).localizedCaseInsensitiveContains(characterName) })
-        }) {
-            return gallery.gid
-        }
-        return nil
+        coverURLCache = urlMap
+        coverGidCache = gidMap
+        cachedIsExhentai = KeychainService.load(key: "igneous") != nil
     }
 
     private func exportAges() -> URL? {
@@ -822,10 +822,13 @@ struct CharacterCensusView: View {
                                     .foregroundStyle(.secondary)
                                     .frame(width: 24, alignment: .trailing)
 
-                                // 代表作サムネ
-                                CachedImageView(url: coverURL(for: stat.name), host: KeychainService.load(key: "igneous") != nil ? .exhentai : .ehentai, gid: coverGid(for: stat.name))
+                                // 代表作サムネ (cache からルックアップ、毎スクロール時の O(N*M) 検索を回避)
+                                // .drawingGroup() で Metal offscreen composition、スクロール中の
+                                // ラスタライズ負荷を GPU に逃がす。
+                                CachedImageView(url: coverURLCache[stat.name], host: cachedIsExhentai ? .exhentai : .ehentai, gid: coverGidCache[stat.name])
                                     .frame(width: 32, height: 45)
                                     .clipShape(RoundedRectangle(cornerRadius: 3))
+                                    .drawingGroup()
 
                                 Button {
                                     selectedCharacter = stat.name
@@ -917,6 +920,9 @@ struct CharacterCensusView: View {
             .searchable(text: $searchText, prompt: "キャラクター検索")
             .navigationTitle("CHARACTER CENSUS")
             .navigationBarTitleDisplayMode(.inline)
+            .task(id: stats.count) {
+                rebuildCoverCache()
+            }
             .toolbar {
                 if cortexUnlocked {
                     ToolbarItemGroup(placement: .topBarTrailing) {
