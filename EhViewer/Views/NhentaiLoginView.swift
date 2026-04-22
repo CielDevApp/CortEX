@@ -168,7 +168,12 @@ struct NhentaiWebView: UIViewRepresentable {
         config.websiteDataStore = .default()
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
+        // Cloudflare Turnstile は UA/navigator.platform/WebKit build の整合性を厳密検査する。
+        // Mac Catalyst で UA を手動上書きすると WebKit 実 build version とずれて検証失敗 (実測)。
+        // Catalyst ではネイティブ UA (WKWebView 既定) をそのまま使う。iOS は従来通り固定。
+        #if !targetEnvironment(macCatalyst)
         webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+        #endif
 
         if cdnOnly {
             // CDN認証モード：直接CDNドメインへ
@@ -434,25 +439,26 @@ struct NhentaiWebView: UIViewRepresentable {
                     LogManager.shared.log("nhAuth", "cf_clearance captured from login page")
                 }
 
-                // access_token抽出（ユーザー認証済み access_token のみ保存）
-                // csrftoken + cf_clearance のみの匿名状態では保存しない
-                let hasRealSession = nhCookies.contains { $0.name == "sessionid" }
+                // ログイン検出: v1 は sessionid、v2 API 移行後は access_token が session marker。
+                // どちらかあればログイン済みと判定 (v2 移行で sessionid は常に nil のため)。
+                let hasSessionId = nhCookies.contains { $0.name == "sessionid" }
+                let hasAccessToken = nhCookies.contains { $0.name == "access_token" }
+                let hasRealSession = hasSessionId || hasAccessToken
+
                 if hasRealSession, let accessToken = nhCookies.first(where: { $0.name == "access_token" }) {
                     NhentaiCookieManager.saveToken(accessToken.value)
-                    LogManager.shared.log("nhAuth", "access_token captured (with sessionid)")
+                    LogManager.shared.log("nhAuth", "access_token captured (sessionid=\(hasSessionId))")
                 }
 
-                // ログイン検出: sessionid cookie の存在を必須にする
-                // 以前は nhCookies.count >= 2 で誤発火していた（csrftoken + cf_clearance だけでも true）
                 if hasRealSession {
                     NhentaiCookieManager.saveCookies(cookieString)
 
-                    // v2 APIトークンをlocalStorage/sessionStorageから抽出
+                    // v2 APIトークンをlocalStorage/sessionStorageから抽出 (保険)
                     self.extractAuthToken(from: webView)
 
                     DispatchQueue.main.async {
                         self.parent.loginDetected = true
-                        LogManager.shared.log("nhAuth", "real login detected (sessionid present)")
+                        LogManager.shared.log("nhAuth", "real login detected (sessionid=\(hasSessionId) access_token=\(hasAccessToken))")
 
                         // ログイン成功後、自動でCDN認証を開始
                         if !self.isInCDNPhase && !self.cfClearanceCaptured {

@@ -223,7 +223,12 @@ enum NhentaiClient {
     }()
 
     /// WKWebViewと同一UA（Cloudflareフィンガープリント一致のため）
+    // UA はログイン WebView (NhentaiLoginView) / nhBridge と同期必須 (cf_clearance が UA に bind されるため)
+    #if targetEnvironment(macCatalyst)
+    private static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
+    #else
     private static let userAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+    #endif
 
     /// Cloudflare対策: Cookie + Referer + UA 付きリクエストを生成
     private static func buildRequest(url: URL) -> URLRequest {
