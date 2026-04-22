@@ -261,7 +261,9 @@ extension ReaderViewModel {
 
             // アニメ WebP 判定: 該当ページのみ生 Data を holder に保持、
             // GalleryAnimatedWebPView の ▶ ボタンで再生起動用。静止画は Data 破棄（OOM 回避）。
-            if WebPFileDetector.isAnimatedWebP(data: imageData) {
+            // 検出は VP8X flag bit で行う (WebPFileDetector の ANIM 文字列検索は ICCP/XMP chunk で
+            // 256B 窓を超えると誤陰性になるため、WebPAnimationDetector に統一)。
+            if WebPAnimationDetector.isAnimatedWebP(data: imageData) {
                 let heldData = imageData
                 await MainActor.run {
                     self.holder(for: index).animatedWebPData = heldData
