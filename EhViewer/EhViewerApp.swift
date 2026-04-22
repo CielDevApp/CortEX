@@ -29,8 +29,35 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
             self, selector: #selector(appDidBecomeActive),
             name: UIApplication.didBecomeActiveNotification, object: nil
         )
+        #if targetEnvironment(macCatalyst)
+        // Catalyst のタイトルバー下に出る 1px separator を消す。
+        // UINavigationBarAppearance の shadowColor = .clear で navigation bar 側、
+        // UIScene.willConnect で windowScene.titlebar 側、両方消す。
+        let appearance = UINavigationBarAppearance()
+        appearance.configureWithDefaultBackground()
+        appearance.shadowColor = .clear
+        appearance.shadowImage = UIImage()
+        UINavigationBar.appearance().standardAppearance = appearance
+        UINavigationBar.appearance().compactAppearance = appearance
+        UINavigationBar.appearance().scrollEdgeAppearance = appearance
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(hideTitlebarSeparator),
+            name: UIScene.willConnectNotification, object: nil
+        )
+        #endif
         return true
     }
+
+    #if targetEnvironment(macCatalyst)
+    @objc private func hideTitlebarSeparator(_ note: Notification) {
+        DispatchQueue.main.async {
+            for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
+                scene.titlebar?.titleVisibility = .hidden
+                scene.titlebar?.toolbar = nil
+            }
+        }
+    }
+    #endif
 
     @objc private func appWillResignActive() {
         showPrivacyScreen()
