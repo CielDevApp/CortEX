@@ -171,12 +171,22 @@ class DownloadManager: ObservableObject {
         }
     }
 
+    /// Phase 2B: onGidProgressHint 用の per-gid trailing debounce timer
+    /// consumer suspend 中の BG wakeup 毎にヒントが来るが、disk scan は高コストなので
+    /// per-gid 1s trailing で coalesce → LA 更新頻度も ActivityKit rate limit 内に収める
+    private var bgHintDebounce: [Int: DispatchSourceTimer] = [:]
+    private let bgHintLock = NSLock()
+
     private init() {
         // BackgroundDownloadManager の復帰 hook を設定 (案 4)
         BackgroundDownloadManager.shared.onForegroundResume = { [weak self] in
             Task { @MainActor in
                 self?.resumeActiveDownloadsOnForeground()
             }
+        }
+        // Phase 2B: BG delegate 完了毎のヒントを受けて disk scan → LA/progress 更新
+        BackgroundDownloadManager.shared.onGidProgressHint = { [weak self] gid in
+            self?.scheduleBGProgressHintFire(gid: gid)
         }
         loadAllMetadata()
         repairBrokenDownloads()
@@ -1030,6 +1040,54 @@ class DownloadManager: ObservableObject {
         updated[gid] = DownloadProgress(current: current, total: total, isCancelled: prevCancelled, phase: prevPhase, coolingUntil: prevCoolingUntil)
         activeDownloads = updated
         updateLiveActivity(gid: gid, current: current, total: total)
+    }
+
+    /// Phase 2B: BG delegate 完了毎のヒント受信 → per-gid 1s trailing debounce
+    /// 既に timer 起動中なら何もしない (trailing edge で最新 disk 状態が反映される)
+    private nonisolated func scheduleBGProgressHintFire(gid: Int) {
+        bgHintLock.lock()
+        if bgHintDebounce[gid] != nil {
+            bgHintLock.unlock()
+            return
+        }
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        timer.schedule(deadline: .now() + 1.0)
+        timer.setEventHandler { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.fireBGProgressHint(gid: gid)
+            }
+        }
+        bgHintDebounce[gid] = timer
+        bgHintLock.unlock()
+        timer.resume()
+    }
+
+    /// Phase 2B: disk を scan して LA / progress を現在値に同期
+    /// - consumer が suspend 中でも BG wakeup 毎に LA が追従する
+    /// - 退行防止: 既存 activeDownloads.current を下回る場合は更新しない
+    @MainActor
+    private func fireBGProgressHint(gid: Int) {
+        bgHintLock.lock()
+        bgHintDebounce.removeValue(forKey: gid)
+        bgHintLock.unlock()
+
+        guard let entry = activeDownloads[gid] else { return }
+        // DL が active phase でない (preparing / cooling) 時はスキップ
+        guard entry.phase == .active || entry.phase == .retrying else { return }
+        let total = entry.total
+        guard total > 0 else { return }
+
+        let dir = galleryDirectory(gid: gid)
+        guard let contents = try? fileManager.contentsOfDirectory(atPath: dir.path) else { return }
+        // page_NNNN.jpg の件数を数える (meta.json / cover.jpg 除外)
+        var diskCount = 0
+        for name in contents where name.hasPrefix("page_") { diskCount += 1 }
+
+        if diskCount > entry.current {
+            let dropped = BackgroundDownloadManager.shared.droppedCount(gid: gid)
+            LogManager.shared.log("bgdl", "BGProgressHint fired: gid=\(gid) disk=\(diskCount)/\(total) prev=\(entry.current) dropped=\(dropped)")
+            updateProgress(gid: gid, current: diskCount, total: total)
+        }
     }
 
     /// DL phase のみを更新 (UI 表示切替用)

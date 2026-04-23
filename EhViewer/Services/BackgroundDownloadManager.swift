@@ -230,6 +230,17 @@ final class BackgroundDownloadManager: NSObject {
     /// 未完分だけ再 enqueue する。DownloadManager が設定するコールバック。
     var onForegroundResume: (() -> Void)?
 
+    /// Phase 2B: 各 page 完了 delegate 時点で呼ばれるヒント。
+    /// consumer Task が iOS suspend で yield 受信できない (DROPPED) 期間でも、
+    /// BG session の wakeup 毎に 1 回発火 → disk state を元に LA 更新させる。
+    /// DownloadManager 側で per-gid 1s trailing debounce を入れて flood 回避。
+    var onGidProgressHint: ((Int) -> Void)?
+
+    /// DROPPED completion 追跡 (gid → set of pageIndex)
+    /// 「ファイルは disk にあるが stream に届かなかった」ページ。
+    /// FG 復帰時 reconcile が scan でカバーするので通常は冗長だが、ログで可視化する。
+    private var droppedPagesByGid: [Int: Set<Int>] = [:]
+
     private override init() {
         super.init()
         // 起動時に前回の残骸 task をクリーンアップ
@@ -850,9 +861,32 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
             return gidStreams[gid]
         }
         if continuation == nil {
-            LogManager.shared.log("bgdl", "DROPPED completion: no stream for gid=\(gid) page=\(pageIndex) success=\(success)")
+            // DROPPED: stream 消失後 or consumer suspend 中に iOS wakeup で delegate 発火
+            // 成功ページは disk に着地しているので reconcile で回収可能。トラッキングして可視化。
+            if success {
+                let count: Int = stateQueue.sync {
+                    droppedPagesByGid[gid, default: []].insert(pageIndex)
+                    return droppedPagesByGid[gid]?.count ?? 0
+                }
+                LogManager.shared.log("bgdl", "DROPPED completion: no stream for gid=\(gid) page=\(pageIndex) success=true droppedTotal=\(count)")
+            } else {
+                LogManager.shared.log("bgdl", "DROPPED completion: no stream for gid=\(gid) page=\(pageIndex) success=false")
+            }
         }
         continuation?.yield(PageCompletion(pageIndex: pageIndex, success: success, retriable: retriable))
+        // Phase 2B: stream 受信 / DROPPED どちらでも LA 更新ヒントを発火。
+        // consumer が suspend 中でも BG wakeup 毎に 1 回 disk scan → LA 反映される。
+        onGidProgressHint?(gid)
+    }
+
+    /// Phase 2B: FG 復帰 / reconcile 完了時に DROPPED トラッキングを消す
+    func clearDroppedTracking(gid: Int) {
+        stateQueue.sync { droppedPagesByGid.removeValue(forKey: gid) }
+    }
+
+    /// Phase 2B: DROPPED した page 数を取得 (ログ/診断用)
+    func droppedCount(gid: Int) -> Int {
+        stateQueue.sync { droppedPagesByGid[gid]?.count ?? 0 }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
