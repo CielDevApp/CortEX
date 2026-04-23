@@ -10,20 +10,31 @@ final class BackgroundDownloadManager: NSObject {
 
     static let nhSessionId = "com.kanayayuutou.CortEX.nhdl"
     static let ehSessionId = "com.kanayayuutou.CortEX.ehdl"
+    static let bgNhSessionId = "com.kanayayuutou.CortEX.nhdl.bg"
+    static let bgEhSessionId = "com.kanayayuutou.CortEX.ehdl.bg"
     static let htmlFetchSessionId = "com.kanayayuutou.CortEX.htmlfetch"
 
-    private var _nhSession: URLSession?
-    private var _ehSession: URLSession?
+    private var _fgNhSession: URLSession?
+    private var _fgEhSession: URLSession?
+    private var _bgNhSession: URLSession?
+    private var _bgEhSession: URLSession?
     private var _htmlFetchSession: URLSession?
 
-    /// 案 4 採用 (Day15 深夜): FG session 戻し + 復帰時 re-enqueue 方式。
-    /// 田中 testimony:「ロック解除にまた爆速復帰がいい」
-    /// - FG 中: 4/host で爆速 (80ms/img)
-    /// - 画面オフ: iOS 猶予 30-60s で suspend → DL 停止 (トレードオフ)
-    /// - 画面オン復帰: willEnterForeground で reconcile + 未完分 re-enqueue → 即爆速再開
-    /// identifier はレガシー維持 (クラス名変更の churn 回避)
-    var nhSession: URLSession {
-        if let s = _nhSession { return s }
+    /// scene phase に基づくハイブリッド設計 (Day16):
+    /// - FG (app active): default session, 4/host で爆速
+    /// - BG 30秒後 (lock / home / app switch): background(identifier) session, 低速でも継続
+    /// - FG 復帰: BG session in-flight を cancel → FG session で再 enqueue (爆速再開)
+    /// 30秒 delay は「短時間 app 切替」では FG のまま継続させる狙い (復帰時再 enqueue の無駄を削減)
+    private var preferBGSession: Bool = false
+    private var bgMigrationTimer: DispatchSourceTimer?
+
+    /// 優先セッション（scene phase 反映）
+    var nhSession: URLSession { preferBGSession ? bgNhSession : fgNhSession }
+    var ehSession: URLSession { preferBGSession ? bgEhSession : fgEhSession }
+
+    /// FG 固定セッション（明示参照 / cleanup / cancel 横断用）
+    var fgNhSession: URLSession {
+        if let s = _fgNhSession { return s }
         let config = URLSessionConfiguration.default
         config.httpCookieStorage = HTTPCookieStorage.shared
         config.httpCookieAcceptPolicy = .always
@@ -33,12 +44,12 @@ final class BackgroundDownloadManager: NSObject {
         config.timeoutIntervalForResource = 120
         config.httpMaximumConnectionsPerHost = 4
         let s = URLSession(configuration: config, delegate: self, delegateQueue: nil)
-        _nhSession = s
+        _fgNhSession = s
         return s
     }
 
-    var ehSession: URLSession {
-        if let s = _ehSession { return s }
+    var fgEhSession: URLSession {
+        if let s = _fgEhSession { return s }
         let config = URLSessionConfiguration.default
         config.httpCookieStorage = HTTPCookieStorage.shared
         config.httpCookieAcceptPolicy = .always
@@ -48,7 +59,43 @@ final class BackgroundDownloadManager: NSObject {
         config.timeoutIntervalForResource = 120
         config.httpMaximumConnectionsPerHost = 4
         let s = URLSession(configuration: config, delegate: self, delegateQueue: nil)
-        _ehSession = s
+        _fgEhSession = s
+        return s
+    }
+
+    /// BG 固定セッション（lock / home / app switch 中も継続、1-2/host の低速）
+    /// timeout は長めに: iOS throttling で転送間隔が空く想定
+    var bgNhSession: URLSession {
+        if let s = _bgNhSession { return s }
+        let config = URLSessionConfiguration.background(withIdentifier: Self.bgNhSessionId)
+        config.httpCookieStorage = HTTPCookieStorage.shared
+        config.httpCookieAcceptPolicy = .always
+        config.httpShouldSetCookies = true
+        config.isDiscretionary = false
+        config.sessionSendsLaunchEvents = true
+        config.allowsCellularAccess = true
+        config.waitsForConnectivity = false
+        config.timeoutIntervalForRequest = 60
+        config.timeoutIntervalForResource = 600
+        let s = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        _bgNhSession = s
+        return s
+    }
+
+    var bgEhSession: URLSession {
+        if let s = _bgEhSession { return s }
+        let config = URLSessionConfiguration.background(withIdentifier: Self.bgEhSessionId)
+        config.httpCookieStorage = HTTPCookieStorage.shared
+        config.httpCookieAcceptPolicy = .always
+        config.httpShouldSetCookies = true
+        config.isDiscretionary = false
+        config.sessionSendsLaunchEvents = true
+        config.allowsCellularAccess = true
+        config.waitsForConnectivity = false
+        config.timeoutIntervalForRequest = 60
+        config.timeoutIntervalForResource = 600
+        let s = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        _bgEhSession = s
         return s
     }
 
@@ -72,6 +119,34 @@ final class BackgroundDownloadManager: NSObject {
         return s
     }
 
+    /// セッション識別タグ（FG/BG 両 session 併用時の taskIdentifier 衝突回避用）
+    enum SessionTag: String {
+        case fgEh, fgNh, bgEh, bgNh, htmlFetch
+        var isBG: Bool { self == .bgEh || self == .bgNh || self == .htmlFetch }
+    }
+
+    /// registry key: sessionTag + taskId のタプル
+    private struct TaskKey: Hashable {
+        let sessionTag: SessionTag
+        let taskId: Int
+    }
+
+    /// 与えられた URLSession の tag を推定（delegate callback 内で使う）
+    private func sessionTag(for session: URLSession) -> SessionTag? {
+        if let id = session.configuration.identifier {
+            switch id {
+            case Self.bgNhSessionId: return .bgNh
+            case Self.bgEhSessionId: return .bgEh
+            case Self.htmlFetchSessionId: return .htmlFetch
+            default: return nil
+            }
+        }
+        // FG (default session) は === で識別
+        if session === _fgNhSession { return .fgNh }
+        if session === _fgEhSession { return .fgEh }
+        return nil
+    }
+
     /// タスク登録情報
     private struct TaskEntry {
         let gid: Int
@@ -86,10 +161,10 @@ final class BackgroundDownloadManager: NSObject {
         let retriable: Bool  // HTTPエラー等で再試行可能か
     }
 
-    /// taskIdentifier → TaskEntry
-    private var registry: [Int: TaskEntry] = [:]
-    /// 単発DL（非batch）用: taskIdentifier → continuation
-    private var singleTaskContinuations: [Int: (URL, CheckedContinuation<Bool, Never>)] = [:]
+    /// TaskKey → TaskEntry
+    private var registry: [TaskKey: TaskEntry] = [:]
+    /// 単発DL（非batch）用: TaskKey → continuation
+    private var singleTaskContinuations: [TaskKey: (URL, CheckedContinuation<Bool, Never>)] = [:]
     /// gid → AsyncStream（batch DL用）
     private var gidStreams: [Int: AsyncStream<PageCompletion>.Continuation] = [:]
     private let stateQueue = DispatchQueue(label: "bgdl.state", qos: .userInitiated)
@@ -156,12 +231,57 @@ final class BackgroundDownloadManager: NSObject {
             self, selector: #selector(handleWillEnterForeground),
             name: UIApplication.willEnterForegroundNotification, object: nil
         )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleDidEnterBackground),
+            name: UIApplication.didEnterBackgroundNotification, object: nil
+        )
         #endif
     }
 
+    /// BG 入り後 30 秒経過で BG session に切替。短時間 app 切替では FG のまま継続。
+    @objc private func handleDidEnterBackground() {
+        guard !preferBGSession else { return }
+        LogManager.shared.log("bgdl", "scene → background, BG migration timer armed (30s)")
+        bgMigrationTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 30)
+        timer.setEventHandler { [weak self] in
+            self?.performBGMigration()
+        }
+        timer.resume()
+        bgMigrationTimer = timer
+    }
+
+    private func performBGMigration() {
+        guard !preferBGSession else { return }
+        preferBGSession = true
+        bgMigrationTimer = nil
+        LogManager.shared.log("bgdl", "BG migration: preferBGSession=true (FG in-flight → natural timeout → retry on BG)")
+        // 方針: FG の in-flight task は iOS suspend で自然 timeout する。
+        // 明示的 cancel はしない (BAN cooldown リスク回避: 田中指示 #4)。
+        // timeout 後 retry/reconcile が新しい preferBGSession=true 下で BG session に enqueue しなおす。
+    }
+
+    private func performFGMigration() {
+        guard preferBGSession else { return }
+        preferBGSession = false
+        LogManager.shared.log("bgdl", "FG migration: cancelling BG in-flight → re-enqueue on FG")
+        // BG session の in-flight を明示 cancel (低速だったので損失小 / 戻り速度優先)
+        for session in [bgNhSession, bgEhSession] {
+            session.getAllTasks { tasks in
+                for task in tasks { task.cancel() }
+            }
+        }
+    }
+
     @objc private func handleWillEnterForeground() {
+        if bgMigrationTimer != nil {
+            LogManager.shared.log("bgdl", "BG migration timer cancelled (returned to FG in time)")
+            bgMigrationTimer?.cancel()
+            bgMigrationTimer = nil
+        }
+        performFGMigration()
         LogManager.shared.log("bgdl", "app returning to foreground, triggering reconcile + re-enqueue")
-        // DownloadManager 側の hook (未完分を reconcile + 再 enqueue)
         onForegroundResume?()
     }
 
@@ -172,14 +292,14 @@ final class BackgroundDownloadManager: NSObject {
         }
     }
 
-    /// 前回の session に残ってるタスクをキャンセル（registry に対応なしの実行中 task）
+    /// 前回の session に残ってるタスクをキャンセル（FG / BG 両 session）
     private func cleanupStaleTasks() async {
-        for session in [nhSession, ehSession] {
+        for session in [fgNhSession, fgEhSession, bgNhSession, bgEhSession] {
             await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
                 session.getAllTasks { tasks in
                     let ids = tasks.map { $0.taskIdentifier }
                     for task in tasks { task.cancel() }
-                    LogManager.shared.log("bgdl", "cleanup stale tasks: \(ids.count) in \(session.configuration.identifier ?? "?")")
+                    LogManager.shared.log("bgdl", "cleanup stale tasks: \(ids.count) in \(session.configuration.identifier ?? "default")")
                     cont.resume()
                 }
             }
@@ -194,10 +314,12 @@ final class BackgroundDownloadManager: NSObject {
             var request = URLRequest(url: url)
             for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
             let task = session.downloadTask(with: request)
+            let tag = sessionTag(for: session) ?? .fgEh
+            let key = TaskKey(sessionTag: tag, taskId: task.taskIdentifier)
             stateQueue.sync {
-                singleTaskContinuations[task.taskIdentifier] = (finalPath, continuation)
+                singleTaskContinuations[key] = (finalPath, continuation)
             }
-            speedTracker.start(taskId: task.taskIdentifier, task: task)
+            speedTracker.start(taskId: task.taskIdentifier, task: task, isBG: tag.isBG)
             task.resume()
         }
     }
@@ -239,10 +361,12 @@ final class BackgroundDownloadManager: NSObject {
         var request = URLRequest(url: url)
         for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
         let task = session.downloadTask(with: request)
+        let tag = sessionTag(for: session) ?? .fgEh
+        let key = TaskKey(sessionTag: tag, taskId: task.taskIdentifier)
         stateQueue.sync {
-            registry[task.taskIdentifier] = TaskEntry(gid: gid, pageIndex: pageIndex, finalPath: finalPath)
+            registry[key] = TaskEntry(gid: gid, pageIndex: pageIndex, finalPath: finalPath)
         }
-        speedTracker.start(taskId: task.taskIdentifier, task: task)
+        speedTracker.start(taskId: task.taskIdentifier, task: task, isBG: tag.isBG)
         task.resume()
     }
 
@@ -258,13 +382,26 @@ final class BackgroundDownloadManager: NSObject {
     }
 
     /// gidの全タスクをキャンセル
+    /// 与えられた session と同 channel の FG / BG 両 session を横断して cancel
+    /// （scene phase 切替で同一 channel でも分散している可能性）
     func cancelAllTasks(for gid: Int, session: URLSession) {
-        session.getAllTasks { tasks in
-            self.stateQueue.sync {
-                for task in tasks {
-                    if let entry = self.registry[task.taskIdentifier], entry.gid == gid {
-                        task.cancel()
-                        self.registry.removeValue(forKey: task.taskIdentifier)
+        let channel = sessionTag(for: session)
+        let targets: [URLSession]
+        switch channel {
+        case .fgEh, .bgEh: targets = [fgEhSession, bgEhSession]
+        case .fgNh, .bgNh: targets = [fgNhSession, bgNhSession]
+        default: targets = [session]
+        }
+        for s in targets {
+            guard let tag = sessionTag(for: s) else { continue }
+            s.getAllTasks { tasks in
+                self.stateQueue.sync {
+                    for task in tasks {
+                        let key = TaskKey(sessionTag: tag, taskId: task.taskIdentifier)
+                        if let entry = self.registry[key], entry.gid == gid {
+                            task.cancel()
+                            self.registry.removeValue(forKey: key)
+                        }
                     }
                 }
             }
@@ -316,12 +453,11 @@ final class BackgroundDownloadManager: NSObject {
     /// 起動時: AppDelegateから呼び出される
     func handleEventsForBackgroundURLSession(identifier: String, completionHandler: @escaping () -> Void) {
         systemCompletionHandlers[identifier] = completionHandler
-        if identifier == Self.nhSessionId {
-            _ = nhSession
-        } else if identifier == Self.ehSessionId {
-            _ = ehSession
-        } else if identifier == Self.htmlFetchSessionId {
-            _ = htmlFetchSession
+        switch identifier {
+        case Self.bgNhSessionId: _ = bgNhSession
+        case Self.bgEhSessionId: _ = bgEhSession
+        case Self.htmlFetchSessionId: _ = htmlFetchSession
+        default: break
         }
     }
 }
@@ -334,9 +470,10 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
                     totalBytesWritten: Int64,
                     totalBytesExpectedToWrite: Int64) {
         let taskId = downloadTask.taskIdentifier
-        // SpeedTracker 更新 (task 単位の受信総量追跡)
         speedTracker.update(taskId: taskId, totalBytes: totalBytesWritten)
-        let gidOpt: Int? = stateQueue.sync { registry[taskId]?.gid }
+        guard let tag = sessionTag(for: session) else { return }
+        let key = TaskKey(sessionTag: tag, taskId: taskId)
+        let gidOpt: Int? = stateQueue.sync { registry[key]?.gid }
         guard let gid = gidOpt else { return }
         bytesLock.lock()
         bytesAccumulator[gid, default: 0] += bytesWritten
@@ -387,9 +524,15 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
         let taskId = downloadTask.taskIdentifier
         speedTracker.finish(taskId: taskId)
 
+        guard let tag = sessionTag(for: session) else {
+            LogManager.shared.log("bgdl", "finished taskId=\(taskId) but session tag unresolved")
+            return
+        }
+        let key = TaskKey(sessionTag: tag, taskId: taskId)
+
         // Single task path（互換）
         let single: (URL, CheckedContinuation<Bool, Never>)? = stateQueue.sync {
-            let e = singleTaskContinuations.removeValue(forKey: taskId)
+            let e = singleTaskContinuations.removeValue(forKey: key)
             return e
         }
         if let single {
@@ -399,7 +542,7 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
 
         // Batch task path
         let entry: TaskEntry? = stateQueue.sync {
-            let e = registry.removeValue(forKey: taskId)
+            let e = registry.removeValue(forKey: key)
             return e
         }
         guard let entry else {
@@ -547,9 +690,12 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
         let taskId = task.taskIdentifier
         speedTracker.finish(taskId: taskId)
 
+        guard let tag = sessionTag(for: session) else { return }
+        let key = TaskKey(sessionTag: tag, taskId: taskId)
+
         // Single task path
         let single: (URL, CheckedContinuation<Bool, Never>)? = stateQueue.sync {
-            return singleTaskContinuations.removeValue(forKey: taskId)
+            return singleTaskContinuations.removeValue(forKey: key)
         }
         if let single {
             LogManager.shared.log("bgdl", "single task error taskId=\(taskId): \(error.localizedDescription)")
@@ -559,7 +705,7 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
 
         // Batch task path
         let entry: TaskEntry? = stateQueue.sync {
-            return registry.removeValue(forKey: taskId)
+            return registry.removeValue(forKey: key)
         }
         if let entry {
             LogManager.shared.log("bgdl", "batch error gid=\(entry.gid) page=\(entry.pageIndex): \(error.localizedDescription)")
@@ -593,10 +739,14 @@ final class SpeedTracker: @unchecked Sendable {
         var startedAt: CFAbsoluteTime
         /// 直近 30 秒以内のサンプル (時刻, 累計バイト)
         var samples: [(time: CFAbsoluteTime, bytes: Int64)]
+        /// BG session タスクなら true、kill 判定を緩める
+        var isBG: Bool
     }
 
     /// 追跡開始 (enqueue / downloadToFile 時)
-    func start(taskId: Int, task: URLSessionTask) {
+    /// isBG=true の BG session task は iOS throttling で転送間隔が空くので
+    /// stall しきい値を緩和 (20s → 120s, 平均速度閾値も無効化)
+    func start(taskId: Int, task: URLSessionTask, isBG: Bool = false) {
         let now = CFAbsoluteTimeGetCurrent()
         lock.lock(); defer { lock.unlock() }
         trackers[taskId] = Tracker(
@@ -604,7 +754,8 @@ final class SpeedTracker: @unchecked Sendable {
             lastBytes: 0,
             lastProgressAt: now,
             startedAt: now,
-            samples: [(now, 0)]
+            samples: [(now, 0)],
+            isBG: isBG
         )
     }
 
@@ -651,14 +802,17 @@ final class SpeedTracker: @unchecked Sendable {
     }
 
     /// kill 条件判定 (静的ロジック、副作用なし)
-    /// - 進捗停止 20秒超 = 純粋 stall
-    /// - 直近 30秒以上のサンプル平均が 100 B/s 未満 = 低速すぎ
+    /// FG: 進捗停止 20秒超 or 直近 30秒の平均が 100 B/s 未満
+    /// BG: iOS throttling で転送間隔が空くため、進捗停止 120秒超のみ判定 (低速閾値は無効化)
     private static func killReason(tracker t: Tracker, now: CFAbsoluteTime) -> String? {
+        let noProgressLimit: Double = t.isBG ? 120 : 20
         let noProgress = now - t.lastProgressAt
-        if noProgress > 20 {
+        if noProgress > noProgressLimit {
             return "no progress for \(Int(noProgress))s"
         }
-        if let oldest = t.samples.first, let newest = t.samples.last {
+        // BG session は iOS 側で意図的に絞られるので低速閾値チェックはスキップ
+        if !t.isBG,
+           let oldest = t.samples.first, let newest = t.samples.last {
             let timeDelta = newest.time - oldest.time
             let bytesDelta = newest.bytes - oldest.bytes
             if timeDelta >= 30 {
