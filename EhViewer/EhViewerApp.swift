@@ -176,6 +176,8 @@ struct EhViewerApp: App {
         ImageCache.shared.cleanupOnLaunch()
         GalleryExporter.cleanupOldExportFiles()
         cleanupGalleryWebPTmp()
+        // Keychain accessibility migration (既存 cookie を BG 可能 accessibility に書き直す)
+        KeychainService.migrateAccessibility()
         // animated_cache 上限 500MB、超えてたら LRU eviction
         Task.detached(priority: .utility) {
             WebPToMP4Converter.enforceCacheCap()
