@@ -36,18 +36,49 @@ enum KeychainService: Sendable {
         #else
         guard let data = value.data(using: .utf8) else { return }
         let query: [String: Any] = baseQuery(key: key)
-        let update: [String: Any] = [kSecValueData as String: data]
+        // accessibility = AfterFirstUnlockThisDeviceOnly:
+        // 初回アンロック後はデバイスロック中でも access 可。BG DL (ロック画面中
+        // でも Keychain 読む経路) が kSecAttrAccessibleWhenUnlocked デフォルトで
+        // nil 返しになる問題を回避。ThisDeviceOnly で iCloud Keychain 同期も除外。
+        let update: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ]
         let status = SecItemUpdate(query as CFDictionary, update as CFDictionary)
         if status == errSecItemNotFound {
             var newItem = query
             newItem[kSecValueData as String] = data
+            newItem[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
             SecItemAdd(newItem as CFDictionary, nil)
         } else if status != errSecSuccess {
             SecItemDelete(query as CFDictionary)
             var newItem = query
             newItem[kSecValueData as String] = data
+            newItem[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
             SecItemAdd(newItem as CFDictionary, nil)
         }
+        #endif
+    }
+
+    /// 起動時 migration: 旧 kSecAttrAccessibleWhenUnlocked で保存された既存アイテムを
+    /// 新 kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly に書き直す。
+    /// BG DL (ロック中) で Keychain nil 返しになる問題の根本解消。
+    /// 失敗時 (load nil) はそのアイテムだけスキップ = 該当 cookie が無いだけなので
+    /// 通常ログインフローで上書きされる (再ログインで自然解決)。
+    /// 完了フラグは UserDefaults に残して二度目実行を防ぐ。
+    nonisolated static func migrateAccessibility() {
+        #if !targetEnvironment(macCatalyst)
+        let migratedKey = "keychain.accessibility.migrated.v1"
+        if UserDefaults.standard.bool(forKey: migratedKey) { return }
+        var migratedCount = 0
+        for key in ["ipb_member_id", "ipb_pass_hash", "igneous"] {
+            guard let value = load(key: key) else { continue }
+            delete(key: key)
+            save(key: key, value: value)
+            migratedCount += 1
+        }
+        UserDefaults.standard.set(true, forKey: migratedKey)
+        LogManager.shared.log("Keychain", "accessibility migration complete: \(migratedCount) items")
         #endif
     }
 
