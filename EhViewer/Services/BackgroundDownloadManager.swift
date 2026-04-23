@@ -243,13 +243,29 @@ final class BackgroundDownloadManager: NSObject {
             self, selector: #selector(handleDidEnterBackground),
             name: UIApplication.didEnterBackgroundNotification, object: nil
         )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleWillResignActive),
+            name: UIApplication.willResignActiveNotification, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleDidBecomeActive),
+            name: UIApplication.didBecomeActiveNotification, object: nil
+        )
         #endif
+    }
+
+    @objc private func handleWillResignActive() {
+        LogManager.shared.log("bgdl-phase", "willResignActive: preferBGSession=\(preferBGSession)")
+    }
+
+    @objc private func handleDidBecomeActive() {
+        LogManager.shared.log("bgdl-phase", "didBecomeActive: preferBGSession=\(preferBGSession)")
     }
 
     /// BG 入り後 30 秒経過で BG session に切替。短時間 app 切替では FG のまま継続。
     @objc private func handleDidEnterBackground() {
         guard !preferBGSession else { return }
-        LogManager.shared.log("bgdl", "scene → background, BG migration timer armed (30s)")
+        LogManager.shared.log("bgdl-phase", "didEnterBackground: armed 30s timer (preferBGSession was \(preferBGSession))")
         bgMigrationTimer?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + 30)
@@ -264,7 +280,9 @@ final class BackgroundDownloadManager: NSObject {
         guard !preferBGSession else { return }
         preferBGSession = true
         bgMigrationTimer = nil
+        LogManager.shared.log("bgdl-phase", "performBGMigration: preferBGSession false→true")
         LogManager.shared.log("bgdl", "BG migration: preferBGSession=true (FG in-flight → natural timeout → retry on BG)")
+        dumpBGSessionConfig()
         // 方針: FG の in-flight task は iOS suspend で自然 timeout する。
         // 明示的 cancel はしない (BAN cooldown リスク回避: 田中指示 #4)。
         // timeout 後 retry/reconcile が新しい preferBGSession=true 下で BG session に enqueue しなおす。
@@ -273,6 +291,7 @@ final class BackgroundDownloadManager: NSObject {
     private func performFGMigration() {
         guard preferBGSession else { return }
         preferBGSession = false
+        LogManager.shared.log("bgdl-phase", "performFGMigration: preferBGSession true→false")
         LogManager.shared.log("bgdl", "FG migration: cancelling BG in-flight → re-enqueue on FG")
         // BG session の in-flight を明示 cancel (低速だったので損失小 / 戻り速度優先)
         for session in [bgNhSession, bgEhSession] {
@@ -298,6 +317,44 @@ final class BackgroundDownloadManager: NSObject {
         for (taskId, reason) in killed {
             LogManager.shared.log("bgdl", "speed-kill taskId=\(taskId) \(reason)")
         }
+    }
+
+    /// BG 系 session の config / pending tasks をダンプ
+    func dumpBGSessionConfig() {
+        for (label, session) in [("htmlFetch", htmlFetchSession), ("bgEh", bgEhSession), ("bgNh", bgNhSession)] {
+            let c = session.configuration
+            LogManager.shared.log(
+                "bgdl-cfg",
+                "\(label) id=\(c.identifier ?? "?") cookieStorage=\(c.httpCookieStorage != nil ? "set" : "nil") shouldSetCookies=\(c.httpShouldSetCookies) discretionary=\(c.isDiscretionary) sendsLaunch=\(c.sessionSendsLaunchEvents) maxPerHost=\(c.httpMaximumConnectionsPerHost) waitsConn=\(c.waitsForConnectivity) reqTO=\(Int(c.timeoutIntervalForRequest))s resTO=\(Int(c.timeoutIntervalForResource))s"
+            )
+            session.getAllTasks { tasks in
+                let summary = tasks.map { t -> String in
+                    let state: String
+                    switch t.state {
+                    case .running: state = "running"
+                    case .suspended: state = "suspended"
+                    case .canceling: state = "canceling"
+                    case .completed: state = "completed"
+                    @unknown default: state = "unknown"
+                    }
+                    return "#\(t.taskIdentifier)[\(state) recv=\(t.countOfBytesReceived)/\(t.countOfBytesExpectedToReceive)]"
+                }.joined(separator: ", ")
+                LogManager.shared.log("bgdl-cfg", "\(label) tasks(\(tasks.count)): \(summary)")
+            }
+        }
+    }
+
+    /// BG session 完全リセット: 全 in-flight cancel + URLSession インスタンス破棄。
+    /// iOS に identifier キャッシュされた古い config を捨てて再生成する用途。
+    /// 注: identifier 自体は再利用するので、アプリ削除なしでは iOS 側 cache が残る場合あり。
+    func resetBGSessions() {
+        LogManager.shared.log("bgdl", "resetBGSessions: invalidating all BG sessions")
+        for session in [_htmlFetchSession, _bgEhSession, _bgNhSession].compactMap({ $0 }) {
+            session.invalidateAndCancel()
+        }
+        _htmlFetchSession = nil
+        _bgEhSession = nil
+        _bgNhSession = nil
     }
 
     /// 前回の session に残ってるタスクをキャンセル（FG / BG 両 session）
@@ -595,9 +652,20 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
     }
 
     private func handleSingleTaskFinished(taskId: Int, task: URLSessionDownloadTask, location: URL, finalPath: URL, continuation: CheckedContinuation<Bool, Never>) {
-        if let httpResp = task.response as? HTTPURLResponse,
-           !(200...299).contains(httpResp.statusCode) {
-            LogManager.shared.log("bgdl", "http \(httpResp.statusCode) single \(finalPath.lastPathComponent)")
+        let httpResp = task.response as? HTTPURLResponse
+        let statusCode = httpResp?.statusCode ?? 0
+        let contentType = httpResp?.value(forHTTPHeaderField: "Content-Type") ?? "?"
+        let contentLen = httpResp?.value(forHTTPHeaderField: "Content-Length") ?? "?"
+        let fileSize = (try? FileManager.default.attributesOfItem(atPath: location.path)[.size] as? Int) ?? 0
+        // body 先頭 200 文字 (notLoggedIn 判定に使う部分)
+        var bodyPreview = ""
+        if fileSize < 2048, let data = try? Data(contentsOf: location) {
+            bodyPreview = String(data: data.prefix(200), encoding: .utf8)?.replacingOccurrences(of: "\n", with: " ") ?? "<binary>"
+        }
+        LogManager.shared.log("bgdl-http", "task#\(taskId) http=\(statusCode) ct=\(contentType) len=\(contentLen) fileSize=\(fileSize)B body200=\(bodyPreview.prefix(200))")
+
+        if !(200...299).contains(statusCode) && statusCode != 0 {
+            LogManager.shared.log("bgdl", "http \(statusCode) single \(finalPath.lastPathComponent)")
             continuation.resume(returning: false)
             return
         }
@@ -744,12 +812,18 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
         guard let tag = sessionTag(for: session) else { return }
         let key = TaskKey(sessionTag: tag, taskId: taskId)
 
+        // 詳細エラー情報
+        let nsError = error as NSError
+        let urlTail = task.originalRequest?.url?.absoluteString.suffix(60) ?? "?"
+        let statusCode = (task.response as? HTTPURLResponse)?.statusCode ?? 0
+        let errDetail = "domain=\(nsError.domain) code=\(nsError.code) http=\(statusCode) recv=\(task.countOfBytesReceived)B url=...\(urlTail)"
+
         // Single task path
         let single: (URL, CheckedContinuation<Bool, Never>)? = stateQueue.sync {
             return singleTaskContinuations.removeValue(forKey: key)
         }
         if let single {
-            LogManager.shared.log("bgdl", "single task error taskId=\(taskId): \(error.localizedDescription)")
+            LogManager.shared.log("bgdl-err", "single task error taskId=\(taskId) tag=\(tag.rawValue) \(errDetail): \(error.localizedDescription)")
             single.1.resume(returning: false)
             return
         }
@@ -759,7 +833,7 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
             return registry.removeValue(forKey: key)
         }
         if let entry {
-            LogManager.shared.log("bgdl", "batch error gid=\(entry.gid) page=\(entry.pageIndex): \(error.localizedDescription)")
+            LogManager.shared.log("bgdl-err", "batch error gid=\(entry.gid) page=\(entry.pageIndex) tag=\(tag.rawValue) \(errDetail): \(error.localizedDescription)")
             emitCompletion(gid: entry.gid, pageIndex: entry.pageIndex, success: false, retriable: true)
         }
     }
