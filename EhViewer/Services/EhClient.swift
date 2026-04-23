@@ -250,6 +250,36 @@ final class EhClient: Sendable {
         var bgWaitCycles = 0
         var lastError: Error = EhError.parseFailed
         while true {
+            let isBackgrounded = await MainActor.run { UIApplication.shared.applicationState != .active }
+            // BG 中は FG session の fetchHTML が empty body になりがちなので、
+            // 最初から BG session 経由 (htmlFetchSession) で HTML を取得する
+            if isBackgrounded {
+                if let url = URL(string: urlString),
+                   let html = await BackgroundDownloadManager.shared.fetchHTMLViaBG(
+                    url: url,
+                    session: BackgroundDownloadManager.shared.htmlFetchSession,
+                    headers: [
+                        "User-Agent": Self.userAgent,
+                        "Cookie": Self.buildCookieHeader(for: host)
+                    ]
+                   ),
+                   !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return html
+                }
+                // BG session も失敗: foreground 復帰を最大 300 秒待つ
+                bgWaitCycles += 1
+                if bgWaitCycles > maxBgWaitCycles { break }
+                LogManager.shared.log("Download", "fetchHTML BG fetch failed (cycle \(bgWaitCycles)/\(maxBgWaitCycles)), waiting foreground url=\(urlString.suffix(60))")
+                var waited = 0
+                while waited < 300 {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    waited += 1
+                    let nowActive = await MainActor.run { UIApplication.shared.applicationState == .active }
+                    if nowActive { break }
+                }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                continue
+            }
             do {
                 return try await fetchHTML(urlString: urlString, host: host)
             } catch EhError.banned(let remaining) {
@@ -260,27 +290,11 @@ final class EhClient: Sendable {
                 throw EhError.invalidURL
             } catch {
                 lastError = error
-                let isBackgrounded = await MainActor.run { UIApplication.shared.applicationState != .active }
-                if isBackgrounded {
-                    bgWaitCycles += 1
-                    if bgWaitCycles > maxBgWaitCycles { break }
-                    LogManager.shared.log("Download", "fetchHTML backgrounded (cycle \(bgWaitCycles)/\(maxBgWaitCycles)), waiting foreground (err=\(error)) url=\(urlString.suffix(60))")
-                    var waited = 0
-                    while waited < 300 {
-                        try? await Task.sleep(nanoseconds: 1_000_000_000)
-                        waited += 1
-                        let nowActive = await MainActor.run { UIApplication.shared.applicationState == .active }
-                        if nowActive { break }
-                    }
-                    try? await Task.sleep(nanoseconds: 500_000_000)
-                    continue
-                } else {
-                    if fgRetries >= maxFgRetries { break }
-                    let backoffMs: UInt64 = UInt64(500 * (1 << fgRetries))
-                    LogManager.shared.log("Download", "fetchHTML retry \(fgRetries+1)/\(maxFgRetries) after \(backoffMs)ms (err=\(error)) url=\(urlString.suffix(60))")
-                    try? await Task.sleep(nanoseconds: backoffMs * 1_000_000)
-                    fgRetries += 1
-                }
+                if fgRetries >= maxFgRetries { break }
+                let backoffMs: UInt64 = UInt64(500 * (1 << fgRetries))
+                LogManager.shared.log("Download", "fetchHTML retry \(fgRetries+1)/\(maxFgRetries) after \(backoffMs)ms (err=\(error)) url=\(urlString.suffix(60))")
+                try? await Task.sleep(nanoseconds: backoffMs * 1_000_000)
+                fgRetries += 1
             }
         }
         throw lastError

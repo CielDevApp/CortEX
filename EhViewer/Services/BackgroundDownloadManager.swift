@@ -28,6 +28,10 @@ final class BackgroundDownloadManager: NSObject {
     private var preferBGSession: Bool = false
     private var bgMigrationTimer: DispatchSourceTimer?
 
+    /// 外部から scenePhase 状態を参照するための公開プロパティ
+    /// (DownloadManager の stream watchdog が閾値切替に使う)
+    var isPreferringBGSession: Bool { preferBGSession }
+
     /// 優先セッション（scene phase 反映）
     var nhSession: URLSession { preferBGSession ? bgNhSession : fgNhSession }
     var ehSession: URLSession { preferBGSession ? bgEhSession : fgEhSession }
@@ -308,11 +312,28 @@ final class BackgroundDownloadManager: NSObject {
 
     // MARK: - Single-task API (互換性用)
 
+    /// BG session 向け Cookie ヘッダを明示構築（httpCookieStorage=.shared だけでは
+    /// iOS 背景化中に cookie が送られない現象の回避策）
+    /// HTTPCookieStorage.shared から URL のドメインに合致する cookie を取り出して
+    /// `Cookie: k=v; k2=v2; ...` 形式で手動注入する
+    private func manualCookieHeader(for url: URL) -> String? {
+        guard let cookies = HTTPCookieStorage.shared.cookies(for: url), !cookies.isEmpty else {
+            return nil
+        }
+        return cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+    }
+
     /// 単発DL: URL1つをfinalPathに保存（従来互換API）
     func downloadToFile(url: URL, session: URLSession, finalPath: URL, headers: [String: String] = [:]) async -> Bool {
         await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             var request = URLRequest(url: url)
             for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
+            // BG session は httpCookieStorage=.shared 設定済みでも cookie 送信が iOS に
+            // 絞られることがあるため、Cookie ヘッダを明示注入する
+            if request.value(forHTTPHeaderField: "Cookie") == nil,
+               let cookie = manualCookieHeader(for: url) {
+                request.setValue(cookie, forHTTPHeaderField: "Cookie")
+            }
             let task = session.downloadTask(with: request)
             let tag = sessionTag(for: session) ?? .fgEh
             let key = TaskKey(sessionTag: tag, taskId: task.taskIdentifier)
@@ -360,6 +381,11 @@ final class BackgroundDownloadManager: NSObject {
     func enqueue(url: URL, gid: Int, pageIndex: Int, finalPath: URL, session: URLSession, headers: [String: String] = [:]) {
         var request = URLRequest(url: url)
         for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
+        // BG session 向け Cookie 明示注入 (downloadToFile と同じ理由)
+        if request.value(forHTTPHeaderField: "Cookie") == nil,
+           let cookie = manualCookieHeader(for: url) {
+            request.setValue(cookie, forHTTPHeaderField: "Cookie")
+        }
         let task = session.downloadTask(with: request)
         let tag = sessionTag(for: session) ?? .fgEh
         let key = TaskKey(sessionTag: tag, taskId: task.taskIdentifier)
