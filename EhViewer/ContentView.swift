@@ -725,38 +725,39 @@ struct CatalystTabBar: View {
     var body: some View {
         HStack(spacing: 4) {
             ForEach(tabs, id: \.tag) { tab in
-                Button {
-                    selection = tab.tag
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: tab.icon)
-                            .font(.system(size: 12))
-                        Text(tab.title)
-                            .font(.system(size: 13))
-                            .lineLimit(1)
-                        if tab.tag == 3 && activeDownloadCount > 0 {
-                            Text("\(activeDownloadCount)")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(Color.red, in: Capsule())
-                        }
+                HStack(spacing: 6) {
+                    Image(systemName: tab.icon)
+                        .font(.system(size: 12))
+                    Text(tab.title)
+                        .font(.system(size: 13))
+                        .lineLimit(1)
+                    if tab.tag == 3 && activeDownloadCount > 0 {
+                        Text("\(activeDownloadCount)")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color.red, in: Capsule())
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .frame(maxWidth: .infinity)
-                    .background(
-                        selection == tab.tag
-                            ? Color.accentColor.opacity(0.15)
-                            : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 6)
-                    )
-                    .foregroundStyle(
-                        selection == tab.tag ? Color.accentColor : Color.primary
-                    )
                 }
-                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity)
+                .foregroundStyle(
+                    selection == tab.tag ? Color.accentColor : Color.primary
+                )
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(
+                            selection == tab.tag
+                                ? Color.accentColor.opacity(0.15)
+                                : Color.black.opacity(0.0001)
+                        )
+                )
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    selection = tab.tag
+                }
             }
         }
         .padding(.horizontal, 10)
