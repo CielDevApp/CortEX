@@ -86,22 +86,32 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 
 ## 系统要求
 - iOS 18.0+ / iPadOS 18.0+（iOS 26 / iPadOS 26 已测试）
-- iPhone / iPad（支持iPad双页模式）
+- macOS 14.0+（Mac Catalyst，Apple Silicon / Intel 均可）
+- iPhone / iPad（支持iPad双页模式）/ Mac
 
 ## 安装
 
-### 从源码构建
+### iOS / iPadOS — 从源码构建
 1. 克隆：`git clone https://github.com/CielDevApp/CortEX.git`
 2. 用 Xcode 16+ 打开 `EhViewer.xcodeproj`
 3. 在 Signing & Capabilities 中选择你的Team
 4. 将 Bundle Identifier 改为唯一值（如 `com.yourname.cortex`）
 5. 连接设备，点击 Run
 
-### 免电脑安装
+### iOS / iPadOS — 免电脑安装
 1. 从 [Releases](https://github.com/CielDevApp/CortEX/releases) 下载IPA
 2. 通过 AltStore、Sideloadly 或 TrollStore 安装
 
 > 注意：免费Apple开发者账号有7天签名限制。建议使用AltStore自动续签。
+
+### Mac（Catalyst版）
+1. 克隆：`git clone https://github.com/CielDevApp/CortEX.git`
+2. 用 Xcode 16+ 打开 `EhViewer.xcodeproj`
+3. Scheme = `EhViewer`，Destination = `My Mac (Mac Catalyst)`
+4. 在 Signing & Capabilities 中选择你的Team，并修改 Bundle Identifier
+5. Product → Run 启动，或 Product → Archive 导出 `.app` 后拖入 `/Applications`
+   - 命令行：`xcodebuild -project EhViewer.xcodeproj -scheme EhViewer -destination 'platform=macOS,variant=Mac Catalyst' build`
+6. Mac 版顶部配备独立 7 标签栏（画廊 / 收藏 / 抽卡 / 已保存 / 历史 / 角色管理 / 设置），无论窗口宽度始终横向排列
 
 ## 技术栈
 - Swift / SwiftUI

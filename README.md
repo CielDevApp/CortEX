@@ -90,22 +90,32 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 
 ## Requirements
 - iOS 18.0+ / iPadOS 18.0+ (iOS 26 / iPadOS 26 tested)
-- iPhone / iPad (iPad spread mode supported)
+- macOS 14.0+ (Mac Catalyst, Apple Silicon / Intel)
+- iPhone / iPad (iPad spread mode supported) / Mac
 
 ## Installation
 
-### Build from Source
+### iOS / iPadOS — Build from Source
 1. Clone: `git clone https://github.com/CielDevApp/CortEX.git`
 2. Open `EhViewer.xcodeproj` in Xcode 16+
 3. Select your Team in Signing & Capabilities
 4. Change Bundle Identifier to something unique (e.g. `com.yourname.cortex`)
 5. Connect your device and hit Run
 
-### Sideload (no Mac)
+### iOS / iPadOS — Sideload (no Mac)
 1. Download the IPA from [Releases](https://github.com/CielDevApp/CortEX/releases)
 2. Install via AltStore, Sideloadly, or TrollStore
 
 > Note: Free Apple Developer accounts have a 7-day signing limit. Use AltStore for auto-refresh.
+
+### Mac (Catalyst)
+1. Clone: `git clone https://github.com/CielDevApp/CortEX.git`
+2. Open `EhViewer.xcodeproj` in Xcode 16+
+3. Scheme = `EhViewer`, Destination = `My Mac (Mac Catalyst)`
+4. Select your Team in Signing & Capabilities and change the Bundle Identifier
+5. Product → Run to launch, or Product → Archive to export a `.app` and drop it into `/Applications`
+   - CLI: `xcodebuild -project EhViewer.xcodeproj -scheme EhViewer -destination 'platform=macOS,variant=Mac Catalyst' build`
+6. The Mac build ships a custom 7-tab bar (Gallery / Favorites / Gacha / Downloads / History / Character / Settings) that stays horizontal at all window widths
 
 ## Built With
 - Swift / SwiftUI

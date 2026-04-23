@@ -86,22 +86,32 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 
 ## 動作環境
 - iOS 18.0+ / iPadOS 18.0+（iOS 26 / iPadOS 26 テスト済み）
-- iPhone / iPad（iPad見開きモード対応）
+- macOS 14.0+（Mac Catalyst、Apple Silicon / Intel 両対応）
+- iPhone / iPad（iPad見開きモード対応）/ Mac
 
 ## インストール
 
-### ソースからビルド
+### iOS / iPadOS — ソースからビルド
 1. クローン：`git clone https://github.com/CielDevApp/CortEX.git`
 2. Xcode 16+ で `EhViewer.xcodeproj` を開く
 3. Signing & Capabilities で自分のTeamを選択
 4. Bundle Identifierを変更（例：`com.yourname.cortex`）
 5. 実機を接続して Run
 
-### サイドロード（Macなし）
+### iOS / iPadOS — サイドロード（Macなし）
 1. [Releases](https://github.com/CielDevApp/CortEX/releases) からIPAをダウンロード
 2. AltStore、Sideloadly、TrollStore でインストール
 
 > 注意：無料Apple Developer アカウントは7日間の署名制限があります。AltStoreで自動更新をお勧めします。
+
+### Mac（Catalyst版）
+1. クローン：`git clone https://github.com/CielDevApp/CortEX.git`
+2. Xcode 16+ で `EhViewer.xcodeproj` を開く
+3. Scheme = `EhViewer`、Destination = `My Mac (Mac Catalyst)`
+4. Signing & Capabilities で自分のTeamを選択、Bundle Identifier を変更
+5. Product → Run で起動、または Product → Archive で `.app` を書き出し `/Applications` に配置
+   - コマンドライン派は `xcodebuild -project EhViewer.xcodeproj -scheme EhViewer -destination 'platform=macOS,variant=Mac Catalyst' build`
+6. Mac 版は上部に独自 7 タブバー（ギャラリー / お気に入り / ガチャ / 保存済み / 履歴 / お気に入りキャラクター管理 / 設定）を常時横並び表示
 
 ## 開発
 - Swift / SwiftUI
