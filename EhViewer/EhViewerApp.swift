@@ -176,6 +176,10 @@ struct EhViewerApp: App {
         ImageCache.shared.cleanupOnLaunch()
         GalleryExporter.cleanupOldExportFiles()
         cleanupGalleryWebPTmp()
+        // animated_cache 上限 500MB、超えてたら LRU eviction
+        Task.detached(priority: .utility) {
+            WebPToMP4Converter.enforceCacheCap()
+        }
         print("[CoreML] modelAvailable: \(CoreMLImageProcessor.shared.modelAvailable)")
 
         // DEBUG: iPad sim から吸い出した cookie を Keychain に一度だけ注入
@@ -242,17 +246,27 @@ struct EhViewerApp: App {
     }
 }
 
-/// GalleryAnimatedWebPView が tmp 書き出した gallery_webp_* を起動時に一括削除。
-/// onDisappear で削除される想定だが、クラッシュや強制終了の場合の保険。
+/// 起動時の tmp/ 掃除: クラッシュ / 強制終了で残る一時ファイルを一括削除。
+/// 対象:
+/// - `gallery_webp_*` (GalleryAnimatedWebPView が書き出した onDisappear 漏れ)
+/// - `CFNetworkDownload_*.tmp` (URLSession downloadTask の未完了テンポラリ、アプリ強制終了時リーク)
+/// - `CoordinatedZipFile*` (.cortex export 進行中のステージングフォルダ、共有シート未完了で残存)
+/// - `bg-html-*.tmp` (BackgroundDownloadManager の BG HTML fetch テンポラリ)
 @MainActor
 private func cleanupGalleryWebPTmp() {
     let tmp = FileManager.default.temporaryDirectory
     guard let items = try? FileManager.default.contentsOfDirectory(
-        at: tmp, includingPropertiesForKeys: [.fileSizeKey]
+        at: tmp, includingPropertiesForKeys: [.fileSizeKey, .isDirectoryKey]
     ) else { return }
     var removed = 0
     var freed: Int64 = 0
-    for url in items where url.lastPathComponent.hasPrefix("gallery_webp_") {
+    for url in items {
+        let name = url.lastPathComponent
+        let matches = name.hasPrefix("gallery_webp_")
+            || name.hasPrefix("CFNetworkDownload_")
+            || name.hasPrefix("CoordinatedZipFile")
+            || name.hasPrefix("bg-html-")
+        guard matches else { continue }
         let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         if (try? FileManager.default.removeItem(at: url)) != nil {
             removed += 1
@@ -260,6 +274,6 @@ private func cleanupGalleryWebPTmp() {
         }
     }
     if removed > 0 {
-        LogManager.shared.log("App", "cleanup gallery_webp tmp: \(removed) files, \(freed / 1024 / 1024)MB")
+        LogManager.shared.log("App", "cleanup tmp: \(removed) items, \(freed / 1024 / 1024)MB")
     }
 }
