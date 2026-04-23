@@ -607,16 +607,25 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
                     finishStream(for: entry.gid)
                     return
                 }
-                // 画像を期待して HTML が返ってきた（text/html Content-Type）→ redirect 扱い、即停止
+                // 画像を期待して HTML が返ってきたケースの扱い:
+                // - 200/302 + text/html → home.php 等へのリダイレクト（quota 超過）= 真の BAN、HALT
+                // - 403 + text/html → Hath ノードが該当 fileindex を配れない等、ミラー再試行で回避可、retriable
+                // - その他 4xx/5xx + text/html → とりあえず retriable (2ndpass で mirror fallback)
                 if let ct = httpResp.value(forHTTPHeaderField: "Content-Type"),
                    ct.lowercased().hasPrefix("text/html") {
-                    stateQueue.sync { _ = rateLimitTripped.insert(entry.gid) }
-                    LogManager.shared.log("bgdl-err", "HTML redirect at page \(entry.pageIndex + 1) gid=\(entry.gid) status=\(httpResp.statusCode) — HALTING")
-                    retriable = false
-                    emitCompletion(gid: entry.gid, pageIndex: entry.pageIndex, success: false, retriable: false)
-                    cancelAllTasks(for: entry.gid, session: session)
-                    finishStream(for: entry.gid)
-                    return
+                    let isQuotaRedirect = httpResp.statusCode == 200 || httpResp.statusCode == 302
+                    if isQuotaRedirect {
+                        stateQueue.sync { _ = rateLimitTripped.insert(entry.gid) }
+                        LogManager.shared.log("bgdl-err", "HTML redirect at page \(entry.pageIndex + 1) gid=\(entry.gid) status=\(httpResp.statusCode) — HALTING")
+                        retriable = false
+                        emitCompletion(gid: entry.gid, pageIndex: entry.pageIndex, success: false, retriable: false)
+                        cancelAllTasks(for: entry.gid, session: session)
+                        finishStream(for: entry.gid)
+                        return
+                    }
+                    // 非リダイレクト系 HTML 応答: 単発 Hath ノード障害の可能性が高い → retry ルートへ
+                    LogManager.shared.log("bgdl", "html body at page \(entry.pageIndex + 1) gid=\(entry.gid) status=\(httpResp.statusCode) — retriable (mirror fallback)")
+                    retriable = true
                 }
             } else {
                 do {
