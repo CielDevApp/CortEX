@@ -476,9 +476,11 @@ final class BackgroundDownloadManager: NSObject {
         let html = String(data: data, encoding: .utf8)
             ?? String(data: data, encoding: .shiftJIS)
             ?? String(data: data, encoding: .ascii)
-        // 成功時は連続失敗カウンタ + events done カウンタをリセット
+        // 成功時は連続失敗カウンタのみリセット。
+        // events done カウンタは session の suspend/resume サイクル自体を測るので
+        // fetch 単位の成否とは独立して保持する (fetch 間に events done が何度
+        // 起きたかが stall 判定に必要)。
         bgFetchConsecutiveFailures = 0
-        finishEventsConsecutiveCount = 0
         LogManager.shared.log("bgdl", "fetchHTMLViaBG ok=\(data.count)B html=\(html?.count ?? 0)chars url=\(url.absoluteString.suffix(70))")
         return html
     }
