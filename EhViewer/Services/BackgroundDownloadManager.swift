@@ -188,6 +188,17 @@ final class BackgroundDownloadManager: NSObject {
     /// アプリ復帰時にシステムから受け取るcompletionHandler
     var systemCompletionHandlers: [String: () -> Void] = [:]
 
+    /// session events done が連続発火した回数（session suspend 検知用）
+    /// 2 回以上連続 = iOS が繰り返し session を一時停止している signal
+    private var finishEventsConsecutiveCount: Int = 0
+    private var lastFinishEventsAt: CFAbsoluteTime = 0
+
+    /// fetchHTMLViaBG の連続失敗回数 (session stall 検出用)
+    private var bgFetchConsecutiveFailures: Int = 0
+
+    /// session 再生成の最小間隔 (30秒、過剰再生成防止)
+    private var lastBGSessionRecreateAt: CFAbsoluteTime = 0
+
     /// レート制限検知で DL 強制停止された gid（509 GIF / HTTP 509 / HTML レスポンス）
     /// DownloadManager 側の URL 解決ループが毎回 isRateLimited を見て break 判断する
     private var rateLimitTripped: Set<Int> = []
@@ -357,6 +368,32 @@ final class BackgroundDownloadManager: NSObject {
         _bgNhSession = nil
     }
 
+    /// Phase 2A: iOS が BG session を suspend したと検知した時に htmlFetchSession のみ
+    /// 再生成する。session 内 in-flight task は cancel されるが、呼び出し元の
+    /// fetchHTMLViaBG は nil を返して 2ndpass 経路で再試行される。
+    /// 最小間隔 30 秒 (過剰再生成防止)。
+    func recreateBGSessionIfStalled(reason: String) {
+        let now = CFAbsoluteTimeGetCurrent()
+        guard now - lastBGSessionRecreateAt > 30 else {
+            LogManager.shared.log("bgdl-recreate", "skip: last recreate \(Int(now - lastBGSessionRecreateAt))s ago")
+            return
+        }
+        lastBGSessionRecreateAt = now
+        bgFetchConsecutiveFailures = 0
+        finishEventsConsecutiveCount = 0
+
+        // in-flight task 数をログ (stall 期間中の被影響範囲把握用)
+        if let s = _htmlFetchSession {
+            s.getAllTasks { tasks in
+                let stalledCount = tasks.filter { $0.countOfBytesReceived == 0 && $0.state == .running }.count
+                LogManager.shared.log("bgdl-recreate", "htmlFetch stall: \(reason) in-flight=\(tasks.count) stalled=\(stalledCount)")
+            }
+            s.invalidateAndCancel()
+        }
+        _htmlFetchSession = nil
+        LogManager.shared.log("bgdl-recreate", "htmlFetchSession invalidated, will recreate on next access")
+    }
+
     /// 前回の session に残ってるタスクをキャンセル（FG / BG 両 session）
     private func cleanupStaleTasks() async {
         for session in [fgNhSession, fgEhSession, bgNhSession, bgEhSession] {
@@ -415,12 +452,21 @@ final class BackgroundDownloadManager: NSObject {
     /// 用途: DL 中の URL 解決 (fetchImageURL) を suspend 中も継続させるため。
     /// 失敗時は nil 返し、呼び出し側で fallback 判断。
     func fetchHTMLViaBG(url: URL, session: URLSession, headers: [String: String] = [:]) async -> String? {
+        // Phase 2A: session が invalidate されていたら fresh な session を取得して使う
+        let effectiveSession = (session === _htmlFetchSession || sessionTag(for: session) == .htmlFetch)
+            ? htmlFetchSession  // getter が nil なら自動再生成
+            : session
         let tmpDir = FileManager.default.temporaryDirectory
         let tmpURL = tmpDir.appendingPathComponent("bg-html-\(UUID().uuidString).tmp")
-        let ok = await downloadToFile(url: url, session: session, finalPath: tmpURL, headers: headers)
+        let ok = await downloadToFile(url: url, session: effectiveSession, finalPath: tmpURL, headers: headers)
         defer { try? FileManager.default.removeItem(at: tmpURL) }
         guard ok else {
             LogManager.shared.log("bgdl", "fetchHTMLViaBG downloadToFile FAILED url=\(url.absoluteString.suffix(70))")
+            // Phase 2A: 連続失敗 5 回で session 再生成トリガー
+            bgFetchConsecutiveFailures += 1
+            if bgFetchConsecutiveFailures >= 5 && preferBGSession {
+                recreateBGSessionIfStalled(reason: "fetchHTMLViaBG consecutive fail=\(bgFetchConsecutiveFailures)")
+            }
             return nil
         }
         guard let data = try? Data(contentsOf: tmpURL) else {
@@ -430,6 +476,9 @@ final class BackgroundDownloadManager: NSObject {
         let html = String(data: data, encoding: .utf8)
             ?? String(data: data, encoding: .shiftJIS)
             ?? String(data: data, encoding: .ascii)
+        // 成功時は連続失敗カウンタ + events done カウンタをリセット
+        bgFetchConsecutiveFailures = 0
+        finishEventsConsecutiveCount = 0
         LogManager.shared.log("bgdl", "fetchHTMLViaBG ok=\(data.count)B html=\(html?.count ?? 0)chars url=\(url.absoluteString.suffix(70))")
         return html
     }
@@ -845,6 +894,21 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
             handler?()
         }
         LogManager.shared.log("bgdl", "session events done: \(identifier)")
+
+        // Phase 2A: htmlFetch session の events done が連続 2 回発火 → session suspend 判定
+        // → 再生成トリガー (fetchHTMLViaBG の繰り返し timeout 防止)
+        if identifier == Self.htmlFetchSessionId && preferBGSession {
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - lastFinishEventsAt < 120 {
+                finishEventsConsecutiveCount += 1
+            } else {
+                finishEventsConsecutiveCount = 1
+            }
+            lastFinishEventsAt = now
+            if finishEventsConsecutiveCount >= 2 {
+                recreateBGSessionIfStalled(reason: "events done consecutive=\(finishEventsConsecutiveCount)")
+            }
+        }
     }
 }
 
