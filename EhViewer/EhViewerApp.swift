@@ -156,6 +156,13 @@ struct EhViewerApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
+        // Phase 2C: BGProcessingTask handler 登録。
+        // Apple 仕様で SceneDelegate / AppDelegate lifecycle 完了前に register 必須。
+        // Info.plist の BGTaskSchedulerPermittedIdentifiers に同一 id 登録済み前提。
+        #if canImport(BackgroundTasks) && !targetEnvironment(macCatalyst)
+        BackgroundDownloadManager.registerBGProcessingHandler()
+        #endif
+
         // 既存ユーザーのdownloadQualityModeを0→2に移行（register前に実行）
         if !UserDefaults.standard.bool(forKey: "dlQualityMigrated2") {
             // 明示的に保存された値がなければ2をセット、0なら2に上書き

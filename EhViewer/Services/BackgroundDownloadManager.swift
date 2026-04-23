@@ -2,6 +2,9 @@ import Foundation
 #if canImport(UIKit)
 import UIKit
 #endif
+#if canImport(BackgroundTasks) && !targetEnvironment(macCatalyst)
+import BackgroundTasks
+#endif
 
 /// バックグラウンドでもダウンロードが継続する URLSessionDownloadTask 管理
 /// 一括enqueue方式: 全タスクを事前投入 → iOSが suspended中も処理 → delegate で完了通知
@@ -13,6 +16,11 @@ final class BackgroundDownloadManager: NSObject {
     static let bgNhSessionId = "com.kanayayuutou.CortEX.nhdl.bg"
     static let bgEhSessionId = "com.kanayayuutou.CortEX.ehdl.bg"
     static let htmlFetchSessionId = "com.kanayayuutou.CortEX.htmlfetch"
+
+    /// Phase 2C: BGProcessingTask identifier。Info.plist の
+    /// BGTaskSchedulerPermittedIdentifiers に同じ文字列を登録必須。
+    /// iOS がロック中 idle 時に OS 裁量で wake → handle 発火。
+    static let bgProcessingTaskId = "com.kanayayuutou.CortEX.bgdl.processing"
 
     private var _fgNhSession: URLSession?
     private var _fgEhSession: URLSession?
@@ -241,6 +249,10 @@ final class BackgroundDownloadManager: NSObject {
     /// FG 復帰時 reconcile が scan でカバーするので通常は冗長だが、ログで可視化する。
     private var droppedPagesByGid: [Int: Set<Int>] = [:]
 
+    /// Phase 2C: BGProcessingTask 状態 (#if の外に置く必要があるので extension には入れない)
+    private let bgTaskLock = NSLock()
+    private var bgTaskInFlight: Bool = false
+
     private override init() {
         super.init()
         // 起動時に前回の残骸 task をクリーンアップ
@@ -308,6 +320,11 @@ final class BackgroundDownloadManager: NSObject {
         // 方針: FG の in-flight task は iOS suspend で自然 timeout する。
         // 明示的 cancel はしない (BAN cooldown リスク回避: 田中指示 #4)。
         // timeout 後 retry/reconcile が新しい preferBGSession=true 下で BG session に enqueue しなおす。
+        #if canImport(BackgroundTasks) && !targetEnvironment(macCatalyst)
+        // Phase 2C: BG migration = 長時間 BG 確定 signal → BGProcessingTask schedule。
+        // iOS が idle 時に wake してくれる → ロック中も DL 継続経路が開く。
+        scheduleBGProcessingTask(reason: "BG migration")
+        #endif
     }
 
     private func performFGMigration() {
@@ -883,6 +900,102 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
     func clearDroppedTracking(gid: Int) {
         stateQueue.sync { droppedPagesByGid.removeValue(forKey: gid) }
     }
+
+    // MARK: - Phase 2C: BGProcessingTask
+
+    #if canImport(BackgroundTasks) && !targetEnvironment(macCatalyst)
+    /// BGProcessingTask は identifier 単位に 1 つの pending request のみ保持可能。
+    /// 連鎖 schedule で何度も wake させる設計だが、重複 submit は invalidRequest となるので
+    /// 前回の pending を cancel → 新規 submit の順序を守る。
+
+    /// EhViewerApp.init で 1 回だけ呼ぶ handler 登録。iOS が wake したら handle が呼ばれる。
+    /// register は AppLaunch 完了前に呼ぶ必要がある (Apple 仕様)。
+    static func registerBGProcessingHandler() {
+        BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: bgProcessingTaskId,
+            using: nil
+        ) { task in
+            guard let processingTask = task as? BGProcessingTask else {
+                task.setTaskCompleted(success: false)
+                return
+            }
+            BackgroundDownloadManager.shared.handleBGProcessingTask(processingTask)
+        }
+        LogManager.shared.log("bgdl-c", "BGProcessingTask handler registered id=\(bgProcessingTaskId)")
+    }
+
+    /// DL 開始時 / BG migration 時に呼ぶ。iOS に「idle 時に wake してくれ」と要求。
+    /// earliestBeginDate=nil: 即時候補。requiresNetworkConnectivity=true: 電波なしでは wake しない。
+    /// requiresExternalPower=false: バッテリ駆動でも wake 可 (ユーザ利便優先)。
+    func scheduleBGProcessingTask(reason: String) {
+        let hasActive = stateQueue.sync { !gidStreams.isEmpty }
+        guard hasActive else {
+            LogManager.shared.log("bgdl-c", "scheduleBGProcessingTask skipped (no active DL): reason=\(reason)")
+            return
+        }
+        // 前回の pending があれば cancel (重複 submit を回避)
+        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: Self.bgProcessingTaskId)
+        let request = BGProcessingTaskRequest(identifier: Self.bgProcessingTaskId)
+        request.requiresNetworkConnectivity = true
+        request.requiresExternalPower = false
+        request.earliestBeginDate = nil
+        do {
+            try BGTaskScheduler.shared.submit(request)
+            LogManager.shared.log("bgdl-c", "BGProcessingTask submitted reason=\(reason)")
+        } catch {
+            LogManager.shared.log("bgdl-c", "BGProcessingTask submit FAILED reason=\(reason) error=\(error.localizedDescription)")
+        }
+    }
+
+    /// iOS が wake して呼ぶ。BG session は並行で既に動いてるので、ここでは
+    /// 追加的な進捗加速 + 再 schedule のみ行う。具体的には:
+    /// - 未完 gid に対して DownloadManager 経由で reconcile 発火 (disk scan)
+    /// - 連鎖 schedule: 次の wake を確保
+    /// - expiration までに setTaskCompleted 必須 (さもないと iOS が以後 wake しなくなる)
+    func handleBGProcessingTask(_ task: BGProcessingTask) {
+        bgTaskLock.lock()
+        bgTaskInFlight = true
+        bgTaskLock.unlock()
+
+        let activeGids = stateQueue.sync { Array(gidStreams.keys) }
+        LogManager.shared.log("bgdl-c", "BGProcessingTask handle FIRED activeGids=\(activeGids)")
+
+        // 次回 wake を先に schedule (handle 内で失敗しても次回保証)
+        scheduleBGProcessingTask(reason: "chain from handle")
+
+        // expiration: iOS が 「時間切れ、畳め」 と通知。BG session 自体は別生命なので継続。
+        // ここで setTaskCompleted(false) しないと次回以降 wake されなくなる罠。
+        task.expirationHandler = { [weak self] in
+            LogManager.shared.log("bgdl-c", "BGProcessingTask EXPIRED activeGids=\(activeGids)")
+            self?.bgTaskLock.lock()
+            self?.bgTaskInFlight = false
+            self?.bgTaskLock.unlock()
+            task.setTaskCompleted(success: false)
+        }
+
+        // 実際の加速処理: disk scan → 未完分の hint 発火 → DownloadManager 側で updateProgress/LA
+        // BG session の delegate は別途走ってるので、ここは補助的な位置づけ。
+        for gid in activeGids {
+            onGidProgressHint?(gid)
+        }
+
+        // iOS BGProcessingTask は最大 数分の CPU 時間を提供。
+        // その間 URLSession.background の delegate が並行で動き、DL が進む。
+        // 明示的に待機時間を設けるより、少し時間を置いてから setTaskCompleted する。
+        // dispatch with 延期: 60 秒後に完了宣言 → iOS は残りの時間を別 task に回せる。
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 60) { [weak self] in
+            guard let self = self else { return }
+            self.bgTaskLock.lock()
+            let stillInFlight = self.bgTaskInFlight
+            self.bgTaskInFlight = false
+            self.bgTaskLock.unlock()
+            guard stillInFlight else { return }  // expiration 経由で既に完了済み
+            let remaining = self.stateQueue.sync { Array(self.gidStreams.keys) }
+            LogManager.shared.log("bgdl-c", "BGProcessingTask handle 60s window END activeGids=\(remaining)")
+            task.setTaskCompleted(success: true)
+        }
+    }
+    #endif
 
     /// Phase 2B: DROPPED した page 数を取得 (ログ/診断用)
     func droppedCount(gid: Int) -> Int {
