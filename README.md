@@ -88,6 +88,39 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 
 ---
 
+## Architecture
+
+Single codebase running on iPhone / iPad / Mac. Built entirely on 20 native Apple frameworks with zero external library dependencies.
+
+**9-Layer Stack:**
+
+| # | Layer | Contents |
+|---|---|---|
+| 01 | PRESENTATION | 4-mode reader (vertical scroll / horizontal paging / iPad spread / pinch-zoom) |
+| 02 | MODES | SAFETY (default) / EXTREME / ECO / SPARE tiers |
+| 03 | INGESTION | E-Hentai / EXhentai dynamic switch, nhentai v2 API with Cloudflare Turnstile bypass |
+| 04 | TRANSPORT | BackgroundDownloadManager, URLSession background DL, 6-path BAN containment, 2ndpass concurrency 5 |
+| 05 | COMPUTE | Three image pipelines (CIFilter / Metal Compute / CoreML Real-ESRGAN) |
+| 06 | MEDIA | Animated WebP / HEVC conversion, HDR enhancement, VideoToolbox hardware encoding |
+| 07 | SILICON | Full CPU / GPU (Metal) / NPU (CoreML) / Media Engine utilization across iPhone A17 Pro / iPad A17 Pro / Mac M1–M4 |
+| 08 | TRUST | Face ID / Touch ID / PIN / Keychain / App Switcher blur |
+| 09 | PLATFORM | iOS 18+ / iPadOS 18+ / macOS 14+ Mac Catalyst, 8-language localization |
+
+**SAFETY MODE features:**
+- 6-path BAN detection and containment
+- Automatic 50-page / 60-second cooldown
+- 2ndpass concurrency 5 for automatic page recovery
+- Parallelism preserved — no speed sacrifice
+- `disk prefix skip` + `reconcileGallery`
+
+**Build facts:**
+- 77 Swift files / ~20,000 lines
+- External library dependencies: 0
+- Apple native frameworks: 20
+- Supports iOS 18+ / iPadOS 18+ / macOS 14+
+
+---
+
 ## Requirements
 - iOS 18.0+ / iPadOS 18.0+ (iOS 26 / iPadOS 26 tested)
 - macOS 14.0+ (Mac Catalyst, Apple Silicon / Intel)
