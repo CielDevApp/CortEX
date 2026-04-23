@@ -6,6 +6,10 @@
 	<true/>
 	<key>UIFileSharingEnabled</key>
 	<true/>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.kanayayuutou.CortEX.bgdl.processing</string>
+	</array>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
