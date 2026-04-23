@@ -103,12 +103,19 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 5. Connect your device and hit Run
 
 ### iOS / iPadOS — Sideload (no Mac)
-1. Download the IPA from [Releases](https://github.com/CielDevApp/CortEX/releases)
+1. Grab `EhViewer-<version>.ipa` from [Releases](https://github.com/CielDevApp/CortEX/releases/latest)
 2. Install via AltStore, Sideloadly, or TrollStore
+   - AltStore / Sideloadly re-sign with your Personal Team on import, so the shipped signature is stripped — any recent IPA works.
+   - TrollStore installs as-is (no re-sign needed).
 
-> Note: Free Apple Developer accounts have a 7-day signing limit. Use AltStore for auto-refresh.
+> Note: Free Apple Developer accounts have a 7-day signing limit on sideloaded apps. Use AltStore for auto-refresh.
 
-### Mac (Catalyst)
+### Mac (Catalyst) — prebuilt
+1. Grab `EhViewer-macOS-<version>.zip` from [Releases](https://github.com/CielDevApp/CortEX/releases/latest) (Developer ID signed + Apple notarized)
+2. Unzip and drag `EhViewer.app` into `/Applications`
+3. Double-click to launch — no `xattr` hacks needed, Gatekeeper passes cleanly
+
+### Mac (Catalyst) — build from source
 1. Clone: `git clone https://github.com/CielDevApp/CortEX.git`
 2. Open `EhViewer.xcodeproj` in Xcode 16+
 3. Scheme = `EhViewer`, Destination = `My Mac (Mac Catalyst)`
