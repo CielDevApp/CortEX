@@ -99,12 +99,19 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 5. 実機を接続して Run
 
 ### iOS / iPadOS — サイドロード（Macなし）
-1. [Releases](https://github.com/CielDevApp/CortEX/releases) からIPAをダウンロード
+1. [Releases](https://github.com/CielDevApp/CortEX/releases/latest) から `EhViewer-<version>.ipa` をダウンロード
 2. AltStore、Sideloadly、TrollStore でインストール
+   - AltStore / Sideloadly はインポート時にユーザーの Personal Team で再署名するため、配布 IPA の署名は剥がされる（最新版の IPA であれば内容は何でも OK）
+   - TrollStore は再署名なしでそのまま使える
 
-> 注意：無料Apple Developer アカウントは7日間の署名制限があります。AltStoreで自動更新をお勧めします。
+> 注意：無料Apple Developer アカウントはサイドロード署名に7日間の制限があります。AltStoreで自動更新をお勧めします。
 
-### Mac（Catalyst版）
+### Mac（Catalyst版） — ビルド済み .app を使う
+1. [Releases](https://github.com/CielDevApp/CortEX/releases/latest) から `EhViewer-macOS-<version>.zip` をダウンロード（Developer ID 署名 + Apple 公証済み）
+2. 解凍して `EhViewer.app` を `/Applications` にドロップ
+3. ダブルクリックで起動 — Gatekeeper 警告は出ません、`xattr` 等の迂回操作も不要
+
+### Mac（Catalyst版） — ソースからビルド
 1. クローン：`git clone https://github.com/CielDevApp/CortEX.git`
 2. Xcode 16+ で `EhViewer.xcodeproj` を開く
 3. Scheme = `EhViewer`、Destination = `My Mac (Mac Catalyst)`

@@ -99,12 +99,19 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 5. 连接设备，点击 Run
 
 ### iOS / iPadOS — 免电脑安装
-1. 从 [Releases](https://github.com/CielDevApp/CortEX/releases) 下载IPA
+1. 从 [Releases](https://github.com/CielDevApp/CortEX/releases/latest) 下载 `EhViewer-<version>.ipa`
 2. 通过 AltStore、Sideloadly 或 TrollStore 安装
+   - AltStore / Sideloadly 导入时会用你自己的 Personal Team 重新签名，因此分发 IPA 的签名会被剥离（只要是最新版 IPA 即可）
+   - TrollStore 无需重新签名，直接使用
 
-> 注意：免费Apple开发者账号有7天签名限制。建议使用AltStore自动续签。
+> 注意：免费Apple开发者账号侧载签名有7天限制。建议使用AltStore自动续签。
 
-### Mac（Catalyst版）
+### Mac（Catalyst版） — 下载预编译 .app
+1. 从 [Releases](https://github.com/CielDevApp/CortEX/releases/latest) 下载 `EhViewer-macOS-<version>.zip`（Developer ID 签名 + Apple 公证）
+2. 解压后将 `EhViewer.app` 拖入 `/Applications`
+3. 双击启动 — 无需 `xattr` 绕过，Gatekeeper 直接通过
+
+### Mac（Catalyst版） — 从源码构建
 1. 克隆：`git clone https://github.com/CielDevApp/CortEX.git`
 2. 用 Xcode 16+ 打开 `EhViewer.xcodeproj`
 3. Scheme = `EhViewer`，Destination = `My Mac (Mac Catalyst)`
