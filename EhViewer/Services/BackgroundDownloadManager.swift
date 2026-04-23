@@ -72,9 +72,11 @@ final class BackgroundDownloadManager: NSObject {
     var bgNhSession: URLSession {
         if let s = _bgNhSession { return s }
         let config = URLSessionConfiguration.background(withIdentifier: Self.bgNhSessionId)
-        config.httpCookieStorage = HTTPCookieStorage.shared
-        config.httpCookieAcceptPolicy = .always
-        config.httpShouldSetCookies = true
+        // BG session では iOS 自動 cookie 管理が background 中に停止する問題があるため、
+        // httpShouldSetCookies=false にして request header 手動注入を唯一経路にする
+        config.httpCookieStorage = nil
+        config.httpCookieAcceptPolicy = .never
+        config.httpShouldSetCookies = false
         config.isDiscretionary = false
         config.sessionSendsLaunchEvents = true
         config.allowsCellularAccess = true
@@ -89,9 +91,9 @@ final class BackgroundDownloadManager: NSObject {
     var bgEhSession: URLSession {
         if let s = _bgEhSession { return s }
         let config = URLSessionConfiguration.background(withIdentifier: Self.bgEhSessionId)
-        config.httpCookieStorage = HTTPCookieStorage.shared
-        config.httpCookieAcceptPolicy = .always
-        config.httpShouldSetCookies = true
+        config.httpCookieStorage = nil
+        config.httpCookieAcceptPolicy = .never
+        config.httpShouldSetCookies = false
         config.isDiscretionary = false
         config.sessionSendsLaunchEvents = true
         config.allowsCellularAccess = true
@@ -109,9 +111,11 @@ final class BackgroundDownloadManager: NSObject {
     var htmlFetchSession: URLSession {
         if let s = _htmlFetchSession { return s }
         let config = URLSessionConfiguration.background(withIdentifier: Self.htmlFetchSessionId)
-        config.httpCookieStorage = HTTPCookieStorage.shared
-        config.httpCookieAcceptPolicy = .always
-        config.httpShouldSetCookies = true
+        // BG session は httpCookieStorage=.shared では BG 中に cookie 送信されない。
+        // request header 手動注入を唯一経路にして確実に cookie を送る。
+        config.httpCookieStorage = nil
+        config.httpCookieAcceptPolicy = .never
+        config.httpShouldSetCookies = false
         config.isDiscretionary = false
         config.sessionSendsLaunchEvents = true
         config.allowsCellularAccess = true
@@ -318,6 +322,7 @@ final class BackgroundDownloadManager: NSObject {
     /// `Cookie: k=v; k2=v2; ...` 形式で手動注入する
     private func manualCookieHeader(for url: URL) -> String? {
         guard let cookies = HTTPCookieStorage.shared.cookies(for: url), !cookies.isEmpty else {
+            LogManager.shared.log("bgdl-cookie", "no HTTPCookieStorage.shared cookies for \(url.host ?? "?")")
             return nil
         }
         return cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
@@ -334,6 +339,9 @@ final class BackgroundDownloadManager: NSObject {
                let cookie = manualCookieHeader(for: url) {
                 request.setValue(cookie, forHTTPHeaderField: "Cookie")
             }
+            let cookieLen = request.value(forHTTPHeaderField: "Cookie")?.count ?? 0
+            let tagLog = sessionTag(for: session).map { $0.rawValue } ?? "?"
+            LogManager.shared.log("bgdl", "downloadToFile start tag=\(tagLog) cookie=\(cookieLen)B url=\(url.absoluteString.suffix(70))")
             let task = session.downloadTask(with: request)
             let tag = sessionTag(for: session) ?? .fgEh
             let key = TaskKey(sessionTag: tag, taskId: task.taskIdentifier)
@@ -354,11 +362,19 @@ final class BackgroundDownloadManager: NSObject {
         let tmpURL = tmpDir.appendingPathComponent("bg-html-\(UUID().uuidString).tmp")
         let ok = await downloadToFile(url: url, session: session, finalPath: tmpURL, headers: headers)
         defer { try? FileManager.default.removeItem(at: tmpURL) }
-        guard ok else { return nil }
-        guard let data = try? Data(contentsOf: tmpURL) else { return nil }
-        return String(data: data, encoding: .utf8)
+        guard ok else {
+            LogManager.shared.log("bgdl", "fetchHTMLViaBG downloadToFile FAILED url=\(url.absoluteString.suffix(70))")
+            return nil
+        }
+        guard let data = try? Data(contentsOf: tmpURL) else {
+            LogManager.shared.log("bgdl", "fetchHTMLViaBG cannot read tmp file url=\(url.absoluteString.suffix(70))")
+            return nil
+        }
+        let html = String(data: data, encoding: .utf8)
             ?? String(data: data, encoding: .shiftJIS)
             ?? String(data: data, encoding: .ascii)
+        LogManager.shared.log("bgdl", "fetchHTMLViaBG ok=\(data.count)B html=\(html?.count ?? 0)chars url=\(url.absoluteString.suffix(70))")
+        return html
     }
 
     // MARK: - Batch API
