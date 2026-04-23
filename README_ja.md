@@ -84,6 +84,39 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 
 ---
 
+## アーキテクチャ
+
+iPhone / iPad / Mac ユニバーサル対応の単一コードベース。Apple 純正 20 フレームワーク上に構築、外部依存ライブラリゼロ。
+
+**9 レイヤー構成:**
+
+| # | レイヤー | 主な構成 |
+|---|---|---|
+| 01 | PRESENTATION | 4モードリーダー (縦スクロール / 横ページめくり / iPad見開き / ピンチズーム) |
+| 02 | MODES | SAFETY (default) / EXTREME / ECO / SPARE の4段階動作モード |
+| 03 | INGESTION | E-Hentai / EXhentai 動的切替、nhentai v2 API + Cloudflare Turnstile 突破 |
+| 04 | TRANSPORT | BackgroundDownloadManager、URLSession 背景DL、BAN封じ込め6経路、2ndpass並列5 |
+| 05 | COMPUTE | 画像処理エンジン3基 (CIFilter / Metal Compute / CoreML Real-ESRGAN) |
+| 06 | MEDIA | 動画 WebP / HEVC 変換、HDR補正、VideoToolbox HW エンコード |
+| 07 | SILICON | CPU / GPU (Metal) / NPU (CoreML) / Media Engine 全活用、iPhone A17 Pro / iPad A17 Pro / Mac M1–M4 対応 |
+| 08 | TRUST | Face ID / Touch ID / PIN / Keychain / App Switcher ブラー |
+| 09 | PLATFORM | iOS 18+ / iPadOS 18+ / macOS 14+ Mac Catalyst、8言語ローカライズ |
+
+**SAFETY MODE 主要機能:**
+- BAN検知 6経路で完全封じ込め
+- 50画面 / 60秒 の自動 cooldown
+- 2ndpass 並列5 で失敗ページを自動救済
+- 並列度維持 · 速度犠牲なし
+- disk prefix skip · reconcileGallery
+
+**構成ファクト:**
+- 77 Swift ファイル / 約 20,000 行
+- 外部依存ライブラリ: 0
+- Apple 純正フレームワーク: 20
+- 対応: iOS 18+ / iPadOS 18+ / macOS 14+
+
+---
+
 ## 動作環境
 - iOS 18.0+ / iPadOS 18.0+（iOS 26 / iPadOS 26 テスト済み）
 - macOS 14.0+（Mac Catalyst、Apple Silicon / Intel 両対応）
