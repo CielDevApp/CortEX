@@ -129,7 +129,7 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 
 ### ver.02a f6 (2026-04-23)
 - **Mac Catalyst 完全支持** — 支持 macOS 14+（Apple Silicon / Intel）的通用构建。Developer ID 签名 + Apple 公证的 `.app` 通过 GitHub Releases 分发，拖入 `/Applications` 双击即可启动。顶部标签栏用自定义 HStack 重写（绕开 Catalyst TabView 的 overflow menu），全 7 标签始终横排 + 整格命中区 + 方向键翻页
-- **EXTREME MODE → SAFETY MODE 重设计** — 从进攻转为防御。BAN 检测 6 路径完全封堵、50 页 / 60 秒 自动 cooldown、并行度保持不降速的 class-change。transport 层整合 509 gif URL 模式检测、Cloudflare `cf-mitigated` 头检测、HTML fallback 检测、home.php 误重定向检测
+- **EXTREME MODE → SAFETY MODE 重设计** — 以 BAN 抗性为核心重新组织结构。BAN 检测 6 路径完全封堵、50 页 / 60 秒 自动 cooldown、并行度保持不降速的 class-change。transport 层整合 509 gif URL 模式检测、Cloudflare `cf-mitigated` 头检测、HTML fallback 检测、home.php 误重定向检测
 - **动画 WebP 阅读器强化** — 统一手动播放模式（▶ 图标点击触发转换），HDR 校正合并到现有图像设置，长按菜单直接切换模式。检测统一使用 VP8X magic，原始字节从内存转移到磁盘 URL 路径以降低内存压力
 - **动画 WebP 卡顿修复** — 修复 LocalReader / GalleryReader 自动播放导致的内存爆炸与 UI 卡死。AVPlayer 仅当前页升级、缓存升级移至 init、PlayerContainerView 不再吞掉滚动手势、缓存复活时的重建循环彻底解决
 - **nhentai 登录恢复 (Mac Catalyst)** — 用文件回退方式 (`~/Documents/EhViewer/creds/`) 绕开 Keychain `-34018 errSecMissingEntitlement`，同时修复 Cloudflare 通过路径，Catalyst 下也能持久认证
