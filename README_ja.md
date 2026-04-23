@@ -160,6 +160,16 @@ iPhone / iPad / Mac ユニバーサル対応の単一コードベース。Apple 
 
 ## 更新履歴
 
+### ver.02a f6 (2026-04-23)
+- **Mac Catalyst 完全対応** — macOS 14+ Apple Silicon / Intel 両対応のユニバーサルビルド。Developer ID 署名 + Apple 公証済み `.app` を GitHub Releases で配布、`/Applications` にドロップしてダブルクリックで起動可能。上部タブバーは TabView の overflow menu 回避のため独自 HStack で再実装、全 7 タブを常時横並び + セル全域ヒット判定 + 矢印キーでのページ送り対応
+- **EXTREME MODE → SAFETY MODE 再設計** — 攻撃志向から防御志向へ。BAN 検知 6 経路で完全封じ込め、50 画面 / 60 秒 自動 cooldown、並列度を維持したまま速度を犠牲にしない class-change。509 gif URL パターン検出、Cloudflare `cf-mitigated` ヘッダ検出、HTML fallback 検知、home.php 誤リダイレクト検出を transport 層に統合
+- **動画 WebP リーダー強化** — 手動再生モード統一 (▶ アイコン押下で変換開始)、HDR 補正を既存画像設定と統合、長押しメニューで直接モード切替。検出を VP8X マジックで統一、生バイトをメモリからディスク URL 経由に退避してメモリ圧軽減
+- **アニメ WebP ハング対策** — LocalReader / GalleryReader で自動再生によるメモリ爆発と UI hang を修正。現在ページのみ AVPlayer 昇格、init 時キャッシュ昇格、PlayerContainerView のスクロール吸収問題、キャッシュ蘇生時の再構築ループを全て解消
+- **nhentai ログイン復活 (Mac Catalyst)** — Keychain `-34018 errSecMissingEntitlement` を file-based fallback (`~/Documents/EhViewer/creds/`) で回避、Cloudflare 通過経路も修正して Catalyst でも認証永続化
+- **iPad タブバー追従** — GeometryReader + PreferenceKey 経路で下スクロール時のタブバー自動非表示を iPad でも確実に動作するよう修正
+- **DL 済みカバーのローカル流用拡張** — 詳細画面だけでなく履歴 / ガチャ / 設定画面でもローカルカバー画像を優先使用、CDN 往復削減
+- **リリース自動化** — `scripts/release-mac.sh` (Archive → Developer ID 署名 → notarize → staple → zip) と `scripts/release-ios.sh` (Archive → Development IPA export) を追加、タグ名引数 1 つで Mac zip + iOS IPA を生成
+
 ### ver.02a f5 (2026-04-20)
 - **自前 ZIP streaming writer** — Apple の NSFileCoordinator.forUploading（大作品で 59 秒 main ブロック + Code=512 失敗）を自前ストリーミング stored+ZIP64 writer に置換。6 倍速 + リアルタイム進捗バー + 3GB 超作品も正常 export
 - **ゾンビ DL 撲滅** — 削除 / キャンセル後も URL 解決 / stream 消費 / 2ndpass リトライループが走り続ける問題を修正。クリーンアップ時のメタデータ蘇生も防止

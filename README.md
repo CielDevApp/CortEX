@@ -164,6 +164,16 @@ Single codebase running on iPhone / iPad / Mac. Built entirely on 20 native Appl
 
 ## Changelog
 
+### ver.02a f6 (2026-04-23)
+- **Mac Catalyst Universal Build** — Full macOS 14+ support on Apple Silicon and Intel. Developer ID signed + Apple-notarized `.app` distributed via GitHub Releases; drop into `/Applications` and double-click to launch. The top tab bar was reimplemented as a custom HStack (replacing SwiftUI TabView to avoid the Catalyst overflow menu) so all 7 tabs stay horizontal with full-cell hit targets and arrow-key paging
+- **EXTREME MODE → SAFETY MODE Redesign** — Pivoted from aggressive to defensive. 6-path BAN detection and containment, automatic 50-page / 60-second cooldown, parallelism preserved with no speed sacrifice. The transport layer now integrates 509 gif URL pattern detection, Cloudflare `cf-mitigated` header detection, HTML fallback detection, and home.php misredirect detection
+- **Animated WebP Reader Upgrades** — Unified manual play mode (▶ tap to start conversion), HDR enhancement merged into the existing image filter settings, long-press menu for direct mode switching. Detection unified via the VP8X magic; raw bytes are offloaded from memory to disk URLs to reduce memory pressure
+- **Animated WebP Hang Fix** — Fixed memory spike and UI hang caused by auto-playback in LocalReader / GalleryReader. AVPlayer promotion is now limited to the current page, cache promotion moved to init, PlayerContainerView no longer absorbs scroll gestures, and the cache-resurrection remount loop was eliminated
+- **nhentai Login on Mac Catalyst** — Worked around the `-34018 errSecMissingEntitlement` Keychain error with a file-based fallback (`~/Documents/EhViewer/creds/`), fixed the Cloudflare bypass path, and restored persistent auth on Catalyst
+- **iPad Tab Bar Tracking** — The auto-hide tab bar now reliably tracks downward scroll on iPad too, via a GeometryReader + PreferenceKey observation path
+- **Local Cover Reuse Expansion** — Downloaded cover images are now reused not only in the detail view but also in history / gacha / settings, cutting CDN roundtrips
+- **Release Automation** — Added `scripts/release-mac.sh` (archive → Developer ID sign → notarize → staple → zip) and `scripts/release-ios.sh` (archive → Development IPA export); a single tag argument builds both the Mac zip and the iOS IPA
+
 ### ver.02a f5 (2026-04-20)
 - **Custom ZIP Stream Writer** — Replaced Apple's NSFileCoordinator.forUploading (59s main-thread freeze + Code=512 failure on large galleries) with a streaming stored+ZIP64 writer. 6× faster, real-time progress bar, 3GB+ galleries export successfully
 - **Zombie Download Elimination** — Delete/cancel now properly stops URL resolution / stream consumer / 2ndpass retry loops (previously kept downloading to deleted directories). Guards against metadata resurrection on cleanup
