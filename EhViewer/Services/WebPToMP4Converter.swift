@@ -98,6 +98,51 @@ enum WebPToMP4Converter {
         try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
     }
 
+    /// 肥大化防止: 起動時にキャッシュサイズ上限を超えてたら古いものから削除 (LRU)
+    /// 判定: contentAccessDate (最終アクセス) 昇順で削除、上限以下まで縮小
+    /// 目安値 500MB: アニメ WebP 数十〜100件分のキャッシュ相当
+    static func enforceCacheCap(maxBytes: Int64 = 500 * 1024 * 1024) {
+        let fm = FileManager.default
+        guard let urls = try? fm.contentsOfDirectory(
+            at: cacheDir,
+            includingPropertiesForKeys: [.fileSizeKey, .contentAccessDateKey, .contentModificationDateKey]
+        ) else { return }
+        // mp4 本体だけ計上 (.ok マーカーは本体に追従削除)
+        struct Entry {
+            let url: URL
+            let size: Int64
+            let lastAccess: Date
+        }
+        var entries: [Entry] = []
+        var total: Int64 = 0
+        for url in urls where url.pathExtension.lowercased() == "mp4" {
+            let vals = try? url.resourceValues(forKeys: [.fileSizeKey, .contentAccessDateKey, .contentModificationDateKey])
+            let size = Int64(vals?.fileSize ?? 0)
+            let access = vals?.contentAccessDate ?? vals?.contentModificationDate ?? Date.distantPast
+            entries.append(Entry(url: url, size: size, lastAccess: access))
+            total += size
+        }
+        guard total > maxBytes else { return }
+
+        let sorted = entries.sorted { $0.lastAccess < $1.lastAccess }
+        var removed = 0
+        var freed: Int64 = 0
+        for e in sorted {
+            if total <= maxBytes { break }
+            try? fm.removeItem(at: e.url)
+            // 道連れの .ok マーカー
+            let ok = e.url.appendingPathExtension("ok")
+            try? fm.removeItem(at: ok)
+            total -= e.size
+            freed += e.size
+            removed += 1
+        }
+        LogManager.shared.log(
+            "Convert",
+            "enforceCacheCap: removed \(removed) files, freed \(freed / 1024 / 1024)MB, now \(total / 1024 / 1024)MB"
+        )
+    }
+
     /// ディスク上の WebP/GIF ファイルを直接読んで MP4 変換（メモリに全データ展開しない）
     /// maxPixelSize: nil = 標準画質（720）、大きい値 = オリジナル画質（縮小なし）
     /// libwebp 利用可能 + アニメWebP なら高速 decode 経路へ分岐
