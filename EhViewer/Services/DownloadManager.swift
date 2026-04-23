@@ -1490,10 +1490,13 @@ class DownloadManager: ObservableObject {
             }
         }
 
-        // 完了stream消費（stall watchdog付き: 20秒completion無ければsecondpassにフォールバック）
-        // 元は45s だったが「突っかかり時間」を短縮してユーザー体感を改善
+        // 完了stream消費（stall watchdog付き）
+        // scenePhase に応じて閾値可変:
+        //   FG 中: 20s (「突っかかり」を短時間で切って 2ndpass へ)
+        //   BG 中 (preferBGSession=true): 300s (iOS throttling 下でも stream を保持)
         var pendingCount = pendingIndices.count
-        let stallThreshold: Double = 20.0
+        let fgStallThreshold: Double = 20.0
+        let bgStallThreshold: Double = 300.0
         let lastProgressBox = StallBox()
         lastProgressBox.update()
 
@@ -1502,8 +1505,9 @@ class DownloadManager: ObservableObject {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)  // 5秒毎チェック
                 if Task.isCancelled { break }
                 let elapsed = CFAbsoluteTimeGetCurrent() - lastProgressBox.value
-                if elapsed > stallThreshold {
-                    LogManager.shared.log("Download", "gid=\(gid) BG stream stall \(Int(elapsed))s - forcing finish (threshold=\(Int(stallThreshold))s)")
+                let threshold = BackgroundDownloadManager.shared.isPreferringBGSession ? bgStallThreshold : fgStallThreshold
+                if elapsed > threshold {
+                    LogManager.shared.log("Download", "gid=\(gid) BG stream stall \(Int(elapsed))s - forcing finish (threshold=\(Int(threshold))s, bg=\(BackgroundDownloadManager.shared.isPreferringBGSession))")
                     BackgroundDownloadManager.shared.finishStream(for: gid)
                     break
                 }
