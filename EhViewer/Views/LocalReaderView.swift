@@ -393,6 +393,15 @@ struct LocalReaderView: View {
                 if !isSliding {
                     sliderValue = Double(new)
                 }
+                // enhancedImages LRU: 400 ページスクロールで dict 無制限膨張 → メモリ圧迫。
+                // currentIndex 前後 ±30 ページ外のエントリを削除して常時 ~60 entry に抑制。
+                let keepLo = max(0, new - 30)
+                let keepHi = new + 30
+                let before = enhancedImages.count
+                enhancedImages = enhancedImages.filter { $0.key >= keepLo && $0.key <= keepHi }
+                if before - enhancedImages.count > 0 {
+                    LogManager.shared.log("Mem", "enhancedImages LRU: evicted=\(before - enhancedImages.count) kept=\(enhancedImages.count)")
+                }
             }
             .onChange(of: Int(sliderValue)) {
                 #if canImport(UIKit)
@@ -458,8 +467,6 @@ struct LocalReaderView: View {
     private func processPage(_ index: Int) {
         // ECOモード: フィルタ全スキップ
         if EcoMode.shared.isEnabled { return }
-
-        guard let image = DownloadManager.shared.loadLocalImage(gid: meta.gid, page: index) else { return }
         let mode = storedDlMode
         let enhanceFilterOn = storedEnhanceFilter
         let hdrOn = storedHDR
@@ -474,7 +481,11 @@ struct LocalReaderView: View {
         let usePersonSeg = !enhanceFilterOn && !hdrOn && !useAI && !denoiseOn
 
         let capturedIndex = index
+        let capturedGid = meta.gid
         Task.detached(priority: .userInitiated) {
+            // disk I/O + WebP decode も detached へ。400 ページ gallery でスクロール中に
+            // 各セルの onAppear から processPage が呼ばれても main thread を block しない。
+            guard let image = DownloadManager.shared.loadLocalImage(gid: capturedGid, page: capturedIndex) else { return }
             let original = image
             var result: PlatformImage = image
 
@@ -555,11 +566,15 @@ struct LocalReaderView: View {
                     if enhancedImages[index] == nil { processPage(index) }
                 }
             } else {
+                // 400 ページスクロールで ?? DownloadManager.shared.loadLocalImage が
+                // main thread で sync disk 読込+decode → 累積で重くなる元凶。
+                // 非同期 processPage の結果 (enhancedImages[index]) が入るまで nil で OK、
+                // BoomerangWebPView 内は Color.clear + aspectRatio で placeholder 表示される。
                 BoomerangWebPView(
                     sourceURL: fileURL,
                     readerID: "local-\(meta.gid)",
                     pageIndex: index,
-                    staticPlaceholder: enhancedImages[index] ?? DownloadManager.shared.loadLocalImage(gid: meta.gid, page: index)
+                    staticPlaceholder: enhancedImages[index]
                 )
                 .frame(maxWidth: .infinity, maxHeight: isHorizontal ? .infinity : nil, alignment: isHorizontal ? .center : .top)
                 .onAppear {
