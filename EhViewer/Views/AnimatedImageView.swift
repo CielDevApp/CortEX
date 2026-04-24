@@ -591,7 +591,7 @@ struct BoomerangWebPView: View {
         if let cacheKey, let cached = AnimatedImageSourceCache.shared.get(urlKey: cacheKey) {
             guard coordinator.isPlaying(pageKey) else { return }
             LogManager.shared.log("Boomerang", "source CACHE HIT frames=\(cached.frameCount)")
-            if preloadPlayback {
+            if preloadPlayback && shouldPreload(cached) {
                 await runPreload(cached)
                 guard coordinator.isPlaying(pageKey), !Task.isCancelled else { return }
             }
@@ -628,12 +628,33 @@ struct BoomerangWebPView: View {
             AnimatedImageSourceCache.shared.put(urlKey: cacheKey, source: loaded)
         }
         LogManager.shared.log("Boomerang", "source ready frames=\(loaded.frameCount) size=\(Int(loaded.pixelSize.width))x\(Int(loaded.pixelSize.height))")
-        if preloadPlayback {
+        if preloadPlayback && shouldPreload(loaded) {
             await runPreload(loaded)
             guard coordinator.isPlaying(pageKey), !Task.isCancelled else { return }
         }
         self.source = loaded
         self.loadFailed = false
+    }
+
+    /// プリロード要否の判定: フゲンクラスの重量作品 (巨大 canvas × 長尺) のみ対象。
+    /// それ以外は rolling prefetch だけで十分追いつくため、プリロード待機時間を発生させない。
+    ///
+    /// 基準 (両方満たした時のみプリロード):
+    /// - canvasLonger ≥ 2000px: 2080x3104 等の A4 原寸級 canvas (decode 1 frame ~33ms)
+    /// - frameCount ≥ 150: 5 秒超の長尺 (短尺は rolling で即追いつく)
+    ///
+    /// 実例:
+    /// - 179 frames × 2080x3104 (フゲン): 両方満たす → preload
+    /// - 100 frames × 2080x3104: frameCount<150 → skip (3s 程度で rolling 完了)
+    /// - 179 frames × 1500x2200: canvasLonger<2000 → skip (1 frame ~15ms、30fps で追いつく)
+    /// - 179 frames × 1000x1400: canvasLonger<2000 → skip
+    private func shouldPreload(_ source: AnimatedImageSource) -> Bool {
+        let canvasLonger = max(source.pixelSize.width, source.pixelSize.height)
+        let heavy = canvasLonger >= 2000 && source.frameCount >= 150
+        if !heavy {
+            LogManager.shared.log("Anim", "preload SKIP (not Fugen-class: \(source.frameCount)f × \(Int(source.pixelSize.width))x\(Int(source.pixelSize.height)))")
+        }
+        return heavy
     }
 
     /// 全 frame 並列 decode を batch=10 単位で実行。batch ごとに進捗更新 + cancel check。
