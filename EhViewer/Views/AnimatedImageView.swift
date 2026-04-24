@@ -87,6 +87,34 @@ final class AnimatedSourceImageView: UIImageView {
     private static let rollingAheadFrames: Int = 30
     private static let rollingBehindKeep: Int = 5
 
+    /// iPhone 限定: thermalState に応じて rolling 前方フレーム数を動的降格 (案 C)。
+    /// - .nominal / .fair (low-mid): 30 frame
+    /// - .fair (高負荷気味): 20 frame
+    /// - .serious: 15 frame
+    /// - .critical: AnimatedPlaybackCoordinator.stopAll 経由で停止
+    /// Mac Catalyst は常に 30 frame (熱対策不要)。
+    private var currentRollingAhead: Int {
+        #if targetEnvironment(macCatalyst)
+        return Self.rollingAheadFrames
+        #else
+        switch ProcessInfo.processInfo.thermalState {
+        case .critical, .serious: return 15
+        case .fair: return 20
+        default: return Self.rollingAheadFrames
+        }
+        #endif
+    }
+
+    /// Boomerang の実効有効性: iPhone で thermalState が serious 以上なら強制 OFF。
+    private var effectiveBoomerangEnabled: Bool {
+        guard UserDefaults.standard.bool(forKey: "boomerangMode") else { return false }
+        #if !targetEnvironment(macCatalyst)
+        let st = ProcessInfo.processInfo.thermalState
+        if st == .serious || st == .critical { return false }
+        #endif
+        return true
+    }
+
     private func startRollingPrefetch() {
         stopRollingPrefetch()
         guard let source = animSource else { return }
@@ -100,7 +128,9 @@ final class AnimatedSourceImageView: UIImageView {
         q.async { [weak self, weak source] in
             guard let self, let source, self.currentSourceID == sid else { return }
             let t = CFAbsoluteTimeGetCurrent()
-            let n = min(Self.rollingAheadFrames, source.frameCount)
+            // 初動 prefetch も thermal 降格に従う
+            let ahead = self.currentRollingAhead
+            let n = min(ahead, source.frameCount)
             DispatchQueue.concurrentPerform(iterations: n) { i in
                 _ = source.parallelFrame(at: i, maxPixelSize: maxDim)
             }
@@ -134,23 +164,22 @@ final class AnimatedSourceImageView: UIImageView {
         timer.schedule(deadline: .now() + 0.1, repeating: 0.1)
         timer.setEventHandler { [weak self, weak source] in
             guard let self, let source, self.currentSourceID == sid else { return }
-            // **重要**: prefetch 中心は lastDisplayedIdx (cache miss で停止) ではなく
-            // elapsed から逆算した "今まさに再生すべき idx"。これで cache miss → lastDisplayedIdx 停止 →
-            // prefetch window も停止 のデッドロックを回避。
             let elapsed = CACurrentMediaTime() - self.linkStartTime
             let playingIdx = self.frameIndex(elapsed: elapsed, source: source)
             let count = source.frameCount
-            let aheadTarget = min(playingIdx + Self.rollingAheadFrames, count - 1)
+            // thermal 降格を timer 毎に反映 (fair/serious で窓狭く、critical は coordinator が停止)
+            let ahead = self.currentRollingAhead
+            let aheadTarget = min(playingIdx + ahead, count - 1)
             let effectiveCurrent = max(0, playingIdx)
             var keepSet = Set<Int>()
             let lo = max(0, effectiveCurrent - Self.rollingBehindKeep)
             if lo <= aheadTarget { for i in lo...aheadTarget { keepSet.insert(i) } }
-            if UserDefaults.standard.bool(forKey: "boomerangMode") {
-                let blo = max(0, effectiveCurrent - Self.rollingAheadFrames)
+            if self.effectiveBoomerangEnabled {
+                let blo = max(0, effectiveCurrent - ahead)
                 if blo < effectiveCurrent { for i in blo..<effectiveCurrent { keepSet.insert(i) } }
             }
-            if playingIdx > count - Self.rollingAheadFrames / 2 {
-                let wrapCount = min(Self.rollingAheadFrames / 2, count)
+            if playingIdx > count - ahead / 2 {
+                let wrapCount = min(ahead / 2, count)
                 for i in 0..<wrapCount { keepSet.insert(i) }
             }
             let missing = keepSet.compactMap { source.cachedFrame(at: $0) == nil ? $0 : nil }
@@ -224,9 +253,8 @@ final class AnimatedSourceImageView: UIImageView {
     /// Boomerang: 周期 = totalDuration * 2 - (delays[0] + delays[N-1]) 近似で。
     /// 単純化のため period = 2 * totalDuration として、前半 forward / 後半 reverse。
     private func frameIndex(elapsed: Double, source: AnimatedImageSource) -> Int {
-        // Boomerang はライブで UserDefaults を読む (toggle を後から ON/OFF しても即反映)
-        let boomerang = UserDefaults.standard.bool(forKey: "boomerangMode")
-        if boomerang && source.frameCount >= 3 {
+        // Boomerang 実効有効判定はライブ (UserDefaults + thermal 降格)
+        if effectiveBoomerangEnabled && source.frameCount >= 3 {
             let period = source.totalDuration * 2
             var t = elapsed.truncatingRemainder(dividingBy: period)
             if t < 0 { t += period }
@@ -326,10 +354,20 @@ final class AnimatedSourceImageView: UIImageView {
         let w = bounds.width
         let h = bounds.height
         let d = max(w, h)
-        if d <= 0 {
-            return max(UIScreen.main.bounds.width, UIScreen.main.bounds.height)
-        }
-        return d
+        let boundsBased: CGFloat = d > 0 ? d : max(UIScreen.main.bounds.width, UIScreen.main.bounds.height)
+        #if targetEnvironment(macCatalyst)
+        return boundsBased
+        #else
+        // iPhone/iPad 適応的 scaling: canvas が大きいほど target を厳しく絞って
+        // decode 負荷を軽減 (案 A)。Mac Catalyst は canvas size 非考慮のまま。
+        guard let source = animSource else { return boundsBased }
+        let canvasLonger = max(source.pixelSize.width, source.pixelSize.height)
+        let cap: CGFloat
+        if canvasLonger > 2500 { cap = 700 }
+        else if canvasLonger > 2000 { cap = 900 }
+        else { cap = 1000 }
+        return min(boundsBased, cap)
+        #endif
     }
 
     override func willMove(toWindow newWindow: UIWindow?) {

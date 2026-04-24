@@ -36,17 +36,29 @@ final class AnimatedImageSourceRegistry {
                 AnimatedImageSourceRegistry.shared.dropAllCaches()
                 LogManager.shared.log("Mem", "MemoryWarning → systemDowngraded=true (多重可視停止)")
             }
-            // 熱状態通知も監視: .serious 以上で降格、.fair 以下で復帰
+            // 熱状態通知: .fair/.serious は AnimatedSourceImageView が live で読んで
+            // rolling 窓と Boomerang を動的降格。.critical のみ Coordinator.stopAll で
+            // アニメ全停止させる (静止画ポスターだけ残る)。
             NotificationCenter.default.addObserver(
                 forName: ProcessInfo.thermalStateDidChangeNotification,
                 object: nil,
                 queue: .main
             ) { _ in
                 let st = ProcessInfo.processInfo.thermalState
-                let downgrade = (st == .serious || st == .critical)
-                if BoomerangWebPView.systemDowngraded != downgrade {
-                    BoomerangWebPView.systemDowngraded = downgrade
-                    LogManager.shared.log("Mem", "thermalState=\(st.rawValue) → systemDowngraded=\(downgrade)")
+                let name: String = {
+                    switch st {
+                    case .nominal: return "nominal"
+                    case .fair: return "fair"
+                    case .serious: return "serious"
+                    case .critical: return "critical"
+                    @unknown default: return "unknown"
+                    }
+                }()
+                LogManager.shared.log("Mem", "thermalState=\(name)")
+                if st == .critical {
+                    Task { @MainActor in
+                        AnimatedPlaybackCoordinator.shared.stopAll()
+                    }
                 }
             }
         }
