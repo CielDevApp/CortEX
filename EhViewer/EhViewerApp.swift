@@ -179,6 +179,8 @@ struct EhViewerApp: App {
             "onlineQualityMode": 2,
             "downloadQualityMode": 2,
             "noFilterMode": false,
+            // アニメ per-frame NE 人物セグメンテーション (本命機能、デフォルト ON)
+            "animatedPersonSegmentation": true,
         ])
 
         ImageCache.shared.cleanupOnLaunch()

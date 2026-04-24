@@ -142,6 +142,120 @@ final class LanczosUpscaler: ImageUpscaler {
         UserDefaults.standard.bool(forKey: "imageEnhanceFilter")
     }
 
+    /// CG→CG 版 NE 人物セグメンテーション (アニメ per-frame 用)。UIImage roundtrip なし。
+    /// 既存 applyPersonSegmentation(_ UIImage) との違い:
+    /// - 人物領域のみ CISharpenLuminance (0.6/1.5px) + CIVibrance (0.2) でブースト
+    /// - **背景は触らない** (per-frame では denoise / enhanceFilter 段が既に背景を処理しているため、
+    ///   二重適用を回避。静画版は他フィルタ全 OFF 前提なので背景ノイズ除去を入れるが、
+    ///   per-frame はチェーン内の位置付けが異なる)
+    /// - マスク空 / 検出失敗時は nil を返す (呼び出し側で元画像 fallback を判断)
+    /// - Vision VNGeneratePersonSegmentationRequest (qualityLevel=.fast) は NE 直列化されるため、
+    ///   並列呼び出ししても効率上がらない。呼び出し側は 1 本の serial queue 推奨。
+    nonisolated static func applyPersonSegmentationCG(_ cgImage: CGImage) -> CGImage? {
+        autoreleasepool {
+            let request = VNGeneratePersonSegmentationRequest()
+            request.qualityLevel = .fast
+            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+            try? handler.perform([request])
+
+            guard let result = request.results?.first else { return nil }
+            let maskBuffer = result.pixelBuffer
+
+            let ciMask = CIImage(cvPixelBuffer: maskBuffer)
+            let ciImage = CIImage(cgImage: cgImage)
+            let extent = ciImage.extent
+
+            let scaleX = extent.width / ciMask.extent.width
+            let scaleY = extent.height / ciMask.extent.height
+            let scaledMask = ciMask.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+
+            // 人物領域: シャープ強め + 彩度アップ
+            var personImage = ciImage
+            if let f = CIFilter(name: "CISharpenLuminance") {
+                f.setValue(personImage, forKey: kCIInputImageKey)
+                f.setValue(0.6, forKey: kCIInputSharpnessKey)
+                f.setValue(1.5, forKey: kCIInputRadiusKey)
+                if let out = f.outputImage { personImage = out }
+            }
+            if let f = CIFilter(name: "CIVibrance") {
+                f.setValue(personImage, forKey: kCIInputImageKey)
+                f.setValue(0.2, forKey: "inputAmount")
+                if let out = f.outputImage { personImage = out }
+            }
+
+            // 合成: 人物 (ブースト済) / 背景 (ciImage = 入力そのまま)
+            guard let blend = CIFilter(name: "CIBlendWithMask") else { return nil }
+            blend.setValue(personImage, forKey: kCIInputImageKey)
+            blend.setValue(ciImage, forKey: kCIInputBackgroundImageKey)
+            blend.setValue(scaledMask, forKey: kCIInputMaskImageKey)
+
+            guard let blended = blend.outputImage else { return nil }
+            return LanczosUpscaler.shared.context.createCGImage(blended, from: extent)
+        }
+    }
+
+    /// CG→CG 版ノイズ除去 (アニメ per-frame 用)。UIImage roundtrip なし。
+    /// 静画 applyDenoiseStatic と同一パラメータ (CINoiseReduction: noiseLevel=0.02, sharpness=0.4)。
+    /// sharpness=0.4 によりノイズ除去と同時に線の再シャープ化が入るのが狙い (田中が静画で体感している「くっきり度」の主要因の一つ)。
+    nonisolated static func denoiseCG(_ cgImage: CGImage) -> CGImage? {
+        autoreleasepool {
+            var ciImage = CIImage(cgImage: cgImage)
+            if let f = CIFilter(name: "CINoiseReduction") {
+                f.setValue(ciImage, forKey: kCIInputImageKey)
+                f.setValue(0.02, forKey: "inputNoiseLevel")
+                f.setValue(0.4, forKey: kCIInputSharpnessKey)
+                if let out = f.outputImage { ciImage = out }
+            }
+            return LanczosUpscaler.shared.context.createCGImage(ciImage, from: ciImage.extent)
+        }
+    }
+
+    /// CG→CG 版 enhanceFilter (アニメ per-frame 用)。UIImage roundtrip なし。
+    /// 既存 enhanceFilter(_:) と同一パイプライン (HighlightShadow → Vibrance → ToneCurve → LocalToneMap)。
+    /// isGrayscale 判定はソース単位で 1 回だけ行うため引数化 (per-frame コスト削減)。
+    nonisolated static func enhanceFilterCG(_ cgImage: CGImage, isGrayscale: Bool) -> CGImage? {
+        autoreleasepool {
+            var ciImage = CIImage(cgImage: cgImage)
+            if let f = CIFilter(name: "CIHighlightShadowAdjust") {
+                f.setValue(ciImage, forKey: kCIInputImageKey)
+                f.setValue(0.9, forKey: "inputHighlightAmount")
+                f.setValue(isGrayscale ? 0.15 : 0.3, forKey: "inputShadowAmount")
+                if let out = f.outputImage { ciImage = out }
+            }
+            if !isGrayscale {
+                if let f = CIFilter(name: "CIVibrance") {
+                    f.setValue(ciImage, forKey: kCIInputImageKey)
+                    f.setValue(0.15, forKey: "inputAmount")
+                    if let out = f.outputImage { ciImage = out }
+                }
+            }
+            if let f = CIFilter(name: "CIToneCurve") {
+                f.setValue(ciImage, forKey: kCIInputImageKey)
+                f.setValue(CIVector(x: 0, y: 0), forKey: "inputPoint0")
+                if isGrayscale {
+                    f.setValue(CIVector(x: 0.2, y: 0.15), forKey: "inputPoint1")
+                    f.setValue(CIVector(x: 0.5, y: 0.5), forKey: "inputPoint2")
+                    f.setValue(CIVector(x: 0.8, y: 0.9), forKey: "inputPoint3")
+                } else {
+                    f.setValue(CIVector(x: 0.15, y: 0.1), forKey: "inputPoint1")
+                    f.setValue(CIVector(x: 0.5, y: 0.5), forKey: "inputPoint2")
+                    f.setValue(CIVector(x: 0.85, y: 0.95), forKey: "inputPoint3")
+                }
+                f.setValue(CIVector(x: 1, y: 1), forKey: "inputPoint4")
+                if let out = f.outputImage { ciImage = out }
+            }
+            if !isGrayscale, #available(iOS 17, macOS 14, *) {
+                if let f = CIFilter(name: "CIToneMapHeadroom") {
+                    f.setValue(ciImage, forKey: kCIInputImageKey)
+                    f.setValue(1.0, forKey: "inputSourceHeadroom")
+                    f.setValue(1.2, forKey: "inputTargetHeadroom")
+                    if let out = f.outputImage { ciImage = out }
+                }
+            }
+            return LanczosUpscaler.shared.context.createCGImage(ciImage, from: ciImage.extent)
+        }
+    }
+
     func enhanceFilter(_ image: PlatformImage) -> PlatformImage? {
         #if canImport(UIKit)
         return autoreleasepool {

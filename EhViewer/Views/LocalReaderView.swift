@@ -475,8 +475,21 @@ struct LocalReaderView: View {
         let denoiseOn = storedDenoise
         let noFilter = storedNoFilter
 
-        // 無補正モード
-        if noFilter { return }
+        // 無補正モード: フィルタは一切かけないが、`enhancedImages[index]` に raw 画像を入れないと
+        // アニメ WebP セル (line 578) の `staticPlaceholder: enhancedImages[index]` が nil になり
+        // BoomerangWebPView が Color.clear を出す = 「ポスター表示されない」バグ。
+        // raw 画像を detached で読んで格納、UI への表示経路を他設定と揃える。
+        if noFilter {
+            let capturedIndex = index
+            let capturedGid = meta.gid
+            Task.detached(priority: .userInitiated) {
+                guard let image = DownloadManager.shared.loadLocalImage(gid: capturedGid, page: capturedIndex) else { return }
+                await MainActor.run {
+                    enhancedImages[capturedIndex] = image
+                }
+            }
+            return
+        }
 
         // ダウンロード画像は常にフル画質 → 常にNE人物セグメンテーション適用
         let usePersonSeg = !enhanceFilterOn && !hdrOn && !useAI && !denoiseOn
