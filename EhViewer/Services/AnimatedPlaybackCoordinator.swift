@@ -25,8 +25,13 @@ final class AnimatedPlaybackCoordinator: ObservableObject {
     /// @Published で全セルが contains 判定を購読、変化で body 再評価 → displayLink 即座 stop 可能。
     @Published private(set) var playing: [PageKey] = []
 
-    /// 最大同時再生数。
-    let maxConcurrent: Int = 3
+    /// 最大同時再生数。UserDefaults `animMaxConcurrentPlay` で可変、default=1。
+    /// 1 件再生中に別ページ▶タップで旧再生が自動停止 = シンプルな切替動作。
+    /// Mac Catalyst で 3 件同時は libwebp decode + 230MB×3 で負荷過多のため default を 1 に。
+    var maxConcurrent: Int {
+        let v = UserDefaults.standard.integer(forKey: "animMaxConcurrentPlay")
+        return v > 0 ? v : 1
+    }
 
     func isPlaying(_ key: PageKey) -> Bool {
         playing.contains(key)
