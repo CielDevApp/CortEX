@@ -24,6 +24,8 @@ struct PageCellView: View {
     /// 静画と共通の HDR 設定 (設定画面の hdrEnhancement トグル)。
     /// 動画 AVPlayer 側はこの値を videoComposition に反映 (CIFilter 注入)。
     @AppStorage("hdrEnhancement") private var hdrEnhancement = false
+    /// アニメ再生方式: "webp" (CADisplayLink 逐次) / "mp4" (旧来変換経路)
+    @AppStorage("animPlaybackMode") private var animPlaybackMode = "webp"
 
     var body: some View {
         if isHorizontalMode {
@@ -47,30 +49,42 @@ struct PageCellView: View {
         ZStack {
             #if canImport(UIKit)
             if let animURL = holder.animatedFileURL {
-                if manualPlayForAnimated {
+                if animPlaybackMode == "mp4" {
+                    if manualPlayForAnimated {
+                        GalleryAnimatedWebPView(
+                            source: .url(animURL),
+                            staticImage: holder.image,
+                            gid: mp4Gid,
+                            page: index,
+                            onToggleControls: onToggleControls,
+                            autoPlayIfActive: isActiveAnimation,
+                            isHDREnabled: hdrEnhancement
+                        )
+                        .frame(width: Self.screenSize.width, height: Self.screenSize.height)
+                    } else {
+                        AnimatedVideoView(sourceURL: animURL, gid: mp4Gid, page: index, onToggleControls: onToggleControls, isHDREnabled: hdrEnhancement)
+                            .frame(width: Self.screenSize.width, height: Self.screenSize.height)
+                    }
+                } else {
+                    BoomerangWebPView(sourceURL: animURL, isActive: isActiveAnimation, staticPlaceholder: holder.image)
+                        .frame(width: Self.screenSize.width, height: Self.screenSize.height)
+                }
+            } else if let animData = holder.animatedWebPData {
+                if animPlaybackMode == "mp4" {
                     GalleryAnimatedWebPView(
-                        source: .url(animURL),
+                        source: .data(animData),
                         staticImage: holder.image,
                         gid: mp4Gid,
                         page: index,
                         onToggleControls: onToggleControls,
+                        autoPlayIfActive: isActiveAnimation,
                         isHDREnabled: hdrEnhancement
                     )
                     .frame(width: Self.screenSize.width, height: Self.screenSize.height)
                 } else {
-                    AnimatedVideoView(sourceURL: animURL, gid: mp4Gid, page: index, onToggleControls: onToggleControls, isHDREnabled: hdrEnhancement)
+                    BoomerangWebPView(sourceData: animData, isActive: isActiveAnimation, staticPlaceholder: holder.image)
                         .frame(width: Self.screenSize.width, height: Self.screenSize.height)
-                    }
-            } else if let animData = holder.animatedWebPData {
-                GalleryAnimatedWebPView(
-                    source: .data(animData),
-                    staticImage: holder.image,
-                    gid: mp4Gid,
-                    page: index,
-                    onToggleControls: onToggleControls,
-                    isHDREnabled: hdrEnhancement
-                )
-                .frame(width: Self.screenSize.width, height: Self.screenSize.height)
+                }
             } else if let image = holder.image {
                 Image(platformImage: image)
                     .resizable()
@@ -121,34 +135,50 @@ struct PageCellView: View {
         Group {
             #if canImport(UIKit)
             if let animURL = holder.animatedFileURL {
-                if manualPlayForAnimated {
-                    GalleryAnimatedWebPView(
-                        source: .url(animURL),
-                        staticImage: holder.image,
-                        gid: mp4Gid,
-                        page: index,
-                        onToggleControls: onToggleControls,
-                        isHDREnabled: hdrEnhancement
-                    )
-                    .frame(maxWidth: .infinity)
+                if animPlaybackMode == "mp4" {
+                    if manualPlayForAnimated {
+                        GalleryAnimatedWebPView(
+                            source: .url(animURL),
+                            staticImage: holder.image,
+                            gid: mp4Gid,
+                            page: index,
+                            onToggleControls: onToggleControls,
+                            autoPlayIfActive: isActiveAnimation,
+                            isHDREnabled: hdrEnhancement
+                        )
+                        .frame(maxWidth: .infinity)
+                    } else {
+                        AnimatedVideoView(sourceURL: animURL, gid: mp4Gid, page: index, onToggleControls: onToggleControls, isHDREnabled: hdrEnhancement)
+                            .frame(maxWidth: .infinity)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                if verticalSizeClass == .regular, let img = holder.image { onTap(img) }
+                            }
+                    }
                 } else {
-                    AnimatedVideoView(sourceURL: animURL, gid: mp4Gid, page: index, onToggleControls: onToggleControls, isHDREnabled: hdrEnhancement)
+                    BoomerangWebPView(sourceURL: animURL, isActive: isActiveAnimation, staticPlaceholder: holder.image)
                         .frame(maxWidth: .infinity)
                         .contentShape(Rectangle())
                         .onTapGesture {
                             if verticalSizeClass == .regular, let img = holder.image { onTap(img) }
                         }
-                    }
+                }
             } else if let animData = holder.animatedWebPData {
-                GalleryAnimatedWebPView(
-                    source: .data(animData),
-                    staticImage: holder.image,
-                    gid: mp4Gid,
-                    page: index,
-                    onToggleControls: onToggleControls,
-                    isHDREnabled: hdrEnhancement
-                )
-                .frame(maxWidth: .infinity)
+                if animPlaybackMode == "mp4" {
+                    GalleryAnimatedWebPView(
+                        source: .data(animData),
+                        staticImage: holder.image,
+                        gid: mp4Gid,
+                        page: index,
+                        onToggleControls: onToggleControls,
+                        autoPlayIfActive: isActiveAnimation,
+                        isHDREnabled: hdrEnhancement
+                    )
+                    .frame(maxWidth: .infinity)
+                } else {
+                    BoomerangWebPView(sourceData: animData, isActive: isActiveAnimation, staticPlaceholder: holder.image)
+                        .frame(maxWidth: .infinity)
+                }
             } else if let image = holder.image {
                 ZStack(alignment: .top) {
                     Image(platformImage: image)

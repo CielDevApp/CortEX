@@ -4,6 +4,53 @@ import ImageIO
 import UIKit
 #endif
 
+/// 現在生存中の AnimatedImageSource インスタンスを弱参照で束ね、
+/// UIApplication.didReceiveMemoryWarning 通知で一斉に frameCache を解放する。
+/// 個別インスタンスが NotificationCenter observer を持つと deinit 順で解放されない
+/// 危険があるため、中央ハブ方式で集中管理する。
+#if canImport(UIKit)
+final class AnimatedImageSourceRegistry {
+    static let shared = AnimatedImageSourceRegistry()
+    private let lock = NSLock()
+    private var sources: [ObjectIdentifier: Weak<AnimatedImageSource>] = [:]
+    private var observerInstalled = false
+
+    private struct Weak<T: AnyObject> {
+        weak var value: T?
+    }
+
+    func register(_ source: AnimatedImageSource) {
+        lock.lock()
+        sources[ObjectIdentifier(source)] = Weak(value: source)
+        if !observerInstalled {
+            observerInstalled = true
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.didReceiveMemoryWarningNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                AnimatedImageSourceRegistry.shared.dropAllCaches()
+            }
+        }
+        lock.unlock()
+    }
+
+    func unregister(_ source: AnimatedImageSource) {
+        lock.lock()
+        sources.removeValue(forKey: ObjectIdentifier(source))
+        lock.unlock()
+    }
+
+    private func dropAllCaches() {
+        lock.lock()
+        let snapshot = sources.values.compactMap { $0.value }
+        lock.unlock()
+        LogManager.shared.log("Mem", "MemoryWarning → dropAllCaches alive=\(snapshot.count)")
+        for s in snapshot { s.dropFrameCache() }
+    }
+}
+#endif
+
 /// アニメGIF/WebP/APNG用のフレームオンデマンド供給源。
 /// 全フレームを事前に decode せず、CGImageSource を保持して必要時に1フレームずつ取得する。
 /// これによりメモリ消費を frame data 1枚分に抑える。
@@ -14,6 +61,12 @@ final class AnimatedImageSource {
     let totalDuration: Double
     let pixelSize: CGSize      // 1枚目のピクセルサイズ
     let rawData: Data          // 原データ（MP4 変換時に使用）
+
+    /// libwebp 並列デコーダ。WebP かつ全フレーム独立の場合のみ non-nil。
+    /// 利用可能なら CGImageSource (内部ロックでシリアライズ) ではなくこちらで並列 decode。
+    #if canImport(libwebp)
+    let libwebpDecoder: WebPParallelDecoder?
+    #endif
 
     /// フレームキャッシュ（自前Dictionary管理でiOSメモリ圧迫でのevictを回避）
     private var frameCache: [Int: CGImage] = [:]
@@ -49,14 +102,31 @@ final class AnimatedImageSource {
         self.totalDuration = total
         self.pixelSize = CGSize(width: firstCG.width, height: firstCG.height)
         self.rawData = data
+
+        #if canImport(libwebp)
+        // libwebp 並列デコーダを同時構築 (WebP かつ全 frame 独立時のみ有効)
+        if let decoder = WebPParallelDecoder(data: data), decoder.isFullyIndependent {
+            self.libwebpDecoder = decoder
+            LogManager.shared.log("Anim", "libwebp parallel decoder ready frames=\(decoder.frameCount) canvas=\(decoder.canvasWidth)x\(decoder.canvasHeight)")
+        } else {
+            self.libwebpDecoder = nil
+        }
+        #endif
     }
 
     /// データからソース構築。非アニメまたは失敗時は nil
     static func make(data: Data) -> AnimatedImageSource? {
-        AnimatedImageSource(data: data)
+        guard let s = AnimatedImageSource(data: data) else { return nil }
+        #if canImport(UIKit)
+        AnimatedImageSourceRegistry.shared.register(s)
+        #endif
+        return s
     }
 
     deinit {
+        #if canImport(UIKit)
+        AnimatedImageSourceRegistry.shared.unregister(self)
+        #endif
         LogManager.shared.log("Mem", "AnimatedImageSource deinit (rawData=\(rawData.count)B)")
     }
 
@@ -76,18 +146,67 @@ final class AnimatedImageSource {
     #if canImport(UIKit)
     /// 全フレームを UIImage.animatedImage として生成（UIImageView.startAnimating で再生可能）
     /// 呼び出しは background queue で。
-    func buildAnimatedImage(maxPixelSize: CGFloat) -> UIImage? {
+    /// - boomerang: true なら ping-pong 順 (f0..fN-1, fN-2..f1)。ただし frameCount > maxFramesForBoomerang
+    ///   のときはメモリ爆発回避のため自動で false に降格しログ。
+    /// - hdrEnabled: true なら各フレームに HDREnhancer.enhanceCG を通す (MP4 経路の HDR 補正を per-frame で代替)。
+    /// - maxFramesForBoomerang: Boomerang 拡張を許す上限フレーム数 (デフォルト 200)。
+    func buildAnimatedImage(maxPixelSize: CGFloat,
+                            boomerang: Bool = false,
+                            hdrEnabled: Bool = false,
+                            maxFramesForBoomerang: Int = 200) -> UIImage? {
+        // 安全装置: 巨大 frameCount の boomerang は pingpong で ~2x UIImage を抱えるため降格
+        var effectiveBoomerang = boomerang
+        if boomerang && frameCount > maxFramesForBoomerang {
+            effectiveBoomerang = false
+            LogManager.shared.log("Anim", "boomerang降格 frameCount=\(frameCount) > cap=\(maxFramesForBoomerang)")
+        }
+
         var frames: [UIImage] = []
-        frames.reserveCapacity(frameCount)
+        if effectiveBoomerang && frameCount >= 3 {
+            frames.reserveCapacity(frameCount * 2 - 2)
+        } else {
+            frames.reserveCapacity(frameCount)
+        }
+
+        @inline(__always)
+        func processed(_ cg: CGImage) -> UIImage {
+            if hdrEnabled, let enhanced = HDREnhancer.enhanceCG(cg) {
+                return UIImage(cgImage: enhanced)
+            }
+            return UIImage(cgImage: cg)
+        }
+
+        // 順方向
         for i in 0..<frameCount {
             if let cg = frame(at: i, maxPixelSize: maxPixelSize) {
-                frames.append(UIImage(cgImage: cg))
+                frames.append(processed(cg))
+            }
+        }
+        var duration = totalDuration
+        // 逆方向 (ping-pong 末尾): 最終と先頭を除外して重複フレームを避ける
+        if effectiveBoomerang && frameCount >= 3 {
+            for i in stride(from: frameCount - 2, through: 1, by: -1) {
+                if let cg = frame(at: i, maxPixelSize: maxPixelSize) {
+                    frames.append(processed(cg))
+                    duration += frameDelays[i]
+                }
             }
         }
         guard !frames.isEmpty else { return nil }
-        return UIImage.animatedImage(with: frames, duration: totalDuration)
+        return UIImage.animatedImage(with: frames, duration: duration)
     }
     #endif
+
+    /// メモリ警告時にフレームキャッシュを解放。次回フレーム要求時に再 decode される。
+    func dropFrameCache() {
+        cacheLock.lock()
+        let n = frameCache.count
+        frameCache.removeAll()
+        prefetchedMaxPixelSize = 0
+        prefetchCompleted = false
+        cacheLock.unlock()
+        LogManager.shared.log("Mem", "AnimatedImageSource dropFrameCache dropped=\(n)")
+    }
 
     /// 全フレームを指定サイズで事前 decode してキャッシュ構築。
     /// concurrentPerform で CPU core 並列 decode
@@ -113,6 +232,90 @@ final class AnimatedImageSource {
         isPrefetching = false
         prefetchCompleted = true
         cacheLock.unlock()
+    }
+
+    /// 指定 index 集合だけ残して他を evict (ローリング窓 prefetch 用)。
+    func retainOnly(indices: Set<Int>) {
+        cacheLock.lock()
+        let before = frameCache.count
+        frameCache = frameCache.filter { indices.contains($0.key) }
+        let after = frameCache.count
+        cacheLock.unlock()
+        if before - after > 0 {
+            // evict があった時だけログ (スパム防止)
+            LogManager.shared.log("Mem", "retainOnly evicted=\(before - after) kept=\(after)")
+        }
+    }
+
+    /// 並列デコード用の per-thread CGImageSource プール。
+    /// CGImageSource は内部ロックでシリアライズされるため、スレッド毎に
+    /// 独立したインスタンスを持つことで真の並列デコードを実現する。
+    private var sourcePool: [CGImageSource] = []
+    private let sourcePoolLock = NSLock()
+
+    /// 並列デコード用に source を 1 本貸し出す。
+    /// 使用後は returnSource で戻す。pool 空なら新規作成。
+    private func borrowSource() -> CGImageSource {
+        sourcePoolLock.lock()
+        if let last = sourcePool.popLast() {
+            sourcePoolLock.unlock()
+            return last
+        }
+        sourcePoolLock.unlock()
+        // 新規に raw Data から CGImageSource を作る (同じ data を参照するだけなので軽い)
+        return CGImageSourceCreateWithData(rawData as CFData, nil) ?? source
+    }
+
+    private func returnSource(_ src: CGImageSource) {
+        sourcePoolLock.lock()
+        // pool に最大 16 本までプールする (過剰確保を避ける)
+        if sourcePool.count < 16 {
+            sourcePool.append(src)
+        }
+        sourcePoolLock.unlock()
+    }
+
+    /// 並列デコード用。cache miss なら以下の優先順で decode:
+    /// 1. libwebp 並列デコーダ (真の並列、フル解像度)
+    /// 2. borrowSource で独立 CGImageSource (フォールバック)
+    /// cache hit ならロックなしで即返す。
+    func parallelFrame(at index: Int, maxPixelSize: CGFloat?) -> CGImage? {
+        let clamped = max(0, min(index, frameCount - 1))
+        cacheLock.lock()
+        if let cg = frameCache[clamped] { cacheLock.unlock(); return cg }
+        cacheLock.unlock()
+
+        var decoded: CGImage?
+        #if canImport(libwebp)
+        // libwebp 経路: スレッド安全、内部ロックなし、真の並列 decode
+        if let decoder = libwebpDecoder, clamped < decoder.frames.count {
+            let info = decoder.frames[clamped]
+            if let bgra = decoder.decodeFrame(info), let cg = decoder.makeCGImage(from: bgra) {
+                decoded = cg
+            }
+        }
+        #endif
+        if decoded == nil {
+            // CGImageSource フォールバック
+            let src = borrowSource()
+            if let maxPixelSize, maxPixelSize > 0 {
+                let opts: [CFString: Any] = [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceShouldCacheImmediately: true,
+                    kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+                ]
+                decoded = CGImageSourceCreateThumbnailAtIndex(src, clamped, opts as CFDictionary)
+            } else {
+                decoded = CGImageSourceCreateImageAtIndex(src, clamped, nil)
+            }
+            returnSource(src)
+        }
+        guard let decoded else { return nil }
+        cacheLock.lock()
+        frameCache[clamped] = decoded
+        cacheLock.unlock()
+        return decoded
     }
 
     /// キャッシュ済みフレームのみ返す（decodeしない）。tick再生用。
