@@ -403,9 +403,22 @@ final class AnimatedImageSource {
         if let decoder = libwebpDecoder, clamped < decoder.frames.count {
             let info = decoder.frames[clamped]
             #if targetEnvironment(macCatalyst)
-            if let bgra = decoder.decodeFrame(info),
-               let cg = decoder.makeCGImage(from: bgra) {
-                decoded = cg
+            // 2026-04-25 改訂: Mac Catalyst で canvas > 1800 の大型 WebP は per-frame 25MB 超の
+            // BGRA が memory bandwidth を飽和させて decode + HDR が予算超過。libwebp native scaling
+            // で 1200 にダウンスケール → per-frame ~8.6MB, 3x memory bandwidth 削減。
+            // 以前 CGContext scale で試して失敗 (CPU 重い) したが、libwebp 内スケーリングは別経路。
+            // 中小 canvas (≤ 1800) は従来通りフル decode で GPU aspect fit に任せる。
+            let canvasLonger = max(decoder.canvasWidth, decoder.canvasHeight)
+            if canvasLonger > 1800 {
+                if let (bgra, w, h) = decoder.decodeFrameScaled(info, maxPixelSize: 1200),
+                   let cg = decoder.makeCGImage(from: bgra, width: w, height: h) {
+                    decoded = cg
+                }
+            } else {
+                if let bgra = decoder.decodeFrame(info),
+                   let cg = decoder.makeCGImage(from: bgra) {
+                    decoded = cg
+                }
             }
             #else
             let cap = maxPixelSize.map { Int($0) } ?? max(decoder.canvasWidth, decoder.canvasHeight)
