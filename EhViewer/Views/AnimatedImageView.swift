@@ -207,9 +207,12 @@ final class AnimatedSourceImageView: UIImageView {
         guard displayLink == nil, let source = animSource, source.frameCount > 1, source.totalDuration > 0 else { return }
         linkStartTime = CACurrentMediaTime()
         let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
+        // WebP は典型 24fps、60fps tick は main thread 回転の無駄。30fps 固定で CPU 半減。
+        // iPhone ProMotion 120Hz でも同様、display tick を間引いて decode スレッドに譲る。
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 24, maximum: 30, preferred: 30)
         link.add(to: .main, forMode: .common)
         displayLink = link
-        LogManager.shared.log("Anim", "displayLink START frames=\(source.frameCount)")
+        LogManager.shared.log("Anim", "displayLink START frames=\(source.frameCount) rate=30fps")
     }
 
     private func stopLink() {
