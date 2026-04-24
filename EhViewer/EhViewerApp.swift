@@ -191,18 +191,6 @@ struct EhViewerApp: App {
         }
         print("[CoreML] modelAvailable: \(CoreMLImageProcessor.shared.modelAvailable)")
 
-        // DEBUG: iPad sim から吸い出した cookie を Keychain に一度だけ注入
-        // (Mac Catalyst の access group 問題を security コマンドでは回避できないため)
-        // 注入完了後、この block は削除する
-        if KeychainService.load(key: "ipb_member_id") == nil {
-            LogManager.shared.log("Auth", "injecting iPad-sim cookies to Keychain (debug)")
-            CookieManager.saveCredentials(CookieManager.Credentials(
-                memberID: "1532300",
-                passHash: "28d002497da9623ccb2f6ffd144f633b",
-                igneous: "1n2bd6yv2ulot91qa"
-            ))
-        }
-
         #if DEBUG
         HTMLParserTests.runAll()
         #endif
