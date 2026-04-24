@@ -251,6 +251,33 @@ final class AnimatedImageSource {
         cacheLock.unlock()
     }
 
+    /// CGImage を CGContext でダウンスケールする (libwebp 経路の maxPixelSize 尊重用)。
+    /// 新規 bitmap を生成するので元の 14MB (2160x1612) を 3.4MB (932x696) に圧縮可能。
+    private static func scaleCGImage(_ cg: CGImage, maxPixelSize: CGFloat) -> CGImage? {
+        let w = CGFloat(cg.width)
+        let h = CGFloat(cg.height)
+        let longer = max(w, h)
+        guard longer > maxPixelSize else { return cg }
+        let scale = maxPixelSize / longer
+        let newW = Int((w * scale).rounded())
+        let newH = Int((h * scale).rounded())
+        guard newW > 0, newH > 0 else { return nil }
+        let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
+            .union(.byteOrder32Little)
+        guard let ctx = CGContext(
+            data: nil,
+            width: newW,
+            height: newH,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: cg.colorSpace ?? CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: bitmapInfo.rawValue
+        ) else { return nil }
+        ctx.interpolationQuality = .medium
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: newW, height: newH))
+        return ctx.makeImage()
+    }
+
     /// 指定 index 集合だけ残して他を evict (ローリング窓 prefetch 用)。
     func retainOnly(indices: Set<Int>) {
         cacheLock.lock()
@@ -304,11 +331,19 @@ final class AnimatedImageSource {
 
         var decoded: CGImage?
         #if canImport(libwebp)
-        // libwebp 経路: スレッド安全、内部ロックなし、真の並列 decode
+        // libwebp 経路: スレッド安全、内部ロックなし、真の並列 decode。
+        // 出力は canvas フル解像度 (例: 2160x1612, 14MB/frame) なので、maxPixelSize が
+        // それより小さければ CGContext でダウンスケール。これをしないと 30 frame cache で
+        // 420MB 確保 + tick のコピーコスト増で iPhone 実機で "再生すらされない" 症状になる。
         if let decoder = libwebpDecoder, clamped < decoder.frames.count {
             let info = decoder.frames[clamped]
             if let bgra = decoder.decodeFrame(info), let cg = decoder.makeCGImage(from: bgra) {
-                decoded = cg
+                if let maxPixelSize, maxPixelSize > 0,
+                   max(cg.width, cg.height) > Int(maxPixelSize) {
+                    decoded = Self.scaleCGImage(cg, maxPixelSize: maxPixelSize) ?? cg
+                } else {
+                    decoded = cg
+                }
             }
         }
         #endif

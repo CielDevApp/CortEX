@@ -66,7 +66,7 @@ struct PageCellView: View {
                             .frame(width: Self.screenSize.width, height: Self.screenSize.height)
                     }
                 } else {
-                    BoomerangWebPView(sourceURL: animURL, isActive: isActiveAnimation, staticPlaceholder: holder.image)
+                    BoomerangWebPView(sourceURL: animURL, readerID: "cell-\(mp4Gid)", pageIndex: index, staticPlaceholder: holder.image)
                         .frame(width: Self.screenSize.width, height: Self.screenSize.height)
                 }
             } else if let animData = holder.animatedWebPData {
@@ -82,7 +82,7 @@ struct PageCellView: View {
                     )
                     .frame(width: Self.screenSize.width, height: Self.screenSize.height)
                 } else {
-                    BoomerangWebPView(sourceData: animData, isActive: isActiveAnimation, staticPlaceholder: holder.image)
+                    BoomerangWebPView(sourceData: animData, readerID: "cell-\(mp4Gid)", pageIndex: index, staticPlaceholder: holder.image)
                         .frame(width: Self.screenSize.width, height: Self.screenSize.height)
                 }
             } else if let image = holder.image {
@@ -156,7 +156,7 @@ struct PageCellView: View {
                             }
                     }
                 } else {
-                    BoomerangWebPView(sourceURL: animURL, isActive: isActiveAnimation, staticPlaceholder: holder.image)
+                    BoomerangWebPView(sourceURL: animURL, readerID: "cell-\(mp4Gid)", pageIndex: index, staticPlaceholder: holder.image)
                         .frame(maxWidth: .infinity)
                         .contentShape(Rectangle())
                         .onTapGesture {
@@ -176,7 +176,7 @@ struct PageCellView: View {
                     )
                     .frame(maxWidth: .infinity)
                 } else {
-                    BoomerangWebPView(sourceData: animData, isActive: isActiveAnimation, staticPlaceholder: holder.image)
+                    BoomerangWebPView(sourceData: animData, readerID: "cell-\(mp4Gid)", pageIndex: index, staticPlaceholder: holder.image)
                         .frame(maxWidth: .infinity)
                 }
             } else if let image = holder.image {

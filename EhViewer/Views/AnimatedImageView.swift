@@ -352,7 +352,13 @@ final class AnimatedSourceImageView: UIImageView {
 /// MP4 変換を介さず CGImageSource で原本 WebP を読む。AnimatedSourceImageView.setSource
 /// が UserDefaults から `boomerangMode` / `hdrEnhancement` を拾って per-frame で
 /// Boomerang (ping-pong) + HDR (CIFilter パイプライン) を同時適用する。
-/// 200 frame 超の WebP は Boomerang 自動 OFF + 警告ログ (`boomerangMaxFrames` で調整可)。
+///
+/// **再生制御**: ▶ タップ再生方式 (2026-04-25 設計変更)。
+/// - デフォルト: ポスター + ▶ 表示 (再生しない)
+/// - ▶ タップ: AnimatedPlaybackCoordinator に登録 → そのセルで再生開始
+/// - 再度タップ: 停止 (coordinator から除外)
+/// - 最大同時再生 3 セル、4 セル目で LRU 排出
+/// - 他ページへスクロールしても coordinator に残っていれば再生継続
 struct BoomerangWebPView: View {
     enum Input: Equatable {
         case url(URL)
@@ -360,32 +366,39 @@ struct BoomerangWebPView: View {
     }
 
     let input: Input
-    var isActive: Bool = true
+    /// reader 識別子 (例: "gallery-3898101", "local-3898101", "nh-3898101")
+    let readerID: String
+    /// ページ index (readerID と組み合わせて coordinator キーに)
+    let pageIndex: Int
     var staticPlaceholder: UIImage? = nil
 
-    init(sourceURL: URL, isActive: Bool = true, staticPlaceholder: UIImage? = nil) {
+    init(sourceURL: URL, readerID: String, pageIndex: Int, staticPlaceholder: UIImage? = nil) {
         self.input = .url(sourceURL)
-        self.isActive = isActive
+        self.readerID = readerID
+        self.pageIndex = pageIndex
         self.staticPlaceholder = staticPlaceholder
     }
 
-    init(sourceData: Data, isActive: Bool = true, staticPlaceholder: UIImage? = nil) {
+    init(sourceData: Data, readerID: String, pageIndex: Int, staticPlaceholder: UIImage? = nil) {
         self.input = .data(sourceData)
-        self.isActive = isActive
+        self.readerID = readerID
+        self.pageIndex = pageIndex
         self.staticPlaceholder = staticPlaceholder
     }
 
     @State private var source: AnimatedImageSource?
     @State private var loadFailed: Bool = false
+    @ObservedObject private var coordinator = AnimatedPlaybackCoordinator.shared
 
-    /// システム逼迫時の共有フラグ (熱 or メモリ警告)。registry から書き換えられる。
-    /// 現状は未使用 (再戻り不能バグにより多重可視機能は棚上げ)。将来の iPhone 対応で復活予定。
+    /// システム逼迫時の共有フラグ (熱 or メモリ警告)。registry から書き換えられる。現状は retained for 将来。
     static var systemDowngraded: Bool = false
 
+    private var pageKey: AnimatedPlaybackCoordinator.PageKey {
+        .init(readerID: readerID, index: pageIndex)
+    }
+    private var isPlaying: Bool { coordinator.isPlaying(pageKey) }
+
     var body: some View {
-        // ポスター下敷き方式: staticPlaceholder を常に描画し、その上に source ready
-        // 時だけ AnimatedImageCellView を overlay する。セルの aspect / 高さは
-        // staticPlaceholder だけで決まる → 状態遷移で layout 不変 → 黒線完全消滅。
         ZStack {
             if let staticPlaceholder {
                 Image(uiImage: staticPlaceholder)
@@ -395,34 +408,54 @@ struct BoomerangWebPView: View {
                 Color.clear
                     .aspectRatio(contentAspectRatio, contentMode: .fit)
             }
-            if isActive, let source {
+            if isPlaying, let source {
                 AnimatedImageCellView(source: source, isActive: true)
             }
+            // ▶ オーバーレイ: 停止中のみ表示。タップで coordinator.toggle 呼び出し。
+            if !isPlaying {
+                Button {
+                    coordinator.toggle(pageKey)
+                } label: {
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 64, weight: .regular))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .shadow(color: .black.opacity(0.5), radius: 6, x: 0, y: 2)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("再生")
+            }
+        }
+        // 再生中に全体タップ → 停止 (▶ ボタンが非表示になっても "Tap to stop" できるよう)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if isPlaying { coordinator.toggle(pageKey) }
         }
         .task(id: activeTaskID) {
-            // 一瞬 active になっただけで source build を始めると飽和する。200ms デバウンス後も
-            // active ならロード、それ以前に inactive に戻ったら Task.CancellationError で中断。
-            if isActive {
+            if isPlaying {
+                // 200ms デバウンス (誤タップ / 連打対策)
                 do {
                     try await Task.sleep(nanoseconds: 200_000_000)
                 } catch {
                     return
                 }
+                // 再生状態が変わってなければ source をロード
+                guard coordinator.isPlaying(pageKey) else { return }
                 await loadSource()
             } else {
                 if self.source != nil {
                     self.source = nil
-                    LogManager.shared.log("Boomerang", "source released (inactive)")
+                    LogManager.shared.log("Boomerang", "source released (not playing) key=\(readerID)#\(pageIndex)")
                 }
             }
         }
     }
 
-    /// task を isActive 遷移のみで再実行するための id。
+    /// task は isPlaying 遷移のみで再実行。
     private var activeTaskID: String {
         switch input {
-        case .url(let u): return "u:\(u.absoluteString):\(isActive)"
-        case .data(let d): return "d:\(d.count):\(isActive)"
+        case .url(let u): return "u:\(u.absoluteString):\(isPlaying)"
+        case .data(let d): return "d:\(d.count):\(isPlaying)"
         }
     }
 
@@ -450,8 +483,8 @@ struct BoomerangWebPView: View {
             }
         }.value
         await MainActor.run {
-            guard self.isActive else {
-                LogManager.shared.log("Boomerang", "source built but already inactive — discard")
+            guard coordinator.isPlaying(pageKey) else {
+                LogManager.shared.log("Boomerang", "source built but no longer playing — discard")
                 return
             }
             if let loaded {
