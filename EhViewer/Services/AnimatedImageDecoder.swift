@@ -122,11 +122,13 @@ final class AnimatedImageSourceRegistry {
         lock.unlock()
     }
 
-    private func dropAllCaches() {
+    /// 全 alive AnimatedImageSource の frameCache を解放 (rawData は維持)。
+    /// 呼び出し元: (1) メモリ警告通知、(2) reader close 時の手動 cleanup。
+    func dropAllCaches() {
         lock.lock()
         let snapshot = sources.values.compactMap { $0.value }
         lock.unlock()
-        LogManager.shared.log("Mem", "MemoryWarning → dropAllCaches alive=\(snapshot.count)")
+        LogManager.shared.log("Mem", "dropAllCaches alive=\(snapshot.count)")
         for s in snapshot { s.dropFrameCache() }
     }
 }
@@ -387,9 +389,15 @@ final class AnimatedImageSource {
     /// cache hit ならロックなしで即返す。
     func parallelFrame(at index: Int, maxPixelSize: CGFloat?) -> CGImage? {
         let clamped = max(0, min(index, frameCount - 1))
+        // 計測: lock wait + cache hit/miss
+        let tLockStart = CFAbsoluteTimeGetCurrent()
         cacheLock.lock()
+        let lockWaitMs = (CFAbsoluteTimeGetCurrent() - tLockStart) * 1000
         if let cg = frameCache[clamped] { cacheLock.unlock(); return cg }
         cacheLock.unlock()
+        // 計測: decode wall time + thread id
+        let tDecodeStart = CFAbsoluteTimeGetCurrent()
+        let tid = pthread_mach_thread_np(pthread_self())
 
         var decoded: CGImage?
         #if canImport(libwebp)
@@ -446,9 +454,14 @@ final class AnimatedImageSource {
             returnSource(src)
         }
         guard let decoded else { return nil }
+        let decodeMs = (CFAbsoluteTimeGetCurrent() - tDecodeStart) * 1000
         cacheLock.lock()
         frameCache[clamped] = decoded
         cacheLock.unlock()
+        // 30ms 超のみ記録。tid で並列度が見える、lockWait で contention が見える。
+        if decodeMs > 30 {
+            LogManager.shared.log("Perf", "parallelFrame[\(clamped)] decode=\(Int(decodeMs))ms lockWait=\(String(format: "%.1f", lockWaitMs))ms tid=\(tid)")
+        }
         return decoded
     }
 

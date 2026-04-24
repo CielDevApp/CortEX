@@ -187,10 +187,11 @@ struct GalleryReaderView: View {
             resolvedDirection = (mode == .horizontal) ? 1 : 0
         }
         .onDisappear {
-            // reader close 時にこの reader 配下の再生を全停止。
+            // reader close 時にこの reader 配下の再生を全停止 + 全 animated source cache 解放。
             // これをしないと SwiftUI が LazyVStack セルを即 unmount しない環境で
             // displayLink + rolling prefetch が reader 外で回り続け CPU 100% になる。
-            AnimatedPlaybackCoordinator.shared.resetForReader("cell-\(gallery.gid)")
+            // 加えて複数 animated source を開いた後 memory パンパンで戻る問題の回避も兼ねる。
+            AnimatedPlaybackCoordinator.shared.closeReader("cell-\(gallery.gid)")
         }
         .focusable()
         .focusEffectDisabled()
