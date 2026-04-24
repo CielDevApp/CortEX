@@ -514,6 +514,20 @@ struct BoomerangWebPView: View {
 
     private func loadSource() async {
         let input = self.input
+        // URL 経路なら AnimatedImageSourceCache (LRU 強参照、最近 3 source 保持) を先にチェック。
+        // ヒットすると demux + 初動 decode 全てスキップ → 同作品再タップが 800-1300ms → 即時に。
+        let cacheKey: String? = {
+            if case .url(let u) = input { return u.absoluteString }
+            return nil
+        }()
+        if let cacheKey, let cached = AnimatedImageSourceCache.shared.get(urlKey: cacheKey) {
+            guard coordinator.isPlaying(pageKey) else { return }
+            self.source = cached
+            self.loadFailed = false
+            LogManager.shared.log("Boomerang", "source CACHE HIT frames=\(cached.frameCount)")
+            return
+        }
+
         let loaded: AnimatedImageSource? = await Task.detached(priority: .userInitiated) {
             switch input {
             case .url(let url):
@@ -531,6 +545,9 @@ struct BoomerangWebPView: View {
             if let loaded {
                 self.source = loaded
                 self.loadFailed = false
+                if let cacheKey {
+                    AnimatedImageSourceCache.shared.put(urlKey: cacheKey, source: loaded)
+                }
                 LogManager.shared.log("Boomerang", "source ready frames=\(loaded.frameCount) size=\(Int(loaded.pixelSize.width))x\(Int(loaded.pixelSize.height))")
             } else {
                 self.loadFailed = true
