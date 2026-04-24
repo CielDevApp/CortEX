@@ -5,11 +5,61 @@ import CoreImage
 import UIKit
 #endif
 
+/// AnimatedImageSource の LRU 強参照キャッシュ。
+/// ▶ タップで毎回 WebP demux + 初動 decode を走らせると 800-1300ms のラグが出るため、
+/// 最近 3 source を強参照で保持して再タップ即再生を実現。
+///
+/// - キー: URL.absoluteString (`.url` 経路のみ対象。`.data` 経路はキャッシュしない)
+/// - 容量: 3 件 (各 rawData 10-20MB + frame cache ~75MB = 合計 ~300MB 上限目安)
+/// - evict: タップ順の古いものから
+/// - メモリ警告時: Registry.dropAllCaches と同時に clear
+#if canImport(UIKit)
+@MainActor
+final class AnimatedImageSourceCache {
+    static let shared = AnimatedImageSourceCache()
+    private init() {}
+
+    private let capacity: Int = 3
+    private var order: [String] = []
+    private var items: [String: AnimatedImageSource] = [:]
+
+    func get(urlKey: String) -> AnimatedImageSource? {
+        guard let s = items[urlKey] else { return nil }
+        // LRU: 先頭に持ち上げ
+        if let idx = order.firstIndex(of: urlKey) { order.remove(at: idx) }
+        order.insert(urlKey, at: 0)
+        return s
+    }
+
+    func put(urlKey: String, source: AnimatedImageSource) {
+        if items[urlKey] != nil {
+            items[urlKey] = source
+            if let idx = order.firstIndex(of: urlKey) { order.remove(at: idx) }
+            order.insert(urlKey, at: 0)
+            return
+        }
+        items[urlKey] = source
+        order.insert(urlKey, at: 0)
+        while order.count > capacity {
+            let evicted = order.removeLast()
+            items.removeValue(forKey: evicted)
+            LogManager.shared.log("Anim", "source cache evict \((evicted as NSString).lastPathComponent)")
+        }
+    }
+
+    func clear() {
+        if !items.isEmpty {
+            LogManager.shared.log("Anim", "source cache clear count=\(items.count)")
+            items.removeAll()
+            order.removeAll()
+        }
+    }
+}
+
 /// 現在生存中の AnimatedImageSource インスタンスを弱参照で束ね、
 /// UIApplication.didReceiveMemoryWarning 通知で一斉に frameCache を解放する。
 /// 個別インスタンスが NotificationCenter observer を持つと deinit 順で解放されない
 /// 危険があるため、中央ハブ方式で集中管理する。
-#if canImport(UIKit)
 final class AnimatedImageSourceRegistry {
     static let shared = AnimatedImageSourceRegistry()
     private let lock = NSLock()
@@ -31,9 +81,10 @@ final class AnimatedImageSourceRegistry {
                 queue: .main
             ) { _ in
                 // 多重可視降格フラグを立てる: 以降は currentIndex 中央 1 枚のみ再生。
-                // cache も全破棄する。
+                // cache (強参照 LRU / 弱参照 registry) も全破棄する。
                 BoomerangWebPView.systemDowngraded = true
                 AnimatedImageSourceRegistry.shared.dropAllCaches()
+                Task { @MainActor in AnimatedImageSourceCache.shared.clear() }
                 LogManager.shared.log("Mem", "MemoryWarning → systemDowngraded=true (多重可視停止)")
             }
             // 熱状態通知: .fair/.serious は AnimatedSourceImageView が live で読んで
