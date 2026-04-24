@@ -3,6 +3,29 @@ import SwiftUI
 #if canImport(UIKit)
 import UIKit
 
+/// 通常モード補正設定スナップショット。per-frame enhance の入力一式。
+/// 静画 applyFilterPipeline と同じ排他: enhanceFilter ON 時は HDR 抑止。
+/// ファイルスコープ struct (AnimatedSourceImageView の外) にすることで Equatable 適合が
+/// nonisolated になり、background queue 内 `!=` 比較が Swift 6 下でも合法になる。
+fileprivate struct AnimEnhanceConfig: Hashable {
+    let enhanceFilter: Bool
+    let denoise: Bool
+    let hdr: Bool
+    /// NE 人物セグメンテーション。`animatedPersonSegmentation` UserDefaults (default true) で制御。
+    /// 「通常モードの NE 人物シャープ化をアニメにも当てる」= 田中本命機能。Vision framework が NE 経路で
+    /// マスク生成 → 人物領域のみシャープ+彩度ブースト。静画 applyPersonSegmentation とは異なり
+    /// 背景側を触らない (per-frame では denoise / enhanceFilter 段に任せる)。
+    let personSeg: Bool
+    var hasAny: Bool { enhanceFilter || denoise || hdr || personSeg }
+    static func fromDefaults() -> AnimEnhanceConfig {
+        let enh = UserDefaults.standard.bool(forKey: "imageEnhanceFilter")
+        let den = UserDefaults.standard.bool(forKey: "denoiseEnabled")
+        let hdrRaw = UserDefaults.standard.bool(forKey: "hdrEnhancement")
+        let seg = UserDefaults.standard.bool(forKey: "animatedPersonSegmentation")
+        return AnimEnhanceConfig(enhanceFilter: enh, denoise: den, hdr: hdrRaw && !enh, personSeg: seg)
+    }
+}
+
 /// アニメ画像表示用 UIImageView (CADisplayLink 駆動)。
 /// UIImage.animatedImage(with:duration:) は 200+ frame で内部 pre-decode が
 /// 実質ハングするため採用せず。CADisplayLink で経過時間 → frame index を算出し
@@ -21,14 +44,19 @@ final class AnimatedSourceImageView: UIImageView {
     private var lastDisplayedIdx: Int = -1
 
     /// 設定
-    private var hdrEnabled: Bool = false
     private var currentMaxDim: CGFloat = 0
 
-    /// HDR 適用済み CGImage キャッシュ (key = frame index)。
-    /// HDREnhancer.enhanceCG の GPU roundtrip を 1 frame 1 回に抑える。
-    private var hdrCache: [Int: CGImage] = [:]
-    private let hdrCacheLock = NSLock()
-    private var hdrInflight: Set<Int> = []
+    /// 現在 enhancedCache に入っている結果の設定。live config と不一致なら flush + 再 enhance。
+    /// 定義は ファイル先頭の AnimEnhanceConfig 参照 (Swift 6 nonisolated 適合のため外出し)。
+    private var currentConfig: AnimEnhanceConfig = AnimEnhanceConfig(enhanceFilter: false, denoise: false, hdr: false, personSeg: false)
+    /// 補正適用済み CGImage キャッシュ (key = frame index)。
+    /// currentConfig の組み合わせで enhance 結果を保持し、HDREnhancer / enhanceFilterCG の
+    /// GPU roundtrip を 1 frame 1 回に抑える。設定変化時は flush。
+    private var enhancedCache: [Int: CGImage] = [:]
+    private let enhancedCacheLock = NSLock()
+    private var enhanceInflight: Set<Int> = []
+    /// ソース単位のグレースケール判定 (setSource 時 1 回のみ算出)。per-frame コスト回避。
+    private var sourceIsGrayscale: Bool = false
 
     func setSource(_ source: AnimatedImageSource, isActive: Bool) {
         let sid = ObjectIdentifier(source)
@@ -49,27 +77,34 @@ final class AnimatedSourceImageView: UIImageView {
         self.currentSourceID = sid
         self.isActive = isActive
         self.lastDisplayedIdx = -1
-        hdrCacheLock.lock()
-        hdrCache.removeAll(keepingCapacity: false)
-        hdrInflight.removeAll(keepingCapacity: false)
-        hdrCacheLock.unlock()
+        enhancedCacheLock.lock()
+        enhancedCache.removeAll(keepingCapacity: false)
+        enhanceInflight.removeAll(keepingCapacity: false)
+        enhancedCacheLock.unlock()
 
         let maxDim = computeMaxPixelSize()
         currentMaxDim = maxDim
 
-        // Boomerang / HDR は tick / rolling prefetch 時にライブで UserDefaults を読むため、
-        // ここではキャプチャしない。frameCount 上限による降格も廃止 (rolling cache で
-        // メモリは常時 ~30 frame に bounded、frame 数多くても問題なし)。
-        hdrEnabled = UserDefaults.standard.bool(forKey: "hdrEnhancement")  // 初回 first frame SYNC 用
+        // Boomerang / 通常モード補正 (enhanceFilter / HDR) は tick / rolling prefetch 時に
+        // ライブで UserDefaults を読むため、ここでは初回 first frame SYNC 用にのみスナップ。
+        currentConfig = AnimEnhanceConfig.fromDefaults()
 
-        LogManager.shared.log("Anim", "setSource frames=\(source.frameCount) active=\(isActive) dur=\(String(format: "%.2f", source.totalDuration))s maxDim=\(Int(maxDim))")
+        LogManager.shared.log("Anim", "setSource frames=\(source.frameCount) active=\(isActive) dur=\(String(format: "%.2f", source.totalDuration))s maxDim=\(Int(maxDim)) config=\(currentConfig)")
 
         // first frame SYNC (黒画面回避)
         let t0 = CFAbsoluteTimeGetCurrent()
         if let first = source.frame(at: 0, maxPixelSize: maxDim) {
-            self.image = UIImage(cgImage: hdrEnabled ? (HDREnhancer.enhanceCG(first) ?? first) : first)
+            // sourceIsGrayscale: enhanceFilter の isGrayscale パラメータ用。1 回だけ算出。
+            sourceIsGrayscale = LanczosUpscaler.shared.isGrayscaleImage(first)
+            let display = Self.applyEnhance(first, config: currentConfig, isGrayscale: sourceIsGrayscale) ?? first
+            self.image = UIImage(cgImage: display)
+            if currentConfig.hasAny {
+                enhancedCacheLock.lock()
+                enhancedCache[0] = display
+                enhancedCacheLock.unlock()
+            }
             lastDisplayedIdx = 0
-            LogManager.shared.log("Anim", "first frame SYNC (decode=\(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms size=\(first.width)x\(first.height))")
+            LogManager.shared.log("Anim", "first frame SYNC (decode=\(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms size=\(first.width)x\(first.height) gray=\(sourceIsGrayscale))")
         } else {
             LogManager.shared.log("Anim", "first frame decode FAILED")
         }
@@ -149,27 +184,29 @@ final class AnimatedSourceImageView: UIImageView {
             perFrameBox.deallocate()
             let decodeMs = wallMs
 
-            // eager HDR enhance: decode 完了した先頭 frame をそのまま HDR 化して cache 充填
-            let hdrOn = UserDefaults.standard.bool(forKey: "hdrEnhancement")
-            var hdrMs = 0
-            if hdrOn {
+            // eager enhance: decode 完了した先頭 frame を per-frame 補正して cache 充填。
+            // 補正無しでは tick が非補正 frame を先に表示 → async enhance 完了で差し替え →
+            // 次 frame 非補正 → 差し替え… の明滅が発生する (HDR 経路と同じ理屈)。
+            let config = self.currentConfig
+            let gray = self.sourceIsGrayscale
+            var enhanceMs = 0
+            if config.hasAny {
                 let t2 = CFAbsoluteTimeGetCurrent()
-                // pick up frames decoded above
                 let enhanceTargets: [(Int, CGImage)] = (0..<n).compactMap { i in
                     guard let cg = source.cachedFrame(at: i) else { return nil }
                     return (i, cg)
                 }
                 DispatchQueue.concurrentPerform(iterations: enhanceTargets.count) { k in
                     let (i, cg) = enhanceTargets[k]
-                    if let enhanced = HDREnhancer.enhanceCG(cg) {
-                        self.hdrCacheLock.lock()
-                        self.hdrCache[i] = enhanced
-                        self.hdrCacheLock.unlock()
+                    if let enhanced = Self.applyEnhance(cg, config: config, isGrayscale: gray) {
+                        self.enhancedCacheLock.lock()
+                        self.enhancedCache[i] = enhanced
+                        self.enhancedCacheLock.unlock()
                     }
                 }
-                hdrMs = Int((CFAbsoluteTimeGetCurrent() - t2) * 1000)
+                enhanceMs = Int((CFAbsoluteTimeGetCurrent() - t2) * 1000)
             }
-            LogManager.shared.log("Anim", "initial rolling prefetch decode=\(decodeMs)ms hdr=\(hdrMs)ms frames=\(n)/\(source.frameCount)")
+            LogManager.shared.log("Anim", "initial rolling prefetch decode=\(decodeMs)ms enhance=\(enhanceMs)ms config=\(config) frames=\(n)/\(source.frameCount)")
         }
 
         // 継続: 100ms 毎に keepSet 内 missing frame を並列 decode + 範囲外 evict
@@ -223,37 +260,54 @@ final class AnimatedSourceImageView: UIImageView {
                 #endif
             }
 
-            // HDR 先読み: keepSet 内で frameCache あり & hdrCache 無し & inflight 無し を並列 enhance。
-            // ライブ UserDefaults を読んで toggle OFF 中はスキップ + hdrCache 全解放。
-            let liveHDR = UserDefaults.standard.bool(forKey: "hdrEnhancement")
-            if !liveHDR {
-                self.hdrCacheLock.lock()
-                if !self.hdrCache.isEmpty { self.hdrCache.removeAll(keepingCapacity: false) }
-                self.hdrCacheLock.unlock()
+            // 通常モード補正先読み: keepSet 内で frameCache あり & enhancedCache 無し &
+            // inflight 無し を並列 enhance。ライブ UserDefaults から config を組み直し、
+            // 設定変化時は cache 全破棄 + 現フレーム強制再描画。
+            let liveConfig = AnimEnhanceConfig.fromDefaults()
+            var configChanged = false
+            self.enhancedCacheLock.lock()
+            if liveConfig != self.currentConfig {
+                self.enhancedCache.removeAll(keepingCapacity: false)
+                self.enhanceInflight.removeAll(keepingCapacity: false)
+                self.currentConfig = liveConfig
+                configChanged = true
             }
-            if liveHDR {
-                self.hdrCacheLock.lock()
-                let hdrMissing: [(Int, CGImage)] = keepSet.compactMap { i in
-                    if self.hdrCache[i] != nil || self.hdrInflight.contains(i) { return nil }
+            self.enhancedCacheLock.unlock()
+            if configChanged {
+                DispatchQueue.main.async { [weak self] in
+                    self?.lastDisplayedIdx = -1
+                }
+                LogManager.shared.log("Anim", "enhance config changed (rolling) → \(liveConfig), cache cleared")
+            }
+
+            if !liveConfig.hasAny {
+                self.enhancedCacheLock.lock()
+                if !self.enhancedCache.isEmpty { self.enhancedCache.removeAll(keepingCapacity: false) }
+                self.enhancedCacheLock.unlock()
+            } else {
+                let gray = self.sourceIsGrayscale
+                self.enhancedCacheLock.lock()
+                let enhanceMissing: [(Int, CGImage)] = keepSet.compactMap { i in
+                    if self.enhancedCache[i] != nil || self.enhanceInflight.contains(i) { return nil }
                     guard let cg = source.cachedFrame(at: i) else { return nil }
-                    self.hdrInflight.insert(i)
+                    self.enhanceInflight.insert(i)
                     return (i, cg)
                 }
-                self.hdrCacheLock.unlock()
-                if !hdrMissing.isEmpty {
-                    DispatchQueue.concurrentPerform(iterations: hdrMissing.count) { k in
-                        let (i, cg) = hdrMissing[k]
-                        let enhanced = HDREnhancer.enhanceCG(cg)
-                        self.hdrCacheLock.lock()
-                        self.hdrInflight.remove(i)
-                        if let enhanced { self.hdrCache[i] = enhanced }
-                        self.hdrCacheLock.unlock()
+                self.enhancedCacheLock.unlock()
+                if !enhanceMissing.isEmpty {
+                    DispatchQueue.concurrentPerform(iterations: enhanceMissing.count) { k in
+                        let (i, cg) = enhanceMissing[k]
+                        let enhanced = Self.applyEnhance(cg, config: liveConfig, isGrayscale: gray)
+                        self.enhancedCacheLock.lock()
+                        self.enhanceInflight.remove(i)
+                        if let enhanced { self.enhancedCache[i] = enhanced }
+                        self.enhancedCacheLock.unlock()
                     }
                 }
-                // hdrCache の evict も同期: keepSet 外を削除
-                self.hdrCacheLock.lock()
-                self.hdrCache = self.hdrCache.filter { keepSet.contains($0.key) }
-                self.hdrCacheLock.unlock()
+                // enhancedCache の evict も同期: keepSet 外を削除
+                self.enhancedCacheLock.lock()
+                self.enhancedCache = self.enhancedCache.filter { keepSet.contains($0.key) }
+                self.enhancedCacheLock.unlock()
             }
         }
         timer.resume()
@@ -313,74 +367,106 @@ final class AnimatedSourceImageView: UIImageView {
             LogManager.shared.log("Anim", "tick=\(tickCount) idx=\(idx) last=\(lastDisplayedIdx) miss=\(tickMissCount) elapsed=\(String(format: "%.2f", elapsed))s")
         }
 
-        // HDR トグルはライブで UserDefaults を読む。
-        // setSource 時に固定すると後から HDR を OFF にしても cached 結果が表示され続ける。
-        let liveHDR = UserDefaults.standard.bool(forKey: "hdrEnhancement")
-        if liveHDR != hdrEnabled {
-            hdrEnabled = liveHDR
-            // toggle 変化時: hdrCache を破棄 + 現フレーム強制再描画
-            hdrCacheLock.lock()
-            hdrCache.removeAll(keepingCapacity: false)
-            hdrCacheLock.unlock()
+        // 通常モード補正設定はライブで UserDefaults を読む。
+        // setSource 時に固定すると後から toggle しても cached 結果が表示され続ける。
+        let liveConfig = AnimEnhanceConfig.fromDefaults()
+        enhancedCacheLock.lock()
+        let configChanged = liveConfig != currentConfig
+        if configChanged {
+            enhancedCache.removeAll(keepingCapacity: false)
+            enhanceInflight.removeAll(keepingCapacity: false)
+            currentConfig = liveConfig
+        }
+        enhancedCacheLock.unlock()
+        if configChanged {
             lastDisplayedIdx = -1
-            LogManager.shared.log("Anim", "HDR live toggle → \(liveHDR), cache cleared")
+            LogManager.shared.log("Anim", "enhance config live toggle → \(liveConfig), cache cleared")
         }
 
         if idx == lastDisplayedIdx { return }
 
         if let cached = source.cachedFrame(at: idx) {
-            if hdrEnabled {
-                if let enhanced = readHDR(idx) {
-                    lastDisplayedIdx = idx
-                    self.image = UIImage(cgImage: enhanced)
-                } else {
-                    // HDR cache miss: 非 HDR を表示してから差し替えるとチラつくため、
-                    // enhance 完了までは前フレームを維持。enhance は裏で走らせる。
-                    scheduleHDREnhance(idx: idx, cg: cached)
-                    tickMissCount += 1
-                }
-            } else {
+            if !liveConfig.hasAny {
                 lastDisplayedIdx = idx
                 self.image = UIImage(cgImage: cached)
+            } else if let enhanced = readEnhanced(idx) {
+                lastDisplayedIdx = idx
+                self.image = UIImage(cgImage: enhanced)
+            } else {
+                // cache miss: 非補正を表示してから差し替えるとチラつくため、
+                // enhance 完了までは前フレームを維持。enhance は裏で走らせる。
+                scheduleEnhance(idx: idx, cg: cached, config: liveConfig)
+                tickMissCount += 1
             }
         } else {
             tickMissCount += 1
         }
     }
 
-    private func readHDR(_ idx: Int) -> CGImage? {
-        hdrCacheLock.lock()
-        defer { hdrCacheLock.unlock() }
-        return hdrCache[idx]
+    private func readEnhanced(_ idx: Int) -> CGImage? {
+        enhancedCacheLock.lock()
+        defer { enhancedCacheLock.unlock() }
+        return enhancedCache[idx]
     }
 
-    private func scheduleHDREnhance(idx: Int, cg: CGImage) {
-        hdrCacheLock.lock()
-        if hdrCache[idx] != nil || hdrInflight.contains(idx) {
-            hdrCacheLock.unlock()
+    private func scheduleEnhance(idx: Int, cg: CGImage, config: AnimEnhanceConfig) {
+        enhancedCacheLock.lock()
+        if enhancedCache[idx] != nil || enhanceInflight.contains(idx) {
+            enhancedCacheLock.unlock()
             return
         }
-        hdrInflight.insert(idx)
-        hdrCacheLock.unlock()
+        enhanceInflight.insert(idx)
+        enhancedCacheLock.unlock()
+        let gray = sourceIsGrayscale
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
-            let enhanced = HDREnhancer.enhanceCG(cg)
-            self.hdrCacheLock.lock()
-            self.hdrInflight.remove(idx)
-            if let enhanced {
-                self.hdrCache[idx] = enhanced
+            let enhanced = Self.applyEnhance(cg, config: config, isGrayscale: gray)
+            self.enhancedCacheLock.lock()
+            self.enhanceInflight.remove(idx)
+            // 設定が変わっていたらこの enhance 結果は古いので破棄
+            let stillCurrent = self.currentConfig == config
+            if stillCurrent, let enhanced {
+                self.enhancedCache[idx] = enhanced
             }
-            self.hdrCacheLock.unlock()
+            self.enhancedCacheLock.unlock()
             // **重要**: enhance 完了時、まだ該当 idx を表示中なら image を差し替える。
             // これをしないと tick の `idx == lastDisplayedIdx` early return で
-            // HDR 結果が一度も表示されないまま次フレームに進む (元バグ)。
-            guard let enhanced else { return }
+            // 補正結果が一度も表示されないまま次フレームに進む (HDR 時の元バグ対策)。
+            guard stillCurrent, let enhanced else { return }
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.lastDisplayedIdx == idx else { return }
-                guard UserDefaults.standard.bool(forKey: "hdrEnhancement") else { return }
+                guard self.currentConfig == config else { return }
                 self.image = UIImage(cgImage: enhanced)
             }
         }
+    }
+
+    /// 共通 enhance チェーン。静画 applyFilterPipeline と同じ順序・排他を再現。
+    /// 順序: denoise → enhanceFilter → (HDR 排他) → personSeg。
+    /// - denoise ON: CINoiseReduction (sharpness=0.4 含む) で線を再シャープ化
+    /// - enhanceFilter ON: S字トーン + Vibrance + HighlightShadow + LocalToneMap (HDR は抑止)
+    /// - enhanceFilter OFF & HDR ON: HDREnhancer.enhanceCG
+    /// - personSeg ON: Vision/NE で人物マスク → 人物領域のみシャープ+彩度ブースト。マスク空/失敗時は
+    ///   スキップ (検出率の低いアニメ系でもチェーン破壊しない)。チェーン末尾に置くのは、先行段
+    ///   (denoise/enhanceFilter/HDR) の効果を人物領域に乗せた上で更にブーストする意図。
+    /// - 全 OFF: cg をそのまま返す (hasAny で事前弾きされるので通常は到達しない)
+    nonisolated fileprivate static func applyEnhance(_ cg: CGImage, config: AnimEnhanceConfig, isGrayscale: Bool) -> CGImage? {
+        var result: CGImage = cg
+        if config.denoise {
+            result = LanczosUpscaler.denoiseCG(result) ?? result
+        }
+        if config.enhanceFilter {
+            result = LanczosUpscaler.enhanceFilterCG(result, isGrayscale: isGrayscale) ?? result
+        } else if config.hdr {
+            result = HDREnhancer.enhanceCG(result) ?? result
+        }
+        if config.personSeg {
+            if let segmented = LanczosUpscaler.applyPersonSegmentationCG(result) {
+                result = segmented
+            }
+            // マスク nil 時は result 不変 (元のブースト済画像をそのまま返す)
+        }
+        return result
     }
 
     private func computeMaxPixelSize() -> CGFloat {
@@ -636,38 +722,74 @@ struct BoomerangWebPView: View {
         self.loadFailed = false
     }
 
-    /// プリロード要否の判定: フゲンクラスの重量作品 (巨大 canvas × 長尺) のみ対象。
-    /// それ以外は rolling prefetch だけで十分追いつくため、プリロード待機時間を発生させない。
+    /// プリロード級の分類。frameCount × canvas で「追いつき負荷」を 3 段階に格付け。
+    /// 各級で `targetSeconds` を変えて、重量作品ほど予算を引き延ばす。
     ///
-    /// 基準 (両方満たした時のみプリロード):
-    /// - canvasLonger ≥ 2000px: 2080x3104 等の A4 原寸級 canvas (decode 1 frame ~33ms)
-    /// - frameCount ≥ 150: 5 秒超の長尺 (短尺は rolling で即追いつく)
+    /// 基準 (2026-04-25 田中命名):
+    /// - `.none`: canvas < 2000px or frames < 150 → rolling だけで追いつく、preload スキップ
+    /// - `.fugen`: 2000px ≤ canvas && 150 ≤ frames < 200 (例: 179f × 2080x3104)
+    /// - `.ultraFugen`: 2000px ≤ canvas && 200 ≤ frames (例: 208f × 2080x3104、14ページ帯)
     ///
     /// 実例:
-    /// - 179 frames × 2080x3104 (フゲン): 両方満たす → preload
-    /// - 100 frames × 2080x3104: frameCount<150 → skip (3s 程度で rolling 完了)
-    /// - 179 frames × 1500x2200: canvasLonger<2000 → skip (1 frame ~15ms、30fps で追いつく)
-    /// - 179 frames × 1000x1400: canvasLonger<2000 → skip
-    private func shouldPreload(_ source: AnimatedImageSource) -> Bool {
-        let canvasLonger = max(source.pixelSize.width, source.pixelSize.height)
-        let heavy = canvasLonger >= 2000 && source.frameCount >= 150
-        if !heavy {
-            LogManager.shared.log("Anim", "preload SKIP (not Fugen-class: \(source.frameCount)f × \(Int(source.pixelSize.width))x\(Int(source.pixelSize.height)))")
+    /// - 208 frames × 2080x3104 (超フゲン): frames >= 200 → ultraFugen, target 3.0s
+    /// - 179 frames × 2080x3104 (フゲン): → fugen, target 1.8s
+    /// - 100 frames × 2080x3104: frames < 150 → none (rolling で完了)
+    /// - 179 frames × 1500x2200: canvas < 2000 → none (1 frame ~15ms で追いつく)
+    fileprivate enum PreloadClass: CustomStringConvertible {
+        case none
+        case fugen
+        case ultraFugen
+
+        /// プリロード予算 (decode のみ、rolling で残りを追いかける)。
+        /// ultraFugen は 208f × ~250ms/frame の iPhone 実測で 1.8s → 14% しか preload できず
+        /// 再生側が後半到達前に rolling 追いつき失敗 → drops=160+ を記録。3.0s に緩和して
+        /// 先頭 ~25% まで preload + rolling で稼ぐ構成。
+        var targetSeconds: Double {
+            switch self {
+            case .none: return 0
+            case .fugen: return 1.8
+            case .ultraFugen: return 3.0
+            }
         }
-        return heavy
+
+        var shouldPreload: Bool { self != .none }
+
+        var description: String {
+            switch self {
+            case .none: return "none"
+            case .fugen: return "fugen"
+            case .ultraFugen: return "ultraFugen"
+            }
+        }
     }
 
-    /// 時間ベースのプリロード: `preloadTargetSeconds` 経過したら decode 済 frame 数に関わらず打ち切り。
-    /// 残りは rolling prefetch (preload=ON 時 retainOnly 停止) が playback 中に decode。
-    ///
-    /// 1.8s で切り上げる根拠 (2026-04-25 実測調整):
-    /// - 1.5s は耐えるが「カクツク一瞬」報告あり → 余裕 0.3s 追加
-    /// - Fugen 179f で ~55 frame (先頭 30% 相当) decode → playback 開始
-    /// - rolling decode rate ≈ playback consumption rate (~30 fps) なので
-    ///   先頭 30% preload 済からスタートすれば playback が後半に達するまでに decode 追いつく
-    /// - preload=ON で retainOnly 停止のため decode 済 frame は evict されず累積
-    /// - リバートしたい時は本コミット単体を revert すれば前版 (1.5s) に戻る
-    private static let preloadTargetSeconds: Double = 1.8
+    private func classifyPreload(_ source: AnimatedImageSource) -> PreloadClass {
+        let canvasLonger = max(source.pixelSize.width, source.pixelSize.height)
+        let frames = source.frameCount
+        if canvasLonger >= 2000 && frames >= 200 { return .ultraFugen }
+        if canvasLonger >= 2000 && frames >= 150 { return .fugen }
+        return .none
+    }
+
+    /// プリロード要否の判定 + ログ出力。`classifyPreload` の薄いラッパ。
+    /// Mac Catalyst は CPU/メモリ共に余裕があり decode が充分速いため、プリロード待機
+    /// (ポスター → ▶ → プリロード中オーバーレイ → 再生) の UX コストのほうが上回る。
+    /// → Mac では常に SKIP、rolling prefetch に任せる (田中指示 2026-04-25)。
+    private func shouldPreload(_ source: AnimatedImageSource) -> Bool {
+        #if targetEnvironment(macCatalyst)
+        LogManager.shared.log("Anim", "preload SKIP (Mac Catalyst: rolling で充分)")
+        return false
+        #else
+        let cls = classifyPreload(source)
+        let dim = "\(source.frameCount)f × \(Int(source.pixelSize.width))x\(Int(source.pixelSize.height))"
+        if cls == .none {
+            LogManager.shared.log("Anim", "preload SKIP (not Fugen-class: \(dim))")
+        } else {
+            LogManager.shared.log("Anim", "preload class=\(cls) target=\(cls.targetSeconds)s \(dim)")
+        }
+        return cls.shouldPreload
+        #endif
+    }
 
     private func runPreload(_ src: AnimatedImageSource) async {
         isPreloading = true
@@ -675,7 +797,7 @@ struct BoomerangWebPView: View {
         let t0 = CFAbsoluteTimeGetCurrent()
         let frameCount = src.frameCount
         let maxDim = preloadMaxDim(for: src)
-        let target = Self.preloadTargetSeconds
+        let target = classifyPreload(src).targetSeconds
         LogManager.shared.log("Anim", "preload start frames=\(frameCount) target=\(target)s maxDim=\(Int(maxDim))")
         let batchSize = 10
         var batchStart = 0
