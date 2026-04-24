@@ -175,6 +175,23 @@ struct DownloadsView: View {
                     }
                 }
             }
+            // DL 進行中かつ保存済みタブ表示中は画面スリープ防止。
+            // タブ離脱 or DL 全完了で即復帰 (isIdleTimerDisabled=false)。
+            #if os(iOS)
+            .onChange(of: manager.activeDownloadCount, initial: true) { _, newCount in
+                let shouldHold = newCount > 0
+                if UIApplication.shared.isIdleTimerDisabled != shouldHold {
+                    UIApplication.shared.isIdleTimerDisabled = shouldHold
+                    LogManager.shared.log("App", "idleTimerDisabled=\(shouldHold) (activeDownloads=\(newCount))")
+                }
+            }
+            .onDisappear {
+                if UIApplication.shared.isIdleTimerDisabled {
+                    UIApplication.shared.isIdleTimerDisabled = false
+                    LogManager.shared.log("App", "idleTimerDisabled=false (tab left)")
+                }
+            }
+            #endif
             .fileImporter(
                 isPresented: $showImportPicker,
                 allowedContentTypes: [.zip, .archive, .data],

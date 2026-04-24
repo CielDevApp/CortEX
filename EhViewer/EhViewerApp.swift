@@ -191,7 +191,12 @@ struct EhViewerApp: App {
         // 新バイナリでは注入コードを削除したが、以前 install した端末の
         // Keychain には残骸が残るため、起動時に hash 照合で検出して自動削除する。
         // ここで記録する hash は SHA256 の hex string なので、credentials の平文は含まない。
-        purgeCompromisedDebugCredentials()
+        //
+        // 2026-04-25 無効化: ユーザー本人の正規 credentials が 4/23 流出 hash と完全一致する
+        // ケース (ipb_member_id は不変、pass_hash/igneous も reset していなければ同値) で
+        // 起動毎に 3/3 purge 発火 → 毎回ログアウトする実害のみが残った。migration は
+        // 既に役目を終えているため呼び出しを停止。関数定義は履歴として残置。
+        // purgeCompromisedDebugCredentials()
 
         // Keychain accessibility migration (既存 cookie を BG 可能 accessibility に書き直す)
         KeychainService.migrateAccessibility()
@@ -288,10 +293,18 @@ private func purgeCompromisedDebugCredentials() {
             matchedKeys.append(key)
         }
     }
-    guard !matchedKeys.isEmpty else { return }
-    // いずれかが一致 → DEBUG 注入経路の残骸と判定。安全側に倒して全削除。
-    // 3 つ全一致なら確実。部分一致でも混入の疑いがあるので削除する。
-    LogManager.shared.log("Security", "compromised DEBUG credentials detected in Keychain (matched=\(matchedKeys.count)/3). Purging.")
+    // 修正 2026-04-25: 3 つ全部一致時のみ purge に変更。
+    // 以前は「部分一致でも削除」にしていたが、ipb_member_id はユーザーアカウント固有の
+    // 安定 ID なのでパスワード変更後の再ログインでも同一値 → memberID 単独の hash 一致が
+    // 常時成立し、起動毎に全 Keychain 削除 → 毎起動ログアウトのバグが発生していた。
+    // DEBUG 注入の完全な残骸は 3 値とも同時に流出値 → 全一致を要件に戻す。
+    guard matchedKeys.count == compromisedHashes.count else {
+        if !matchedKeys.isEmpty {
+            LogManager.shared.log("Security", "partial compromised hash match (\(matchedKeys.count)/3): keys=\(matchedKeys.joined(separator: ",")). NOT purging (likely legitimate re-login with same account).")
+        }
+        return
+    }
+    LogManager.shared.log("Security", "ALL compromised DEBUG credentials detected in Keychain (3/3). Purging.")
     KeychainService.deleteAll()
     // HTTPCookieStorage 側にも念のため痕跡があれば削除
     if let cookies = HTTPCookieStorage.shared.cookies {
