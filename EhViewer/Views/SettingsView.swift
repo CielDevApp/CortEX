@@ -22,6 +22,7 @@ struct SettingsView: View {
     @State private var phoenixImportCount = 0
     @State private var showClearConfirm = false
     @State private var showClearDownloads = false
+    @State private var showFullReset = false
     @State private var showFullRefresh = false
     @State private var showAnimationModeResetConfirm = false
     @State private var showPINSetup = false
@@ -393,6 +394,9 @@ struct SettingsView: View {
                     let dlCount = DownloadManager.shared.downloads.count
                     HStack { Text("保存済みギャラリー"); Spacer(); Text("\(dlCount)件").foregroundStyle(.secondary) }
                     Button("全ダウンロードデータを削除", role: .destructive) { showClearDownloads = true }
+                    Button("全データリセット（工場出荷状態）", role: .destructive) { showFullReset = true }
+                    Text("Keychain (ログイン cookie) / 全 DL / キャッシュ / お気に入り / 設定を全消去。新 Mac / 他人への譲渡前に実行。")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
 
                 // 8. ベンチマーク
@@ -475,6 +479,12 @@ struct SettingsView: View {
             } message: {
                 Text("全てのダウンロード済みギャラリーとメタデータを削除しますか？")
             }
+            .alert("全データをリセット", isPresented: $showFullReset) {
+                Button("全削除", role: .destructive) { performFullReset() }
+                Button("キャンセル", role: .cancel) {}
+            } message: {
+                Text("Keychain (ログイン cookie)、全ダウンロード、全キャッシュ、お気に入り、設定を全て削除します。この操作は取り消せません。")
+            }
             .alert("お気に入り全件再取得", isPresented: $showFullRefresh) {
                 Button("実行") {
                     Task { await favVM.fullRefreshFromServer() }
@@ -554,6 +564,41 @@ struct SettingsView: View {
         readerCacheMB = ImageCache.shared.readerCacheSize() / 1_048_576
         thumbsCacheMB = ImageCache.shared.thumbsCacheSize() / 1_048_576
         animatedCacheMB = Int(WebPToMP4Converter.animatedCacheSize() / 1_048_576)
+    }
+
+    /// 全データリセット: Keychain / 全DL / 全キャッシュ / お気に入り / UserDefaults / Cookie 全削除。
+    /// 新 Mac / 譲渡前の「工場出荷状態」リセット。
+    private func performFullReset() {
+        LogManager.shared.log("Security", "Full reset initiated by user.")
+
+        // 1. Keychain 全削除 (ipb_member_id / ipb_pass_hash / igneous 他 service 全体)
+        KeychainService.deleteAll()
+
+        // 2. HTTPCookieStorage 全削除 (特に E-H / exhentai / nhentai 系)
+        if let cookies = HTTPCookieStorage.shared.cookies {
+            for cookie in cookies { HTTPCookieStorage.shared.deleteCookie(cookie) }
+        }
+        NhentaiCookieManager.clearCookies()
+
+        // 3. 全ダウンロード削除
+        let dm = DownloadManager.shared
+        for gid in dm.downloads.keys { dm.deleteDownload(gid: gid) }
+
+        // 4. 全キャッシュ削除
+        ImageCache.shared.clearReaderCache()
+        ImageCache.shared.clearThumbsCache()
+        WebPToMP4Converter.clearAnimatedCache()
+
+        // 5. お気に入り / UserDefaults 全削除
+        if let bundleID = Bundle.main.bundleIdentifier {
+            UserDefaults.standard.removePersistentDomain(forName: bundleID)
+        }
+
+        // 6. AuthVM のログイン状態リセット
+        authVM.logout()
+
+        LogManager.shared.log("Security", "Full reset completed. App should be restarted.")
+        updateCacheSize()
     }
 
     @ViewBuilder

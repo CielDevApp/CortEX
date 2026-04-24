@@ -1,6 +1,7 @@
 import SwiftUI
 import UserNotifications
 import TipKit
+import CryptoKit
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -183,6 +184,15 @@ struct EhViewerApp: App {
         ImageCache.shared.cleanupOnLaunch()
         GalleryExporter.cleanupOldExportFiles()
         cleanupGalleryWebPTmp()
+
+        // v02a-f7 緊急セキュリティ migration:
+        // v02a-f6 以前のビルドには DEBUG 注入 block が含まれており、
+        // 特定の E-Hentai credentials が Keychain に自動保存されていた。
+        // 新バイナリでは注入コードを削除したが、以前 install した端末の
+        // Keychain には残骸が残るため、起動時に hash 照合で検出して自動削除する。
+        // ここで記録する hash は SHA256 の hex string なので、credentials の平文は含まない。
+        purgeCompromisedDebugCredentials()
+
         // Keychain accessibility migration (既存 cookie を BG 可能 accessibility に書き直す)
         KeychainService.migrateAccessibility()
         // animated_cache 上限 500MB、超えてたら LRU eviction
@@ -241,6 +251,53 @@ struct EhViewerApp: App {
             }
         }
     }
+}
+
+/// v02a-f7 緊急セキュリティ migration:
+/// v02a-f6 以前の DEBUG 注入 block で Keychain に保存された compromised credentials を
+/// hash 照合で検出して自動削除する。平文は一切含まない（hash 値のみ）。
+///
+/// 検出ロジック: 保存されている ipb_member_id / ipb_pass_hash / igneous それぞれを
+/// SHA256 にかけて、旧流出値の hash と一致したらその key を削除。
+/// 3 つ全てが一致した場合は DEBUG block 経由で注入された残骸と断定して全削除。
+/// 一致ゼロなら何もしない（ユーザー自身が正規にログインした credentials は触らない）。
+///
+/// 実行は起動毎。コスト: Keychain 読み 3 回 + SHA256 計算 3 回 / 起動。
+/// 二度目以降は流出値と不一致で何もしないので実害なし。冪等性優先で migration flag は使わない。
+private func purgeCompromisedDebugCredentials() {
+    // v02a-f6 以前の DEBUG 注入 block に含まれていた値の SHA256 hex。
+    // 計算: echo -n "<value>" | shasum -a 256
+    // 平文は含めない。GitHub 曝露済みだが hash のみ埋め込みでスキャナと整合性を保つ。
+    let compromisedHashes: [String: String] = [
+        "ipb_member_id":  "478a2d3b969e8fa582dfcb001f8ee0a5e4320ce7f7c3a795e1fa856b6d25628b",
+        "ipb_pass_hash":  "ccdbe1205dd8bb7f605335280ce19e99701f15b9dc3539780055b7676b62b4ff",
+        "igneous":        "96b04342d8cabb7e19a2ef6469465f32e92039a72ee7f197bb5470da36d7135b",
+    ]
+    func sha256Hex(_ s: String) -> String {
+        SHA256.hash(data: Data(s.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+    var matchedKeys: [String] = []
+    for (key, expectedHash) in compromisedHashes {
+        guard let value = KeychainService.load(key: key) else { continue }
+        if sha256Hex(value) == expectedHash {
+            matchedKeys.append(key)
+        }
+    }
+    guard !matchedKeys.isEmpty else { return }
+    // いずれかが一致 → DEBUG 注入経路の残骸と判定。安全側に倒して全削除。
+    // 3 つ全一致なら確実。部分一致でも混入の疑いがあるので削除する。
+    LogManager.shared.log("Security", "compromised DEBUG credentials detected in Keychain (matched=\(matchedKeys.count)/3). Purging.")
+    KeychainService.deleteAll()
+    // HTTPCookieStorage 側にも念のため痕跡があれば削除
+    if let cookies = HTTPCookieStorage.shared.cookies {
+        for cookie in cookies {
+            let d = cookie.domain.lowercased()
+            if d.contains("exhentai") || d.contains("e-hentai") || d.contains("hath.network") {
+                HTTPCookieStorage.shared.deleteCookie(cookie)
+            }
+        }
+    }
+    LogManager.shared.log("Security", "purge complete. User must re-login.")
 }
 
 /// 起動時の tmp/ 掃除: クラッシュ / 強制終了で残る一時ファイルを一括削除。

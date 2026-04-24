@@ -2,10 +2,13 @@
 
 > ## ⚠️ Security Fix — Immediate Update Required
 >
-> v0.2a to v0.2a-f6 contained hardcoded debug credentials.
-> The affected credentials have been revoked.
-> Please update to this version immediately.
-> If you built from source or used previous binaries, there is no further action required from your side.
+> v0.2a 至 v0.2a-f6 包含硬编码的 DEBUG credentials。相关 credentials 已被 revoke。请立即更新至 v0.2a-f7 以上版本。
+>
+> **已安装 v0.2a〜v0.2a-f6 的 Mac / iOS 用户:**
+> 更新后旧 credentials 可能仍残留在 Keychain 中。v0.2a-f7 会在启动时通过 SHA256 hash 匹配自动检测并删除 (代码中不包含明文)。也可通过 **设置 → 缓存管理 → 全数据重置（出厂状态）** 手动执行。
+>
+> **迁移到新 Mac / 转让给他人前:**
+> 请在 repo 中执行 `./scripts/cleanup-cortex-data.sh`，或使用 App 内的重置按钮。
 
 **E-Hentai / EXhentai / nhentai 统一浏览器 for iOS / iPadOS**
 
