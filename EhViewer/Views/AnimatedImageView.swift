@@ -141,6 +141,39 @@ final class AnimatedSourceImageView: UIImageView {
                 }
             }
             source.retainOnly(indices: keepSet)
+
+            // HDR 先読み: keepSet 内で frameCache あり & hdrCache 無し & inflight 無し を並列 enhance。
+            // ライブ UserDefaults を読んで toggle OFF 中はスキップ + hdrCache 全解放。
+            let liveHDR = UserDefaults.standard.bool(forKey: "hdrEnhancement")
+            if !liveHDR {
+                self.hdrCacheLock.lock()
+                if !self.hdrCache.isEmpty { self.hdrCache.removeAll(keepingCapacity: false) }
+                self.hdrCacheLock.unlock()
+            }
+            if liveHDR {
+                self.hdrCacheLock.lock()
+                let hdrMissing: [(Int, CGImage)] = keepSet.compactMap { i in
+                    if self.hdrCache[i] != nil || self.hdrInflight.contains(i) { return nil }
+                    guard let cg = source.cachedFrame(at: i) else { return nil }
+                    self.hdrInflight.insert(i)
+                    return (i, cg)
+                }
+                self.hdrCacheLock.unlock()
+                if !hdrMissing.isEmpty {
+                    DispatchQueue.concurrentPerform(iterations: hdrMissing.count) { k in
+                        let (i, cg) = hdrMissing[k]
+                        let enhanced = HDREnhancer.enhanceCG(cg)
+                        self.hdrCacheLock.lock()
+                        self.hdrInflight.remove(i)
+                        if let enhanced { self.hdrCache[i] = enhanced }
+                        self.hdrCacheLock.unlock()
+                    }
+                }
+                // hdrCache の evict も同期: keepSet 外を削除
+                self.hdrCacheLock.lock()
+                self.hdrCache = self.hdrCache.filter { keepSet.contains($0.key) }
+                self.hdrCacheLock.unlock()
+            }
         }
         timer.resume()
         rollingTimer = timer
@@ -191,14 +224,25 @@ final class AnimatedSourceImageView: UIImageView {
         let idx = frameIndex(elapsed: elapsed, source: source)
         tickCount += 1
 
-        // 30 tick (約 0.5s) ごとに診断ログ
         if tickCount % 30 == 0 {
             LogManager.shared.log("Anim", "tick=\(tickCount) idx=\(idx) last=\(lastDisplayedIdx) miss=\(tickMissCount) elapsed=\(String(format: "%.2f", elapsed))s")
         }
 
+        // HDR トグルはライブで UserDefaults を読む。
+        // setSource 時に固定すると後から HDR を OFF にしても cached 結果が表示され続ける。
+        let liveHDR = UserDefaults.standard.bool(forKey: "hdrEnhancement")
+        if liveHDR != hdrEnabled {
+            hdrEnabled = liveHDR
+            // toggle 変化時: hdrCache を破棄 + 現フレーム強制再描画
+            hdrCacheLock.lock()
+            hdrCache.removeAll(keepingCapacity: false)
+            hdrCacheLock.unlock()
+            lastDisplayedIdx = -1
+            LogManager.shared.log("Anim", "HDR live toggle → \(liveHDR), cache cleared")
+        }
+
         if idx == lastDisplayedIdx { return }
 
-        // cache hit のみ advance (sync decode を tick で走らせない)
         if let cached = source.cachedFrame(at: idx) {
             lastDisplayedIdx = idx
             if hdrEnabled {
@@ -213,7 +257,6 @@ final class AnimatedSourceImageView: UIImageView {
             }
         } else {
             tickMissCount += 1
-            // prefetch 完了待ち。image は前フレームのまま維持
         }
     }
 
@@ -240,6 +283,15 @@ final class AnimatedSourceImageView: UIImageView {
                 self.hdrCache[idx] = enhanced
             }
             self.hdrCacheLock.unlock()
+            // **重要**: enhance 完了時、まだ該当 idx を表示中なら image を差し替える。
+            // これをしないと tick の `idx == lastDisplayedIdx` early return で
+            // HDR 結果が一度も表示されないまま次フレームに進む (元バグ)。
+            guard let enhanced else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.lastDisplayedIdx == idx else { return }
+                guard UserDefaults.standard.bool(forKey: "hdrEnhancement") else { return }
+                self.image = UIImage(cgImage: enhanced)
+            }
         }
     }
 
