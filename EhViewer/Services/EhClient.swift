@@ -398,18 +398,9 @@ final class EhClient: Sendable {
     /// Keychainから直接cookieヘッダを組み立てる（HTTPCookieStorageに依存しない）
     nonisolated private static func buildCookieHeader(for host: GalleryHost) -> String {
         var parts: [String] = []
-        // Mac Catalyst は keychain-access-groups entitlement 無しだと KeychainService が
-        // errSecMissingEntitlement(-34018) で失敗する。provisioning 契約更新が必要だが
-        // 回避策として DEBUG build ではハードコード cookie を使う (iPad sim から吸い出した値)
-        #if targetEnvironment(macCatalyst) && DEBUG
-        let memberID: String? = "1532300"
-        let passHash: String? = "28d002497da9623ccb2f6ffd144f633b"
-        let igneous: String? = "1n2bd6yv2ulot91qa"
-        #else
         let memberID = KeychainService.load(key: "ipb_member_id")
         let passHash = KeychainService.load(key: "ipb_pass_hash")
         let igneous = KeychainService.load(key: "igneous")
-        #endif
         if let memberID {
             parts.append("ipb_member_id=\(memberID)")
         }

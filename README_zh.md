@@ -1,5 +1,12 @@
 # Cort:EX ver.02a f5
 
+> ## ⚠️ Security Fix — Immediate Update Required
+>
+> v0.2a to v0.2a-f6 contained hardcoded debug credentials.
+> The affected credentials have been revoked.
+> Please update to this version immediately.
+> If you built from source or used previous binaries, there is no further action required from your side.
+
 **E-Hentai / EXhentai / nhentai 统一浏览器 for iOS / iPadOS**
 
 [English](README.md) | [中文](README_zh.md) | [日本語](README_ja.md)
