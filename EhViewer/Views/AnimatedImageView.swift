@@ -94,7 +94,9 @@ final class AnimatedSourceImageView: UIImageView {
         let maxDim = currentMaxDim
         let q = DispatchQueue(label: "anim.rolling", qos: .userInitiated)
 
-        // 初動: 先頭 30 frame を concurrentPerform で並列 decode
+        // 初動: 先頭 30 frame を concurrentPerform で並列 decode + (HDR ON なら) 並列 enhance。
+        // HDR eager enhance を入れないと、最初の 1 秒間だけ tick が非 HDR frame を先に表示 →
+        // async enhance 完了で差し替え → 次 frame 非 HDR → 差し替え… の明滅が発生する。
         q.async { [weak self, weak source] in
             guard let self, let source, self.currentSourceID == sid else { return }
             let t = CFAbsoluteTimeGetCurrent()
@@ -102,8 +104,29 @@ final class AnimatedSourceImageView: UIImageView {
             DispatchQueue.concurrentPerform(iterations: n) { i in
                 _ = source.parallelFrame(at: i, maxPixelSize: maxDim)
             }
-            let ms = Int((CFAbsoluteTimeGetCurrent() - t) * 1000)
-            LogManager.shared.log("Anim", "initial rolling prefetch \(ms)ms frames=\(n)/\(source.frameCount)")
+            let decodeMs = Int((CFAbsoluteTimeGetCurrent() - t) * 1000)
+
+            // eager HDR enhance: decode 完了した先頭 frame をそのまま HDR 化して cache 充填
+            let hdrOn = UserDefaults.standard.bool(forKey: "hdrEnhancement")
+            var hdrMs = 0
+            if hdrOn {
+                let t2 = CFAbsoluteTimeGetCurrent()
+                // pick up frames decoded above
+                let enhanceTargets: [(Int, CGImage)] = (0..<n).compactMap { i in
+                    guard let cg = source.cachedFrame(at: i) else { return nil }
+                    return (i, cg)
+                }
+                DispatchQueue.concurrentPerform(iterations: enhanceTargets.count) { k in
+                    let (i, cg) = enhanceTargets[k]
+                    if let enhanced = HDREnhancer.enhanceCG(cg) {
+                        self.hdrCacheLock.lock()
+                        self.hdrCache[i] = enhanced
+                        self.hdrCacheLock.unlock()
+                    }
+                }
+                hdrMs = Int((CFAbsoluteTimeGetCurrent() - t2) * 1000)
+            }
+            LogManager.shared.log("Anim", "initial rolling prefetch decode=\(decodeMs)ms hdr=\(hdrMs)ms frames=\(n)/\(source.frameCount)")
         }
 
         // 継続: 100ms 毎に keepSet 内 missing frame を並列 decode + 範囲外 evict
@@ -242,15 +265,18 @@ final class AnimatedSourceImageView: UIImageView {
         if idx == lastDisplayedIdx { return }
 
         if let cached = source.cachedFrame(at: idx) {
-            lastDisplayedIdx = idx
             if hdrEnabled {
                 if let enhanced = readHDR(idx) {
+                    lastDisplayedIdx = idx
                     self.image = UIImage(cgImage: enhanced)
                 } else {
-                    self.image = UIImage(cgImage: cached)
+                    // HDR cache miss: 非 HDR を表示してから差し替えるとチラつくため、
+                    // enhance 完了までは前フレームを維持。enhance は裏で走らせる。
                     scheduleHDREnhance(idx: idx, cg: cached)
+                    tickMissCount += 1
                 }
             } else {
+                lastDisplayedIdx = idx
                 self.image = UIImage(cgImage: cached)
             }
         } else {
