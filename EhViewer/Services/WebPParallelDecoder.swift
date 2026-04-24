@@ -104,7 +104,7 @@ final class WebPParallelDecoder: @unchecked Sendable {
         let isFullyIndependent: Bool
     }
 
-    /// 1 フレームを BGRA premultiplied Data へデコード（スレッドセーフ）
+    /// 1 フレームを BGRA premultiplied Data へデコード（スレッドセーフ、canvas フル解像度）
     func decodeFrame(_ info: FrameInfo) -> Data? {
         let bytesPerRow = canvasWidth * 4
         let totalBytes = bytesPerRow * canvasHeight
@@ -123,16 +123,66 @@ final class WebPParallelDecoder: @unchecked Sendable {
         return ok ? output : nil
     }
 
-    /// BGRA Data から CGImage を生成（VT encode 前のピクセルバッファ作成で利用）
+    /// libwebp native scaling で target サイズに縮小デコード（スレッドセーフ）。
+    /// WebPDecoderConfig の use_scaling を使うと libwebp が decode 中にダウンスケールする。
+    /// post-scale (CGContext / CIContext) 不要 → CPU コスト激減 + 出力 Data が小さい →
+    /// allocator contention も減る。戻り値は (bgra Data, 実幅, 実高)。
+    func decodeFrameScaled(_ info: FrameInfo, maxPixelSize: Int) -> (Data, Int, Int)? {
+        // 縮小が不要な場合は通常 decode と同じ (canvas そのまま)
+        let longer = max(canvasWidth, canvasHeight)
+        guard longer > maxPixelSize else {
+            guard let d = decodeFrame(info) else { return nil }
+            return (d, canvasWidth, canvasHeight)
+        }
+        let scale = Double(maxPixelSize) / Double(longer)
+        let targetW = Int((Double(canvasWidth) * scale).rounded())
+        let targetH = Int((Double(canvasHeight) * scale).rounded())
+        guard targetW > 0, targetH > 0 else { return nil }
+
+        var config = WebPDecoderConfig()
+        guard WebPInitDecoderConfig(&config) != 0 else { return nil }
+        config.options.use_scaling = 1
+        config.options.scaled_width = Int32(targetW)
+        config.options.scaled_height = Int32(targetH)
+        config.output.colorspace = MODE_bgrA  // BGRA premultiplied
+
+        let status: VP8StatusCode = info.data.withUnsafeBytes { buf -> VP8StatusCode in
+            guard let base = buf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return VP8_STATUS_INVALID_PARAM }
+            return WebPDecode(base, info.data.count, &config)
+        }
+        guard status == VP8_STATUS_OK else {
+            WebPFreeDecBuffer(&config.output)
+            return nil
+        }
+        let w = Int(config.output.width)
+        let h = Int(config.output.height)
+        let stride = Int(config.output.u.RGBA.stride)
+        let size = stride * h
+        guard let rgba = config.output.u.RGBA.rgba else {
+            WebPFreeDecBuffer(&config.output)
+            return nil
+        }
+        // config.output.u.RGBA.rgba は libwebp 所有メモリ。Swift Data にコピーしてから解放。
+        let data = Data(bytes: UnsafeRawPointer(rgba), count: size)
+        WebPFreeDecBuffer(&config.output)
+        return (data, w, h)
+    }
+
+    /// BGRA Data から CGImage を生成（canvas フル解像度版）
     func makeCGImage(from bgra: Data) -> CGImage? {
-        let bytesPerRow = canvasWidth * 4
+        makeCGImage(from: bgra, width: canvasWidth, height: canvasHeight)
+    }
+
+    /// BGRA Data + 任意サイズから CGImage 生成 (scaled decode 用)
+    func makeCGImage(from bgra: Data, width: Int, height: Int) -> CGImage? {
+        let bytesPerRow = width * 4
         guard let provider = CGDataProvider(data: bgra as CFData) else { return nil }
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
             .union(.byteOrder32Little)
         return CGImage(
-            width: canvasWidth,
-            height: canvasHeight,
+            width: width,
+            height: height,
             bitsPerComponent: 8,
             bitsPerPixel: 32,
             bytesPerRow: bytesPerRow,
