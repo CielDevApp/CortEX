@@ -725,39 +725,39 @@ struct CatalystTabBar: View {
     var body: some View {
         HStack(spacing: 4) {
             ForEach(tabs, id: \.tag) { tab in
-                // ZStack で「常に hit-testable な背景」を底に敷いて、上に見た目を乗せる。
-                // Mac Catalyst は `.background(Color.X.opacity(0.0001))` 方式だと
-                // 稀に空白領域の hit test を最適化で落とすので、RoundedRectangle を
-                // 常時 fill (非アクティブは accent 色の極薄) することで hit 領域を担保する。
-                ZStack {
+                HStack(spacing: 6) {
+                    Image(systemName: tab.icon)
+                        .font(.system(size: 12))
+                    Text(tab.title)
+                        .font(.system(size: 13))
+                        .lineLimit(1)
+                    if tab.tag == 3 && activeDownloadCount > 0 {
+                        Text("\(activeDownloadCount)")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color.red, in: Capsule())
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity)
+                .foregroundStyle(
+                    selection == tab.tag ? Color.accentColor : Color.primary
+                )
+                .background(
+                    // アクティブ時は accent、非アクティブ時も extremely subtle な fill を置く。
+                    // Mac Catalyst は完全透明 or 極小 alpha (Color.X.opacity(0.0001) 等) を
+                    // hit test 最適化で落とすことがあるので、視覚的には見えないが
+                    // runtime では確実に hittable な alpha=0.001 の白を敷く。
                     RoundedRectangle(cornerRadius: 6)
                         .fill(
                             selection == tab.tag
                                 ? Color.accentColor.opacity(0.15)
-                                : Color.accentColor.opacity(0.001)
+                                : Color.white.opacity(0.001)
                         )
-                    HStack(spacing: 6) {
-                        Image(systemName: tab.icon)
-                            .font(.system(size: 12))
-                        Text(tab.title)
-                            .font(.system(size: 13))
-                            .lineLimit(1)
-                        if tab.tag == 3 && activeDownloadCount > 0 {
-                            Text("\(activeDownloadCount)")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(Color.red, in: Capsule())
-                        }
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .foregroundStyle(
-                        selection == tab.tag ? Color.accentColor : Color.primary
-                    )
-                }
-                .frame(maxWidth: .infinity, minHeight: 32)
+                )
                 .contentShape(Rectangle())
                 .onTapGesture {
                     selection = tab.tag
