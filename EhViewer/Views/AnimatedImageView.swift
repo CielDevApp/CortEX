@@ -378,6 +378,10 @@ struct BoomerangWebPView: View {
     @State private var source: AnimatedImageSource?
     @State private var loadFailed: Bool = false
 
+    /// システム逼迫時の共有フラグ (熱 or メモリ警告)。registry から書き換えられる。
+    /// 現状は未使用 (再戻り不能バグにより多重可視機能は棚上げ)。将来の iPhone 対応で復活予定。
+    static var systemDowngraded: Bool = false
+
     var body: some View {
         // ポスター下敷き方式: staticPlaceholder を常に描画し、その上に source ready
         // 時だけ AnimatedImageCellView を overlay する。セルの aspect / 高さは
@@ -396,14 +400,13 @@ struct BoomerangWebPView: View {
             }
         }
         .task(id: activeTaskID) {
-            // スクロール中にセルが一瞬 active になっただけで source build を始めると
-            // 5-10 ページ同時 prefetch でデコーダが飽和する。200ms のデバウンス後も
+            // 一瞬 active になっただけで source build を始めると飽和する。200ms デバウンス後も
             // active ならロード、それ以前に inactive に戻ったら Task.CancellationError で中断。
             if isActive {
                 do {
                     try await Task.sleep(nanoseconds: 200_000_000)
                 } catch {
-                    return  // cancelled (isActive flipped before 200ms)
+                    return
                 }
                 await loadSource()
             } else {
@@ -415,7 +418,7 @@ struct BoomerangWebPView: View {
         }
     }
 
-    /// task を active 遷移のみで再実行するための id。input と isActive の組を key にする。
+    /// task を isActive 遷移のみで再実行するための id。
     private var activeTaskID: String {
         switch input {
         case .url(let u): return "u:\(u.absoluteString):\(isActive)"
