@@ -553,7 +553,8 @@ struct LocalReaderView: View {
             } else {
                 BoomerangWebPView(
                     sourceURL: fileURL,
-                    isActive: currentIndex == index,
+                    readerID: "local-\(meta.gid)",
+                    pageIndex: index,
                     staticPlaceholder: enhancedImages[index] ?? DownloadManager.shared.loadLocalImage(gid: meta.gid, page: index)
                 )
                 .frame(maxWidth: .infinity, maxHeight: isHorizontal ? .infinity : nil, alignment: isHorizontal ? .center : .top)
