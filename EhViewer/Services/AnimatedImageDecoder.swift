@@ -29,7 +29,24 @@ final class AnimatedImageSourceRegistry {
                 object: nil,
                 queue: .main
             ) { _ in
+                // 多重可視降格フラグを立てる: 以降は currentIndex 中央 1 枚のみ再生。
+                // cache も全破棄する。
+                BoomerangWebPView.systemDowngraded = true
                 AnimatedImageSourceRegistry.shared.dropAllCaches()
+                LogManager.shared.log("Mem", "MemoryWarning → systemDowngraded=true (多重可視停止)")
+            }
+            // 熱状態通知も監視: .serious 以上で降格、.fair 以下で復帰
+            NotificationCenter.default.addObserver(
+                forName: ProcessInfo.thermalStateDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                let st = ProcessInfo.processInfo.thermalState
+                let downgrade = (st == .serious || st == .critical)
+                if BoomerangWebPView.systemDowngraded != downgrade {
+                    BoomerangWebPView.systemDowngraded = downgrade
+                    LogManager.shared.log("Mem", "thermalState=\(st.rawValue) → systemDowngraded=\(downgrade)")
+                }
             }
         }
         lock.unlock()
