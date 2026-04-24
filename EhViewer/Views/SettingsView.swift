@@ -215,7 +215,7 @@ struct SettingsView: View {
                         .font(.caption2).foregroundStyle(.secondary)
 
                     Toggle("Boomerang Mode (β)", isOn: $boomerangMode)
-                    Text("末端で折り返す ping-pong ループでシームを消します。WebP 再生方式のみ適用。HDR と併用可能。200 フレーム超は自動降格。")
+                    Text("末端で折り返す ping-pong ループでシームを消します。WebP 再生方式のみ適用。HDR と併用可能。フレーム数制限なし (rolling cache により任意長対応)。")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
 

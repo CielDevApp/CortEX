@@ -21,7 +21,6 @@ final class AnimatedSourceImageView: UIImageView {
     private var lastDisplayedIdx: Int = -1
 
     /// 設定
-    private var boomerangEnabled: Bool = false
     private var hdrEnabled: Bool = false
     private var currentMaxDim: CGFloat = 0
 
@@ -58,15 +57,12 @@ final class AnimatedSourceImageView: UIImageView {
         let maxDim = computeMaxPixelSize()
         currentMaxDim = maxDim
 
-        let ud = UserDefaults.standard
-        let userBoomerang = ud.bool(forKey: "boomerangMode")
-        let userHDR = ud.bool(forKey: "hdrEnhancement")
-        let maxFramesFromUD = ud.integer(forKey: "boomerangMaxFrames")
-        let boomerangMax = maxFramesFromUD > 0 ? maxFramesFromUD : 200
-        boomerangEnabled = userBoomerang && source.frameCount >= 3 && source.frameCount <= boomerangMax
-        hdrEnabled = userHDR  // per-frame 適用なので frame 数依存の降格は不要
+        // Boomerang / HDR は tick / rolling prefetch 時にライブで UserDefaults を読むため、
+        // ここではキャプチャしない。frameCount 上限による降格も廃止 (rolling cache で
+        // メモリは常時 ~30 frame に bounded、frame 数多くても問題なし)。
+        hdrEnabled = UserDefaults.standard.bool(forKey: "hdrEnhancement")  // 初回 first frame SYNC 用
 
-        LogManager.shared.log("Anim", "setSource frames=\(source.frameCount) active=\(isActive) dur=\(String(format: "%.2f", source.totalDuration))s boomerang=\(boomerangEnabled) hdr=\(hdrEnabled) maxDim=\(Int(maxDim))")
+        LogManager.shared.log("Anim", "setSource frames=\(source.frameCount) active=\(isActive) dur=\(String(format: "%.2f", source.totalDuration))s maxDim=\(Int(maxDim))")
 
         // first frame SYNC (黒画面回避)
         let t0 = CFAbsoluteTimeGetCurrent()
@@ -126,7 +122,7 @@ final class AnimatedSourceImageView: UIImageView {
             var keepSet = Set<Int>()
             let lo = max(0, effectiveCurrent - Self.rollingBehindKeep)
             if lo <= aheadTarget { for i in lo...aheadTarget { keepSet.insert(i) } }
-            if self.boomerangEnabled {
+            if UserDefaults.standard.bool(forKey: "boomerangMode") {
                 let blo = max(0, effectiveCurrent - Self.rollingAheadFrames)
                 if blo < effectiveCurrent { for i in blo..<effectiveCurrent { keepSet.insert(i) } }
             }
@@ -202,7 +198,9 @@ final class AnimatedSourceImageView: UIImageView {
     /// Boomerang: 周期 = totalDuration * 2 - (delays[0] + delays[N-1]) 近似で。
     /// 単純化のため period = 2 * totalDuration として、前半 forward / 後半 reverse。
     private func frameIndex(elapsed: Double, source: AnimatedImageSource) -> Int {
-        if boomerangEnabled && source.frameCount >= 3 {
+        // Boomerang はライブで UserDefaults を読む (toggle を後から ON/OFF しても即反映)
+        let boomerang = UserDefaults.standard.bool(forKey: "boomerangMode")
+        if boomerang && source.frameCount >= 3 {
             let period = source.totalDuration * 2
             var t = elapsed.truncatingRemainder(dividingBy: period)
             if t < 0 { t += period }
