@@ -248,6 +248,11 @@ struct EhViewerApp: App {
                 if newPhase == .active {
                     LogManager.shared.log("App", "scene active")
                 }
+                // Catch-all: アプリ非アクティブ化で全アニメ再生停止。
+                // reader の .onDisappear が取りこぼすケース (App Switcher など) でも確実に止める。
+                if newPhase != .active {
+                    AnimatedPlaybackCoordinator.shared.stopAll()
+                }
             }
         }
     }
