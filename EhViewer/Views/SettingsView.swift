@@ -13,6 +13,10 @@ struct SettingsView: View {
     @AppStorage("aiImageProcessing") private var aiImageProcessing = false
     @AppStorage("hdrEnhancement") private var hdrEnhancement = false
     @AppStorage("imageEnhanceFilter") private var imageEnhanceFilter = false
+    @AppStorage("boomerangMode") private var boomerangMode = false
+    /// アニメ再生方式: "webp" (WebP 原本 CGImageSource + CADisplayLink 逐次 decode) /
+    ///              "mp4"  (旧来の HEVC MP4 変換経由 AVPlayer)。default=webp。
+    @AppStorage("animPlaybackMode") private var animPlaybackMode = "webp"
     @AppStorage("translationMode") private var translationMode = false
     @AppStorage("translationLang") private var translationLang = "ja"
     @AppStorage("translationSourceLang") private var translationSourceLang = "auto"
@@ -199,6 +203,20 @@ struct SettingsView: View {
                     if !CoreMLImageProcessor.shared.modelAvailable {
                         Text("AI超解像: モデル未検出").font(.caption2).foregroundStyle(.secondary)
                     }
+                }
+
+                // アニメ再生モード (β)
+                Section("アニメ再生") {
+                    Picker("再生方式", selection: $animPlaybackMode) {
+                        Text("WebP 原本 (推奨)").tag("webp")
+                        Text("MP4 変換 (旧来)").tag("mp4")
+                    }
+                    Text("WebP: 変換せず CGImageSource で逐次 decode。Boomerang 対応、ストレージ節約。\nMP4: HEVC MP4 に事前変換、AVPlayer で安定ループ。HDR は AVVideoComposition で全域適用。")
+                        .font(.caption2).foregroundStyle(.secondary)
+
+                    Toggle("Boomerang Mode (β)", isOn: $boomerangMode)
+                    Text("末端で折り返す ping-pong ループでシームを消します。WebP 再生方式のみ適用。HDR と併用可能。200 フレーム超は自動降格。")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
 
                 // 7. リアルタイム翻訳

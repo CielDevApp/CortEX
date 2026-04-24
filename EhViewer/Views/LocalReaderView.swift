@@ -32,6 +32,7 @@ struct LocalReaderView: View {
     @AppStorage("noFilterMode") private var storedNoFilter = false
     @AppStorage("readerDirection") private var readerDirection = 0
     @AppStorage("readingOrder") private var readingOrder = 1
+    @AppStorage("animPlaybackMode") private var animPlaybackMode = "webp"
     @State private var horizontalPage: Int
     /// 縦モードでトップに見えてるセル id を Apple 公式 .scrollPosition(id:) で追跡。
     /// 旧実装の ForEach.onAppear 上書きは mount 順非決定 → スライダー値が「明後日」になる欠陥があった。
@@ -527,29 +528,38 @@ struct LocalReaderView: View {
     @ViewBuilder
     private func localPageCell(index: Int) -> some View {
         #if canImport(UIKit)
-        // アニメGIF/WebP: 田中 testimony (Day14) で「再生ボタン押下許可式の方が安定する」
-        // → Gallery と同じ GalleryAnimatedWebPView (▶ 手動再生) に統一。
-        // staticImage は loadLocalImage で 1 フレーム目を取得、ポスター表示。
+        // アニメGIF/WebP: 再生方式は animPlaybackMode で分岐。
+        //   "webp": CGImageSource + CADisplayLink 逐次再生 (Boomerang 対応、変換なし)
+        //   "mp4" : 旧来 HEVC MP4 変換 + AVPlayer (HDR 全域対応、▶ 手動再生)
         let fileURL = DownloadManager.shared.imageFilePath(gid: meta.gid, page: index)
         if FileManager.default.fileExists(atPath: fileURL.path),
            AnimatedImageDecoder.isAnimatedFile(url: fileURL) {
-            // ポスター (再生前の 1 フレーム目) も HDR/フィルタ適用済み image を優先使用。
-            // enhancedImages[index] は processPage で HDR パイプラインを通した結果。
-            // 未処理ならオンデマンドで processPage を走らせる (静画経路と同じ挙動)。
-            GalleryAnimatedWebPView(
-                source: .url(fileURL),
-                staticImage: enhancedImages[index] ?? DownloadManager.shared.loadLocalImage(gid: meta.gid, page: index),
-                gid: meta.gid,
-                page: index,
-                onToggleControls: {
-                    withAnimation(.easeInOut(duration: 0.2)) { showControls.toggle() }
-                },
-                autoPlayIfActive: currentIndex == index,
-                isHDREnabled: storedHDR
-            )
-            .frame(maxWidth: .infinity, maxHeight: isHorizontal ? .infinity : nil, alignment: isHorizontal ? .center : .top)
-            .onAppear {
-                if enhancedImages[index] == nil { processPage(index) }
+            if animPlaybackMode == "mp4" {
+                GalleryAnimatedWebPView(
+                    source: .url(fileURL),
+                    staticImage: enhancedImages[index] ?? DownloadManager.shared.loadLocalImage(gid: meta.gid, page: index),
+                    gid: meta.gid,
+                    page: index,
+                    onToggleControls: {
+                        withAnimation(.easeInOut(duration: 0.2)) { showControls.toggle() }
+                    },
+                    autoPlayIfActive: currentIndex == index,
+                    isHDREnabled: storedHDR
+                )
+                .frame(maxWidth: .infinity, maxHeight: isHorizontal ? .infinity : nil, alignment: isHorizontal ? .center : .top)
+                .onAppear {
+                    if enhancedImages[index] == nil { processPage(index) }
+                }
+            } else {
+                BoomerangWebPView(
+                    sourceURL: fileURL,
+                    isActive: currentIndex == index,
+                    staticPlaceholder: enhancedImages[index] ?? DownloadManager.shared.loadLocalImage(gid: meta.gid, page: index)
+                )
+                .frame(maxWidth: .infinity, maxHeight: isHorizontal ? .infinity : nil, alignment: isHorizontal ? .center : .top)
+                .onAppear {
+                    if enhancedImages[index] == nil { processPage(index) }
+                }
             }
         } else {
             animatedOrStaticBody(index: index)

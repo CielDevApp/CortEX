@@ -24,8 +24,13 @@ final class WebPParallelDecoder: @unchecked Sendable {
     /// 全フレームが full-canvas 独立か。false なら並列 decode 不可（呼び出し側で fallback）
     let isFullyIndependent: Bool
 
-    init?(url: URL) {
+    convenience init?(url: URL) {
         guard let fileData = try? Data(contentsOf: url), !fileData.isEmpty else { return nil }
+        self.init(data: fileData)
+    }
+
+    init?(data fileData: Data) {
+        guard !fileData.isEmpty else { return nil }
 
         let parsed: ParsedAnimation? = fileData.withUnsafeBytes { rawBuf -> ParsedAnimation? in
             guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return nil }
