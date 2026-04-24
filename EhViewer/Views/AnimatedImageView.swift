@@ -131,10 +131,23 @@ final class AnimatedSourceImageView: UIImageView {
             // 初動 prefetch も thermal 降格に従う
             let ahead = self.currentRollingAhead
             let n = min(ahead, source.frameCount)
+            // 計測: 各 worker の wall time を pointer 経由で集計 → 並列度を算出
+            let perFrameBox = UnsafeMutablePointer<Int64>.allocate(capacity: n)
+            perFrameBox.initialize(repeating: 0, count: n)
             DispatchQueue.concurrentPerform(iterations: n) { i in
+                let wt = CFAbsoluteTimeGetCurrent()
                 _ = source.parallelFrame(at: i, maxPixelSize: maxDim)
+                perFrameBox[i] = Int64((CFAbsoluteTimeGetCurrent() - wt) * 1_000_000)  // μs
             }
-            let decodeMs = Int((CFAbsoluteTimeGetCurrent() - t) * 1000)
+            let wallMs = Int((CFAbsoluteTimeGetCurrent() - t) * 1000)
+            let sumMicros = (0..<n).reduce(Int64(0)) { $0 + perFrameBox[$1] }
+            let sumMs = Int(sumMicros / 1000)
+            let avgMs = n > 0 ? sumMs / n : 0
+            let parallelism = wallMs > 0 ? Double(sumMs) / Double(wallMs) : 0
+            LogManager.shared.log("Perf", "concurrentPerform wall=\(wallMs)ms sum=\(sumMs)ms avg=\(avgMs)ms/frame parallelism=\(String(format: "%.2f", parallelism))x frames=\(n)")
+            perFrameBox.deinitialize(count: n)
+            perFrameBox.deallocate()
+            let decodeMs = wallMs
 
             // eager HDR enhance: decode 完了した先頭 frame をそのまま HDR 化して cache 充填
             let hdrOn = UserDefaults.standard.bool(forKey: "hdrEnhancement")
@@ -188,7 +201,27 @@ final class AnimatedSourceImageView: UIImageView {
                     _ = source.parallelFrame(at: missing[k], maxPixelSize: maxDim)
                 }
             }
-            source.retainOnly(indices: keepSet)
+            // 2026-04-25 計測結果フィードバック: iPhone の decode throughput (~30 frame/s 並列込み)
+            // が playback 消費率 (30fps) と同率で、retainOnly が毎 cycle decode 済 frame を
+            // 即 evict → cache と playing idx が永遠チェース → last=0 で固定する現象が判明。
+            // frameCount ≤ 200 なら evict 停止で蓄積、1 cycle (~6s) 後 全 frame cache 済 → miss ゼロ。
+            // メモリ: 179 × 1.3MB (cap 700) = 234MB/source, LRU 3 = 700MB (iPhone 15 Pro Max OK)。
+            // Mac Catalyst は従来通り evict (canvas フル decode で memory 圧迫避けるため)。
+            //
+            // 2026-04-25 追記: preloadPlayback=ON の時は ▶ タップ時点で全 frame 事前 decode 済み
+            // なので retainOnly は完全停止 (evict すると preload 作業が無駄になる)。
+            // Tanaka 明示指示: 「全 platform 同じロジック」「234MB (iPhone) / 1.26GB (Mac full) は想定内」。
+            let preloadOn = UserDefaults.standard.bool(forKey: "preloadPlayback")
+            if !preloadOn {
+                #if targetEnvironment(macCatalyst)
+                source.retainOnly(indices: keepSet)
+                #else
+                if source.frameCount > 200 {
+                    source.retainOnly(indices: keepSet)
+                }
+                // else: evict スキップ、decode 済 frame は次 cycle でも保持
+                #endif
+            }
 
             // HDR 先読み: keepSet 内で frameCache あり & hdrCache 無し & inflight 無し を並列 enhance。
             // ライブ UserDefaults を読んで toggle OFF 中はスキップ + hdrCache 全解放。
@@ -429,7 +462,12 @@ struct BoomerangWebPView: View {
 
     @State private var source: AnimatedImageSource?
     @State private var loadFailed: Bool = false
+    @State private var isPreloading: Bool = false
+    @State private var preloadProgress: Double = 0
     @ObservedObject private var coordinator = AnimatedPlaybackCoordinator.shared
+    /// PSP PMDVis 方式プリロード: ▶ タップ → 全 frame 並列 decode → 完了後に再生開始。
+    /// 初動チェース (~5s) を完全除去する代償に、再生開始まで待機時間 (iPhone 3-4s / Mac 1-2s)。
+    @AppStorage("preloadPlayback") private var preloadPlayback = true
 
     /// システム逼迫時の共有フラグ (熱 or メモリ警告)。registry から書き換えられる。現状は retained for 将来。
     static var systemDowngraded: Bool = false
@@ -449,11 +487,13 @@ struct BoomerangWebPView: View {
                 Color.clear
                     .aspectRatio(contentAspectRatio, contentMode: .fit)
             }
-            if isPlaying, let source {
+            // 再生セル: source が ready かつプリロード中でない時のみ表示。
+            // プリロード中は静止画 placeholder を残し、裏で全 frame decode を走らせる。
+            if isPlaying, let source, !isPreloading {
                 AnimatedImageCellView(source: source, isActive: true)
             }
-            // ▶ オーバーレイ: 停止中のみ表示。タップで coordinator.toggle 呼び出し。
-            if !isPlaying {
+            // ▶ オーバーレイ: 停止中 (再生もプリロードもしてない) のみ表示。
+            if !isPlaying && !isPreloading {
                 Button {
                     coordinator.toggle(pageKey)
                 } label: {
@@ -465,6 +505,34 @@ struct BoomerangWebPView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("再生")
+            }
+            // プリロード中オーバーレイ: プログレスバー + パーセント + キャンセル。
+            // キャンセル = coordinator.toggle で isPlaying 外す → task 再実行で Task.isCancelled → 終了。
+            if isPreloading {
+                VStack(spacing: 12) {
+                    ProgressView(value: preloadProgress)
+                        .progressViewStyle(.linear)
+                        .tint(.white)
+                        .frame(maxWidth: 220)
+                    Text("プリロード中 \(Int(preloadProgress * 100))%")
+                        .font(.caption)
+                        .foregroundStyle(.white)
+                    Button {
+                        coordinator.toggle(pageKey)
+                    } label: {
+                        Text("キャンセル")
+                            .font(.caption)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 6)
+                            .background(Color.black.opacity(0.5))
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(20)
+                .background(Color.black.opacity(0.55))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
             }
         }
         // 再生中に全体タップ → 停止 (▶ ボタンが非表示になっても "Tap to stop" できるよう)
@@ -522,9 +590,13 @@ struct BoomerangWebPView: View {
         }()
         if let cacheKey, let cached = AnimatedImageSourceCache.shared.get(urlKey: cacheKey) {
             guard coordinator.isPlaying(pageKey) else { return }
+            LogManager.shared.log("Boomerang", "source CACHE HIT frames=\(cached.frameCount)")
+            if preloadPlayback {
+                await runPreload(cached)
+                guard coordinator.isPlaying(pageKey), !Task.isCancelled else { return }
+            }
             self.source = cached
             self.loadFailed = false
-            LogManager.shared.log("Boomerang", "source CACHE HIT frames=\(cached.frameCount)")
             return
         }
 
@@ -537,29 +609,88 @@ struct BoomerangWebPView: View {
                 return AnimatedImageSource.make(data: data)
             }
         }.value
-        await MainActor.run {
-            guard coordinator.isPlaying(pageKey) else {
-                LogManager.shared.log("Boomerang", "source built but no longer playing — discard")
-                return
-            }
-            if let loaded {
-                self.source = loaded
-                self.loadFailed = false
-                if let cacheKey {
-                    AnimatedImageSourceCache.shared.put(urlKey: cacheKey, source: loaded)
+        guard coordinator.isPlaying(pageKey) else {
+            LogManager.shared.log("Boomerang", "source built but no longer playing — discard")
+            return
+        }
+        guard let loaded else {
+            self.loadFailed = true
+            let label: String = {
+                switch input {
+                case .url(let u): return u.lastPathComponent
+                case .data(let d): return "data(\(d.count)B)"
                 }
-                LogManager.shared.log("Boomerang", "source ready frames=\(loaded.frameCount) size=\(Int(loaded.pixelSize.width))x\(Int(loaded.pixelSize.height))")
-            } else {
-                self.loadFailed = true
-                let label: String = {
-                    switch input {
-                    case .url(let u): return u.lastPathComponent
-                    case .data(let d): return "data(\(d.count)B)"
-                    }
-                }()
-                LogManager.shared.log("Boomerang", "source build FAILED \(label)")
+            }()
+            LogManager.shared.log("Boomerang", "source build FAILED \(label)")
+            return
+        }
+        if let cacheKey {
+            AnimatedImageSourceCache.shared.put(urlKey: cacheKey, source: loaded)
+        }
+        LogManager.shared.log("Boomerang", "source ready frames=\(loaded.frameCount) size=\(Int(loaded.pixelSize.width))x\(Int(loaded.pixelSize.height))")
+        if preloadPlayback {
+            await runPreload(loaded)
+            guard coordinator.isPlaying(pageKey), !Task.isCancelled else { return }
+        }
+        self.source = loaded
+        self.loadFailed = false
+    }
+
+    /// 全 frame 並列 decode を batch=10 単位で実行。batch ごとに進捗更新 + cancel check。
+    /// parallelFrame は libwebp (WebP 全 frame 独立) → 真の並列 decode、cache hit 即返却で
+    /// 2 回目以降の preload は実質 no-op。
+    private func runPreload(_ src: AnimatedImageSource) async {
+        isPreloading = true
+        preloadProgress = 0
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let frameCount = src.frameCount
+        let maxDim = preloadMaxDim(for: src)
+        LogManager.shared.log("Anim", "preload start frames=\(frameCount) maxDim=\(Int(maxDim))")
+        let batchSize = 10
+        var batchStart = 0
+        while batchStart < frameCount {
+            if Task.isCancelled { break }
+            if !coordinator.isPlaying(pageKey) { break }
+            let batchEnd = min(batchStart + batchSize, frameCount)
+            let n = batchEnd - batchStart
+            let start = batchStart
+            await Task.detached(priority: .userInitiated) { [src] in
+                DispatchQueue.concurrentPerform(iterations: n) { k in
+                    _ = src.parallelFrame(at: start + k, maxPixelSize: maxDim)
+                }
+            }.value
+            batchStart = batchEnd
+            preloadProgress = Double(batchEnd) / Double(frameCount)
+            if batchEnd % 30 == 0 || batchEnd == frameCount {
+                LogManager.shared.log("Anim", "preload progress \(batchEnd)/\(frameCount) (\(Int(preloadProgress * 100))%)")
             }
         }
+        let dur = CFAbsoluteTimeGetCurrent() - t0
+        let cancelled = Task.isCancelled || !coordinator.isPlaying(pageKey)
+        if cancelled {
+            LogManager.shared.log("Anim", "preload CANCELLED at \(batchStart)/\(frameCount) dur=\(String(format: "%.2f", dur))s")
+        } else {
+            LogManager.shared.log("Anim", "preload DONE duration=\(String(format: "%.2f", dur))s frames=\(frameCount)")
+        }
+        isPreloading = false
+        preloadProgress = 0
+    }
+
+    /// setSource 時の computeMaxPixelSize と同じ基準 (screen bounds + canvas 別 cap) で
+    /// preload も decode するため、cache hit の一致率を最大化。
+    private func preloadMaxDim(for source: AnimatedImageSource) -> CGFloat {
+        let screen = UIScreen.main.bounds
+        let boundsBased = max(screen.width, screen.height)
+        #if targetEnvironment(macCatalyst)
+        return boundsBased
+        #else
+        let canvasLonger = max(source.pixelSize.width, source.pixelSize.height)
+        let cap: CGFloat
+        if canvasLonger > 2500 { cap = 700 }
+        else if canvasLonger > 2000 { cap = 900 }
+        else { cap = 1000 }
+        return min(boundsBased, cap)
+        #endif
     }
 }
 

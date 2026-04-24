@@ -63,6 +63,19 @@ final class AnimatedPlaybackCoordinator: ObservableObject {
         }
     }
 
+    /// reader close 時の memory 解放統合 API。
+    /// resetForReader + LRU 強参照 cache clear + 全 alive source の frameCache drop を一括実行。
+    /// 多 source 開いた後 reader 閉じて戻っても memory がパンパンにならないよう、閉じたら全解放。
+    /// 次に ▶ タップ時は rawData から再度 decode するが、preload モードならユーザー側で進捗が見える。
+    func closeReader(_ readerID: String) {
+        resetForReader(readerID)
+        #if canImport(UIKit)
+        AnimatedImageSourceCache.shared.clear()
+        AnimatedImageSourceRegistry.shared.dropAllCaches()
+        #endif
+        LogManager.shared.log("Mem", "closeReader \(readerID) → cache cleared (LRU + frameCache)")
+    }
+
     /// 全停止 (app background 等)。
     func stopAll() {
         guard !playing.isEmpty else { return }

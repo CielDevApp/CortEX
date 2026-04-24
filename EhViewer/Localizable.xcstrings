@@ -1078,6 +1078,9 @@
     ">> HIDDEN SUBSYSTEM UNLOCKED\n>> AGE VERIFICATION: ONLINE\n>> ACCESS LEVEL: ELEVATED\n\n// キャラクター管理に年齢機能が追加されました" : {
 
     },
+    "▶ タップ後、全 frame を並列デコードし終えてから再生開始。初動チェース無しで最初からぬるぬる再生。プリロード中はプログレス表示 + キャンセル可能。OFF にすると即時再生 (初動 ~5 秒チェース)。" : {
+
+    },
     "⚠️ エクストリームモード" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -7842,6 +7845,12 @@
           }
         }
       }
+    },
+    "プリロード中 %lld%%" : {
+
+    },
+    "プリロード再生" : {
+
     },
     "プルダウンして再読み込み" : {
       "comment" : "A text that appears when the gallery list is empty and the user pulls down to refresh.",

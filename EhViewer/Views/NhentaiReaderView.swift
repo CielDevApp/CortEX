@@ -186,6 +186,10 @@ struct NhentaiReaderView: View {
         }
         .onDisappear {
             DownloadManager.setReaderActive(gid: -gallery.id, active: false)
+            // reader close 時: animated source の再生停止 + LRU 強参照 cache + frameCache の全解放。
+            // nhentai reader の PageCellView は "cell-\(mp4Gid)" readerID を使い、mp4Gid=-gallery.id。
+            // cache cleanup は readerID に関係なく global に全解放するため問題なし。
+            AnimatedPlaybackCoordinator.shared.closeReader("cell-\(-gallery.id)")
         }
         .onChange(of: noFilterMode) { _, _ in reapplyFilters() }
         .onChange(of: imageEnhanceFilter) { _, _ in reapplyFilters() }
