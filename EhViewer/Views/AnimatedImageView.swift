@@ -657,22 +657,29 @@ struct BoomerangWebPView: View {
         return heavy
     }
 
-    /// 全 frame 並列 decode を batch=10 単位で実行。batch ごとに進捗更新 + cancel check。
-    /// parallelFrame は libwebp (WebP 全 frame 独立) → 真の並列 decode、cache hit 即返却で
-    /// 2 回目以降の preload は実質 no-op。
+    /// 前半 50% の frame を batch=10 単位で並列 decode → 完了後に playback 開始。
+    /// 残り後半は rolling prefetch (preload=ON 時 retainOnly 停止) が playback 中に decode。
+    ///
+    /// 半分で切り上げる根拠:
+    /// - フル preload ~5.8s (Fugen 179f) → 待ちが長い
+    /// - 半分 preload ~2.9s で playback 開始、残り半分は playback 中に裏 decode
+    /// - rolling decode rate ≈ playback consumption rate (~30 fps) なので
+    ///   半分 preload 済からスタートすれば、playback が後半に達する頃には decode 済
+    /// - preload=ON で retainOnly 停止のため decode 済 frame は evict されず累積
     private func runPreload(_ src: AnimatedImageSource) async {
         isPreloading = true
         preloadProgress = 0
         let t0 = CFAbsoluteTimeGetCurrent()
         let frameCount = src.frameCount
+        let preloadCount = (frameCount + 1) / 2  // 半分 (奇数切り上げ)
         let maxDim = preloadMaxDim(for: src)
-        LogManager.shared.log("Anim", "preload start frames=\(frameCount) maxDim=\(Int(maxDim))")
+        LogManager.shared.log("Anim", "preload start frames=\(preloadCount)/\(frameCount) (half) maxDim=\(Int(maxDim))")
         let batchSize = 10
         var batchStart = 0
-        while batchStart < frameCount {
+        while batchStart < preloadCount {
             if Task.isCancelled { break }
             if !coordinator.isPlaying(pageKey) { break }
-            let batchEnd = min(batchStart + batchSize, frameCount)
+            let batchEnd = min(batchStart + batchSize, preloadCount)
             let n = batchEnd - batchStart
             let start = batchStart
             await Task.detached(priority: .userInitiated) { [src] in
@@ -681,17 +688,17 @@ struct BoomerangWebPView: View {
                 }
             }.value
             batchStart = batchEnd
-            preloadProgress = Double(batchEnd) / Double(frameCount)
-            if batchEnd % 30 == 0 || batchEnd == frameCount {
-                LogManager.shared.log("Anim", "preload progress \(batchEnd)/\(frameCount) (\(Int(preloadProgress * 100))%)")
+            preloadProgress = Double(batchEnd) / Double(preloadCount)
+            if batchEnd % 30 == 0 || batchEnd == preloadCount {
+                LogManager.shared.log("Anim", "preload progress \(batchEnd)/\(preloadCount) (\(Int(preloadProgress * 100))%)")
             }
         }
         let dur = CFAbsoluteTimeGetCurrent() - t0
         let cancelled = Task.isCancelled || !coordinator.isPlaying(pageKey)
         if cancelled {
-            LogManager.shared.log("Anim", "preload CANCELLED at \(batchStart)/\(frameCount) dur=\(String(format: "%.2f", dur))s")
+            LogManager.shared.log("Anim", "preload CANCELLED at \(batchStart)/\(preloadCount) dur=\(String(format: "%.2f", dur))s")
         } else {
-            LogManager.shared.log("Anim", "preload DONE duration=\(String(format: "%.2f", dur))s frames=\(frameCount)")
+            LogManager.shared.log("Anim", "preload DONE duration=\(String(format: "%.2f", dur))s preloaded=\(preloadCount)/\(frameCount) (rolling decodes rest)")
         }
         isPreloading = false
         preloadProgress = 0
