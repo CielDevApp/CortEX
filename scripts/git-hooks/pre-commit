@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Git pre-commit hook: secret / credential scan.
+# 有効化:
+#   git config core.hooksPath scripts/git-hooks
+# または: scripts/install-hooks.sh を実行
+#
+# 2026-04-23 credentials 流出事件の再発防止。staged 分のみスキャン → 通れば commit 続行。
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+exec "$REPO_ROOT/scripts/check-secrets.sh" --staged
