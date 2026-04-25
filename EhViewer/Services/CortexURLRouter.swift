@@ -84,6 +84,8 @@ enum CortexURLRouter {
             NotificationCenter.default.post(name: .cortexSearch, object: q)
             LogManager.shared.log("CortexURL", "search posted q=\(q)")
             return true
+        case "download/queue":
+            return queueDownload(params: params)
         default:
             LogManager.shared.log("CortexURL", "unknown action: \(key)")
             return false
@@ -156,6 +158,56 @@ enum CortexURLRouter {
             CortexCommandBus.shared.openOnlineReader = req
         }
         LogManager.shared.log("CortexURL", "online reader request gid=\(gid) page=\(page) host=\(hostName)")
+        return true
+    }
+
+    /// AirDrop で受信した `cortex://download/queue?gid=X&token=Y` (or nhentai 形式) を
+    /// DownloadManager の DL queue に投入する (Phase 2、田中指示 2026-04-25)。
+    /// reader は開かず BG DL のみ → iPhone から M2 Air NAS にやらせる運用の受信側。
+    private static func queueDownload(params: [String: String]) -> Bool {
+        if let source = params["source"], source == "nhentai" {
+            guard let idStr = params["id"], let id = Int(idStr) else {
+                LogManager.shared.log("CortexURL", "download/queue nhentai: missing id")
+                return false
+            }
+            Task {
+                do {
+                    let nh = try await NhentaiClient.fetchGallery(id: id)
+                    await MainActor.run {
+                        DownloadManager.shared.startNhentaiDownload(gallery: nh)
+                    }
+                    LogManager.shared.log("CortexURL", "download queued (nhentai) id=\(id) title=\(nh.title.pretty ?? "?")")
+                } catch {
+                    LogManager.shared.log("CortexURL", "download/queue nhentai failed: \(error.localizedDescription)")
+                }
+            }
+            return true
+        }
+        // ehentai
+        guard let gidStr = params["gid"], let gid = Int(gidStr),
+              let token = params["token"], !token.isEmpty else {
+            LogManager.shared.log("CortexURL", "download/queue: missing gid/token")
+            return false
+        }
+        let hostName = params["host"] ?? "exhentai"
+        let host: GalleryHost = hostName == "exhentai" ? .exhentai : .ehentai
+        Task {
+            // 仮 Gallery で fetchGalleryDetail → 正規 metadata 補完 → startDownload
+            let temp = Gallery(
+                gid: gid, token: token, title: "(queued)", category: nil,
+                coverURL: nil, rating: 0, pageCount: 0, postedDate: "",
+                uploader: nil, tags: []
+            )
+            do {
+                let detail = try await EhClient.shared.fetchGalleryDetail(host: host, gallery: temp)
+                await MainActor.run {
+                    DownloadManager.shared.startDownload(gallery: detail.gallery, host: host)
+                }
+                LogManager.shared.log("CortexURL", "download queued gid=\(gid) title=\(detail.gallery.title.prefix(50))")
+            } catch {
+                LogManager.shared.log("CortexURL", "download/queue failed: gid=\(gid) error=\(error.localizedDescription)")
+            }
+        }
         return true
     }
 
