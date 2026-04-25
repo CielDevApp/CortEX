@@ -382,12 +382,32 @@ struct GalleryDetailView: View {
 
     // MARK: - Header
 
+    /// 詳細 API で取れた normalizedTags から "animated" を含むかを namespace 横断で判定。
+    /// (例: other:animated)。カバー / サムネに再生マーク overlay 表示用。
+    /// 検索結果一覧では server 全件叩く負荷を避けるため判定せず、詳細画面に到達した時のみ。
+    private func isAnimatedDetail(_ detail: GalleryDetail) -> Bool {
+        for (_, tags) in detail.normalizedTags {
+            if tags.contains(where: { $0.lowercased().contains("animated") }) { return true }
+        }
+        return false
+    }
+
     @ViewBuilder
     private func headerSection(_ detail: GalleryDetail) -> some View {
+        let isAnim = isAnimatedDetail(detail)
         HStack(alignment: .top, spacing: 16) {
             CachedImageView(url: detail.gallery.coverURL, host: host, gid: detail.gallery.gid)
                 .frame(width: 140, height: 200)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(alignment: .bottomTrailing) {
+                    if isAnim {
+                        Image(systemName: "play.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.white)
+                            .shadow(radius: 2)
+                            .padding(6)
+                    }
+                }
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(detail.gallery.title)
@@ -772,7 +792,8 @@ struct GalleryDetailView: View {
             info: index < thumbnails.count ? thumbnails[index] : nil,
             cellHeight: thumbCellHeight,
             onTap: { readerRequest = ReaderRequest(page: index) },
-            gid: gallery.gid
+            gid: gallery.gid,
+            isAnimated: detail.map(isAnimatedDetail) ?? false
         )
     }
 
