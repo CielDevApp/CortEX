@@ -10,6 +10,17 @@
 	<array>
 		<string>com.kanayayuutou.CortEX.bgdl.processing</string>
 	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.kanayayuutou.cortex.debug</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>cortex</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>

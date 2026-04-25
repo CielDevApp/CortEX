@@ -96,6 +96,11 @@ struct ContentView: View {
         }
         .preferredColorScheme(colorScheme)
         .onOpenURL { url in
+            // CUI debug 用 cortex:// scheme は CortexURLRouter で処理 (非破壊で追加、田中指示 2026-04-25)
+            if url.scheme == "cortex" {
+                _ = CortexURLRouter.handle(url)
+                return
+            }
             // AirDrop/ファイル等から.cortexまたは.zipを受信
             let ext = url.pathExtension.lowercased()
             guard ext == "cortex" || ext == "zip" else { return }
