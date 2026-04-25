@@ -34,19 +34,28 @@ struct DownloadedGallery: Codable, Identifiable, Sendable {
     var hasAnimatedWebp: Bool? = nil
     /// ダイアログで選択された per-gallery モード上書き。nil = 未選択
     var readerModeOverride: GalleryReaderMode? = nil
+    /// E-Hentai タグ (DL 開始時の Gallery.tags をスナップ)。nil = 旧 DL データで未保存。
+    /// "other:animated" 等を含めば動画作品として確定判定 (実バイト scan 不要 = 二重判定排除)。
+    var tags: [String]? = nil
 
     var id: Int { gid }
     nonisolated var directoryName: String { "\(gid)" }
     var isNhentai: Bool { source == "nhentai" || token.hasPrefix("nh") }
-    /// 動画作品判定: 実 scan 結果 (hasAnimatedWebp) を最優先、未 scan ならタイトル絵文字 heuristic。
-    /// 投稿者がタイトルに "Animated"/"🎥" を入れない動画作品もマーク表示するため、
-    /// scan 完了済 (true) なら絵文字無関係に動画扱い (田中報告 2026-04-25 全部動画なのにマーク無し作品多発)。
+    /// 動画作品判定: 優先順 (1) 実 scan 結果 → (2) タグ → (3) タイトル絵文字 heuristic。
+    /// scan 完了済なら絵文字/タグ無関係に確定判定。タグがあれば即マーク表示で
+    /// onAppear scan 起動も不要 (田中指示 2026-04-25 二重判定排除)。
     var isAnimatedGallery: Bool {
         if hasAnimatedWebp == true { return true }
         if hasAnimatedWebp == false { return false }
-        // 未 scan (nil): タイトル heuristic にフォールバック
+        // 未 scan (nil): タグ判定 → タイトル heuristic
+        if hasAnimatedTag { return true }
         let t = title
         return t.contains("Animated") || t.contains("GIF") || t.contains("gif") || t.contains("🎥")
+    }
+    /// タグに "animated" を含むか (E-Hentai の "other:animated" 等を拾う)。case insensitive。
+    var hasAnimatedTag: Bool {
+        guard let tags else { return false }
+        return tags.contains { $0.lowercased().contains("animated") }
     }
     /// nhentai用: 実際のnhentai IDを返す（gidは-nhIdで保存）
     var nhentaiId: Int? {
@@ -614,11 +623,14 @@ class DownloadManager: ObservableObject {
                 saveMetadata(existing)
             }
         } else {
-            let meta = DownloadedGallery(
+            var meta = DownloadedGallery(
                 gid: gid, token: token, title: title,
                 coverFileName: "cover.jpg", pageCount: pageCount,
                 downloadDate: Date(), isComplete: false, downloadedPages: []
             )
+            // タグを保存しておけば、未 scan 状態でも動画マークが即時表示される。
+            // "other:animated" 等を含む作品は実バイト scan 不要 (二重判定排除)。
+            meta.tags = gallery.tags
             saveMetadata(meta)
         }
 
