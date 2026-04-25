@@ -523,10 +523,10 @@ struct DownloadsView: View {
             isHighlighted ? Color.green.opacity(0.12) : nil
         )
         .onAppear {
-            // 未 scan の作品はバックグラウンドで実バイト走査して動画マーク表示精度を上げる。
-            // タイトル絵文字 heuristic だけでは投稿者ラベル次第で漏れが出るため (田中報告 2026-04-25)。
-            // ensureAnimatedWebpScanned は既に scan 済 (hasAnimatedWebp != nil) なら no-op。
-            if meta.hasAnimatedWebp == nil {
+            // 未 scan で、かつタグからも動画判定できない作品のみバックグラウンド scan。
+            // タグに "animated" を含めばその時点で確定マーク表示できるので scan 起動不要
+            // (田中指示 2026-04-25 二重判定排除)。
+            if meta.hasAnimatedWebp == nil && !meta.hasAnimatedTag {
                 Task { await DownloadManager.shared.ensureAnimatedWebpScanned(gid: meta.gid) }
             }
         }
