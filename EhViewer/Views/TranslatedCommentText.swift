@@ -1,63 +1,35 @@
 import SwiftUI
-#if canImport(Translation)
+#if canImport(Translation) && !targetEnvironment(macCatalyst)
 import Translation
 #endif
 
-/// コメント本文を `translationLang` AppStorage の言語に自動翻訳して表示する view。
-/// iOS 18+ / macOS 15+ で Apple Translation Framework を使用、それ以下は素通し。
-/// `autoTranslateComments` (default true) で ON/OFF。
+/// コメント本文を表示し、タップ式で OS 標準の翻訳 popover を出す view。
+/// `.translationPresentation` (iOS 17.4+) を利用。Mac Catalyst では Translation framework
+/// 全体が unavailable なので翻訳ボタンを表示しない (原文表示のみ)。
 ///
-/// 田中指示 2026-04-25「コメントの自動翻訳、設定してる言語に」。
+/// 田中指示 2026-04-25「自動翻訳というよりタップして翻訳の方がいい」。
 struct TranslatedCommentText: View {
     let original: String
-    @AppStorage("translationLang") private var translationLang = "ja"
-    @AppStorage("autoTranslateComments") private var autoTranslate = true
+    @State private var showTranslation = false
 
     var body: some View {
-        // Apple Translation Framework は Mac Catalyst だと 26.0+ 必要 (iOS 26 相当、まだ未提供)。
-        // iPhone (iOS 18+) のみ翻訳、それ以外は原文表示で fallback。
-        if #available(iOS 18.0, macCatalyst 26.0, *) {
-            ModernTranslatedCommentText(original: original, targetLang: translationLang, enabled: autoTranslate)
-        } else {
+        VStack(alignment: .leading, spacing: 4) {
             Text(original)
                 .font(.caption)
                 .lineLimit(8)
+            #if !targetEnvironment(macCatalyst)
+            if #available(iOS 17.4, *) {
+                Button {
+                    showTranslation = true
+                } label: {
+                    Label("翻訳", systemImage: "translate")
+                        .font(.caption2)
+                        .foregroundStyle(.blue)
+                }
+                .buttonStyle(.plain)
+                .translationPresentation(isPresented: $showTranslation, text: original)
+            }
+            #endif
         }
-    }
-}
-
-@available(iOS 18.0, macCatalyst 26.0, *)
-private struct ModernTranslatedCommentText: View {
-    let original: String
-    let targetLang: String
-    let enabled: Bool
-
-    @State private var translated: String?
-    @State private var configuration: TranslationSession.Configuration?
-
-    var body: some View {
-        Text(translated ?? original)
-            .font(.caption)
-            .lineLimit(8)
-            .task {
-                guard enabled else { return }
-                // 翻訳セッション設定。source=nil で自動検出、target は AppStorage の言語。
-                if configuration == nil {
-                    configuration = TranslationSession.Configuration(
-                        source: nil,
-                        target: Locale.Language(identifier: targetLang)
-                    )
-                }
-            }
-            .translationTask(configuration) { session in
-                do {
-                    let response = try await session.translate(original)
-                    if response.targetText != original {
-                        translated = response.targetText
-                    }
-                } catch {
-                    LogManager.shared.log("Translate", "comment translate failed: \(error.localizedDescription)")
-                }
-            }
     }
 }
