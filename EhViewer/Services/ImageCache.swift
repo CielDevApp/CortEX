@@ -78,12 +78,26 @@ final class ImageCache {
 
     /// アニメ WebP 生 Data を URL 単位で永続化。保存先のファイル URL を同期返す
     /// (実ディスク書き込みは background キュー、URL は即返す)。
+    /// gid+page も渡された場合、副 index (`byGid/<gid>_<page>.webp` への hard link) を
+    /// 作って ThumbnailCellView 等の URL 非保持 view からも参照できるようにする
+    /// (混在作品で動画 page にだけマーク表示するための情報源、田中指示 2026-04-25)。
     @discardableResult
-    func saveAnimatedWebPData(_ data: Data, for url: URL) -> URL {
+    func saveAnimatedWebPData(_ data: Data, for url: URL, gid: Int? = nil, page: Int? = nil) -> URL {
         let path = animatedWebPCacheDir.appendingPathComponent(cacheFileHash(for: url))
         // 即 sync 書き込み: AVPlayer がすぐ読みに行けるよう一時的に main から書く
         // (5-10MB の Data write はミリ秒単位、長時間ブロックしない)。
         try? data.write(to: path)
+        // 副 index (gid+page → 同じ data の hard link)
+        if let gid, let page {
+            let byGidDir = animatedWebPCacheDir.appendingPathComponent("byGid")
+            if !fileManager.fileExists(atPath: byGidDir.path) {
+                try? fileManager.createDirectory(at: byGidDir, withIntermediateDirectories: true)
+            }
+            let altPath = byGidDir.appendingPathComponent("\(gid)_\(page).webp")
+            // 既存 link/file があれば削除してから link 張り直す
+            try? fileManager.removeItem(at: altPath)
+            try? fileManager.linkItem(at: path, to: altPath)
+        }
         return path
     }
 
@@ -97,6 +111,14 @@ final class ImageCache {
     /// Data をメモリに載せず、AVPlayer が disk から直接読めるようにするための API。
     func animatedWebPFileURL(for url: URL) -> URL? {
         let path = animatedWebPCacheDir.appendingPathComponent(cacheFileHash(for: url))
+        return fileManager.fileExists(atPath: path.path) ? path : nil
+    }
+
+    /// gid+page 副 index 経由で永続化済み animated WebP file URL を返す (存在しなければ nil)。
+    /// imageURL 不明な view (詳細画面 ThumbnailCellView 等) から「過去 reader で fetch
+    /// 済の動画 page」を判定するための API (田中指示 2026-04-25 混在作品の動画/静画区別)。
+    func animatedWebPFileURL(gid: Int, page: Int) -> URL? {
+        let path = animatedWebPCacheDir.appendingPathComponent("byGid").appendingPathComponent("\(gid)_\(page).webp")
         return fileManager.fileExists(atPath: path.path) ? path : nil
     }
 

@@ -263,7 +263,7 @@ extension ReaderViewModel {
             // 超えるケースの誤陰性を回避)。検知時は disk に永続化し holder.animatedFileURL に設定。
             // Data をメモリに持たず AVPlayer が disk 直読みする方針でメモリ常駐を削る (数百 MB 削減)。
             if WebPAnimationDetector.isAnimatedWebP(data: imageData) {
-                let animURL = ImageCache.shared.saveAnimatedWebPData(imageData, for: imageURL)
+                let animURL = ImageCache.shared.saveAnimatedWebPData(imageData, for: imageURL, gid: gallery.gid, page: index)
                 await MainActor.run {
                     self.holder(for: index).animatedFileURL = animURL
                 }

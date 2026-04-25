@@ -76,25 +76,35 @@ struct ThumbnailCellView: View {
         }
     }
 
-    /// gid 指定 + DL 済みファイルがある時はファイル実バイト判定、未 DL は fallback 値を採用。
-    /// 未 DL ページの個別判定は server fetch が必要 (重い) ため、作品単位タグ判定で代用。
+    /// 判定優先順 (混在作品で動画 page のみマーク表示の精度確保):
+    /// (1) DL 済みファイルあり → 実バイト判定
+    /// (2) ImageCache に reader 経由で保存済 animated WebP あり → true
+    /// (3) 未 DL & cache 無 → 作品単位 fallback (全 page、誤情報あり)
     private func detectAnimated() async {
         guard let gid else {
-            // gid 無し (= 純検索結果のサムネ?) なら fallback だけ採用
             if isAnimatedFallback {
                 await MainActor.run { self.isAnimated = true }
             }
             return
         }
-        let url = DownloadManager.shared.imageFilePath(gid: gid, page: index)
-        if FileManager.default.fileExists(atPath: url.path) {
-            // DL 済み: ファイル実バイト判定 (混在作品で動画 page のみ true)
+        let dlURL = DownloadManager.shared.imageFilePath(gid: gid, page: index)
+        if FileManager.default.fileExists(atPath: dlURL.path) {
+            // DL 済み: ファイル実バイト判定
             let animated = await Task.detached(priority: .utility) {
-                WebPFileDetector.isAnimatedWebP(url: url)
+                WebPFileDetector.isAnimatedWebP(url: dlURL)
             }.value
             await MainActor.run { self.isAnimated = animated }
-        } else if isAnimatedFallback {
-            // 未 DL: 作品単位タグ判定にフォールバック (全 page にマーク = 混在は区別不能)
+            return
+        }
+        // 未 DL: reader 経由で fetch 済の animated WebP cache を gid+page で確認。
+        // 混在作品で動画 page だけ reader が判定して保存しているはずなので、
+        // この cache 存在 = 動画 page と確定できる (静画 page は cache に来ない)。
+        if ImageCache.shared.animatedWebPFileURL(gid: gid, page: index) != nil {
+            await MainActor.run { self.isAnimated = true }
+            return
+        }
+        // それも無ければ作品単位タグ fallback (全 page、混在区別不能)
+        if isAnimatedFallback {
             await MainActor.run { self.isAnimated = true }
         }
     }
