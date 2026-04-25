@@ -22,8 +22,13 @@ enum WebPAnimationDetector {
     static func isAnimatedWebP(data: Data) -> Bool {
         guard data.count >= 21 else { return false }
         if checkHeader(Array(data.prefix(32))) { return true }
-        // VP8X 無し variant: ImageIO で frame 数判定
-        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return false }
+        // CGImageSourceCreateWithData だと E-Hentai の WebP variant で frame 数を認識しない
+        // (DL 経路は disk file を CGImageSourceCreateWithURL で見るので animated 認識される)。
+        // tmp file 経由 URL ベース判定で挙動を揃える (田中報告 2026-04-25「DL すれば動画」根因)。
+        let tmpURL = FileManager.default.temporaryDirectory.appendingPathComponent("anim_check_\(UUID().uuidString).webp")
+        guard (try? data.write(to: tmpURL)) != nil else { return false }
+        defer { try? FileManager.default.removeItem(at: tmpURL) }
+        guard let src = CGImageSourceCreateWithURL(tmpURL as CFURL, nil) else { return false }
         return CGImageSourceGetCount(src) > 1
     }
 
