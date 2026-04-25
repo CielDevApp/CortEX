@@ -145,6 +145,9 @@ struct GalleryDetailView: View {
     /// コメント欄展開フラグ。false なら 1 件目だけ通常表示、2 件目以降は
     /// グラデーション fade + 「続きを読む」ボタン (田中指示 2026-04-25)。
     @State private var commentsExpanded = false
+    /// 展開時の表示上限。「さらに読み込む」タップで +20 ずつ増やす。
+    /// 折りたたみとは独立した state (干渉させない)。
+    @State private var commentsVisibleCount = 10
     /// 大規模 DL 警告ダイアログ (70 画面 = 1400p 以上)
     @State private var showLargeDLWarning = false
 
@@ -597,17 +600,33 @@ struct GalleryDetailView: View {
 
                 if comments.count > 1 {
                     if commentsExpanded {
-                        // 展開状態: 2 件目以降を全部 (上限 10) 表示
-                        ForEach(Array(comments.prefix(10).dropFirst().enumerated()), id: \.offset) { _, comment in
+                        // 展開状態: 2 件目以降を `commentsVisibleCount` まで表示
+                        let upperBound = min(commentsVisibleCount, comments.count)
+                        ForEach(Array(comments.prefix(upperBound).dropFirst().enumerated()), id: \.offset) { _, comment in
                             Divider()
                             commentRow(comment)
                         }
-                        if comments.count > 10 {
-                            Text("他 \(comments.count - 10) 件のコメント")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                        // 「さらに読み込む」: 表示済み < 全件 で表示
+                        if upperBound < comments.count {
+                            HStack {
+                                Spacer()
+                                Button {
+                                    let next = min(commentsVisibleCount + 20, comments.count)
+                                    withAnimation(.easeOut(duration: 0.2)) { commentsVisibleCount = next }
+                                } label: {
+                                    Label("さらに読み込む（残り \(comments.count - upperBound) 件）", systemImage: "chevron.down")
+                                        .font(.caption.bold())
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 8)
+                                        .background(.ultraThinMaterial, in: Capsule())
+                                        .overlay(Capsule().stroke(.secondary.opacity(0.3), lineWidth: 0.5))
+                                }
+                                .buttonStyle(.plain)
+                                Spacer()
+                            }
+                            .padding(.top, 4)
                         }
-                        // 折りたたむボタン
+                        // 「折りたたむ」: 常に最下部 (「さらに読み込む」とは別配置で干渉させない)
                         HStack {
                             Spacer()
                             Button {
