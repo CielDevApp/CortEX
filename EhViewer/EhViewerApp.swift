@@ -189,8 +189,6 @@ struct EhViewerApp: App {
             "preloadPlayback": true,
             // 同じパターンで Boomerang Mode も UIView 側から読まれているので併せて register。
             "boomerangMode": true,
-            // コメント自動翻訳 (Apple Translation Framework, iOS 18+)。default ON。
-            "autoTranslateComments": true,
         ])
 
         ImageCache.shared.cleanupOnLaunch()
