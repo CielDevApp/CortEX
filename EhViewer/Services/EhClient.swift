@@ -203,11 +203,33 @@ final class EhClient: Sendable {
     nonisolated func fetchImageURL(pageURL: URL) async throws -> URL {
         // 画像ページURLからホストを判定
         let host: GalleryHost = pageURL.host?.contains("exhentai") == true ? .exhentai : .ehentai
-        let html = try await fetchHTMLViaBGOrFallback(urlString: pageURL.absoluteString, host: host)
+        // 画像ページ HTML 取得時に uh=1280/iir=3 を含めると、server が HTML 内に
+        // resampled image URL を埋め込み、後の fetchImageData が static にダウンサンプル
+        // された data を取得してしまう。専用 fetch で Cookie から uh/iir を外す
+        // (田中報告 2026-04-25「DLなら動画/Readerはstatic」根因、DL も同じ fetchImageURL を使うが
+        // 今回 forImageFetch=true 通すことで両経路とも Original 配信に揃える)。
+        let html = try await fetchHTMLForImagePage(urlString: pageURL.absoluteString, host: host)
         if let url = HTMLParser.parseFullImageURL(html: html) {
             return url
         }
         throw EhError.parseFailed
+    }
+
+    /// 画像ページ HTML 専用 fetch (Cookie から uh/iir 削除で Original 配信を狙う)。
+    /// `fetchHTMLViaBGOrFallback` の BG/FG 切替・retry は省略 (foreground 想定の reader/DL 経路用)。
+    nonisolated private func fetchHTMLForImagePage(urlString: String, host: GalleryHost) async throws -> String {
+        guard let url = URL(string: urlString) else { throw EhError.invalidURL }
+        var request = URLRequest(url: url)
+        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(Self.buildCookieHeader(for: host, forImageFetch: true), forHTTPHeaderField: "Cookie")
+        let (data, response) = try await session.data(for: request)
+        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
+            throw EhError.parseFailed
+        }
+        guard let html = String(data: data, encoding: .utf8), !html.isEmpty else {
+            throw EhError.parseFailed
+        }
+        return html
     }
 
     /// 別ミラーサーバーから画像URLを取得（nlトークン使用）
