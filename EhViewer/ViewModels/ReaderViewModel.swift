@@ -133,13 +133,12 @@ class ReaderViewModel: ObservableObject {
 
     func onDisappear(index: Int) {
         let distance = abs(index - currentIndex)
-        // アニメ source (rawData ~17MB) は距離 3 超えたら即解放
-        if distance > 3 {
-            if pageHolders[index]?.animatedFileURL != nil {
-                pageHolders[index]?.animatedFileURL = nil
-                completedPages.remove(index)  // 再表示時に loadSingle で作り直す
-            }
-        }
+        // 旧実装: distance > 3 で `animatedFileURL = nil + completedPages.remove`。
+        // 意図は「rawData ~17MB を解放」だったが、AnimatedImageSource の rawData は
+        // BoomerangWebPView の State に保持され LazyVStack の cell unmount で自動 deinit される。
+        // URL を nil にすると同じページに戻った時に「静画扱い」「▶︎ ボタン出ない」になる
+        // (田中報告 2026-04-25 動画/静画混在作品で動画 page を離れて戻った時の症状)。
+        // URL は軽量 String なので保持コスト無視できる、削除した。
         if distance > 50 {
             pageHolders.removeValue(forKey: index)
             rawImages.removeValue(forKey: index)

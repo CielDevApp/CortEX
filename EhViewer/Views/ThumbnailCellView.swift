@@ -10,11 +10,15 @@ struct ThumbnailCellView: View {
     let onTap: () -> Void
     /// ダウンロード済み画像流用（gid指定時はローカルを先にチェック）
     var gid: Int? = nil
+    /// 未 DL ページのフォールバック判定値 (作品単位、タグに animated 含むか)。
+    /// DL 済みファイル不在時に detectAnimated でファイル判定できないため、
+    /// この値を採用してマーク表示する。混在作品の正確な動画/静画区別は DL 済みでのみ可能。
+    var isAnimatedFallback: Bool = false
 
     @State private var image: PlatformImage?
     /// 個別ページの動画判定 (DL 済みファイルを実バイト走査)。動画と静画混在作品で
     /// 動画ページにだけ再生マーク overlay 表示するため、ページ単位で判定 (田中指示 2026-04-25)。
-    /// gid 指定 + DL 済みファイルがある時のみ true になりうる、未 DL ページは false のまま。
+    /// gid 指定 + DL 済みファイルがある時のみ true になりうる、未 DL ページは fallback 値を採用。
     @State private var isAnimated: Bool = false
 
     var body: some View {
@@ -72,15 +76,27 @@ struct ThumbnailCellView: View {
         }
     }
 
-    /// gid 指定 + DL 済みファイルがある時のみ実バイト判定、未 DL は判定スキップ。
+    /// gid 指定 + DL 済みファイルがある時はファイル実バイト判定、未 DL は fallback 値を採用。
+    /// 未 DL ページの個別判定は server fetch が必要 (重い) ため、作品単位タグ判定で代用。
     private func detectAnimated() async {
-        guard let gid else { return }
+        guard let gid else {
+            // gid 無し (= 純検索結果のサムネ?) なら fallback だけ採用
+            if isAnimatedFallback {
+                await MainActor.run { self.isAnimated = true }
+            }
+            return
+        }
         let url = DownloadManager.shared.imageFilePath(gid: gid, page: index)
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
-        let animated = await Task.detached(priority: .utility) {
-            WebPFileDetector.isAnimatedWebP(url: url)
-        }.value
-        await MainActor.run { self.isAnimated = animated }
+        if FileManager.default.fileExists(atPath: url.path) {
+            // DL 済み: ファイル実バイト判定 (混在作品で動画 page のみ true)
+            let animated = await Task.detached(priority: .utility) {
+                WebPFileDetector.isAnimatedWebP(url: url)
+            }.value
+            await MainActor.run { self.isAnimated = animated }
+        } else if isAnimatedFallback {
+            // 未 DL: 作品単位タグ判定にフォールバック (全 page にマーク = 混在は区別不能)
+            await MainActor.run { self.isAnimated = true }
+        }
     }
 
     private func loadThumb() async {
