@@ -10,16 +10,8 @@ struct ThumbnailCellView: View {
     let onTap: () -> Void
     /// ダウンロード済み画像流用（gid指定時はローカルを先にチェック）
     var gid: Int? = nil
-    /// 未 DL ページのフォールバック判定値 (作品単位、タグに animated 含むか)。
-    /// DL 済みファイル不在時に detectAnimated でファイル判定できないため、
-    /// この値を採用してマーク表示する。混在作品の正確な動画/静画区別は DL 済みでのみ可能。
-    var isAnimatedFallback: Bool = false
 
     @State private var image: PlatformImage?
-    /// 個別ページの動画判定 (DL 済みファイルを実バイト走査)。動画と静画混在作品で
-    /// 動画ページにだけ再生マーク overlay 表示するため、ページ単位で判定 (田中指示 2026-04-25)。
-    /// gid 指定 + DL 済みファイルがある時のみ true になりうる、未 DL ページは fallback 値を採用。
-    @State private var isAnimated: Bool = false
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -52,60 +44,10 @@ struct ThumbnailCellView: View {
         }
         .frame(maxWidth: .infinity, minHeight: cellHeight, maxHeight: cellHeight)
         .clipShape(RoundedRectangle(cornerRadius: 6))
-        .overlay(alignment: .center) {
-            // DL一覧 PageThumbCell の長押しプレビューと同じ形・位置: 中央 .title2 白 shadow。
-            if isAnimated {
-                Image(systemName: "play.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(.white)
-                    .shadow(radius: 2)
-            }
-        }
-        .overlay {
-            // 紫枠線も DL 一覧 PageThumbCell (line 822-826) と統一 (田中指示「ドラの枠もパクって」)。
-            if isAnimated {
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.purple, lineWidth: 2)
-            }
-        }
         .contentShape(Rectangle())
         .onTapGesture { onTap() }
         .task(id: info?.spriteURL ?? URL(string: "local://\(index)")) {
             await loadThumb()
-            await detectAnimated()
-        }
-    }
-
-    /// 判定優先順 (混在作品で動画 page のみマーク表示の精度確保):
-    /// (1) DL 済みファイルあり → 実バイト判定
-    /// (2) ImageCache に reader 経由で保存済 animated WebP あり → true
-    /// (3) 未 DL & cache 無 → 作品単位 fallback (全 page、誤情報あり)
-    private func detectAnimated() async {
-        guard let gid else {
-            if isAnimatedFallback {
-                await MainActor.run { self.isAnimated = true }
-            }
-            return
-        }
-        let dlURL = DownloadManager.shared.imageFilePath(gid: gid, page: index)
-        if FileManager.default.fileExists(atPath: dlURL.path) {
-            // DL 済み: ファイル実バイト判定
-            let animated = await Task.detached(priority: .utility) {
-                WebPFileDetector.isAnimatedWebP(url: dlURL)
-            }.value
-            await MainActor.run { self.isAnimated = animated }
-            return
-        }
-        // 未 DL: reader 経由で fetch 済の animated WebP cache を gid+page で確認。
-        // 混在作品で動画 page だけ reader が判定して保存しているはずなので、
-        // この cache 存在 = 動画 page と確定できる (静画 page は cache に来ない)。
-        if ImageCache.shared.animatedWebPFileURL(gid: gid, page: index) != nil {
-            await MainActor.run { self.isAnimated = true }
-            return
-        }
-        // それも無ければ作品単位タグ fallback (全 page、混在区別不能)
-        if isAnimatedFallback {
-            await MainActor.run { self.isAnimated = true }
         }
     }
 
