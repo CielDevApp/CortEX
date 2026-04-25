@@ -278,15 +278,22 @@ extension ReaderViewModel {
                 )
             }
 
-            // アニメ WebP 判定: VP8X flag bit で判定 (ICCP/XMP chunk で ANIM 文字列が 256B 窓を
-            // 超えるケースの誤陰性を回避)。検知時は disk に永続化し holder.animatedFileURL に設定。
-            // Data をメモリに持たず AVPlayer が disk 直読みする方針でメモリ常駐を削る (数百 MB 削減)。
-            if WebPAnimationDetector.isAnimatedWebP(data: imageData) {
-                let animURL = ImageCache.shared.saveAnimatedWebPData(imageData, for: imageURL, gid: gallery.gid, page: index)
+            // アニメ WebP 判定: ローカルビューワー (DL ファイル URL ベース判定) と完全一致させるため、
+            // 必ず disk に書き出してから URL ベースで判定する (田中報告 2026-04-25「DL すれば動画になる
+            // のに通常リーダーで static 扱い」根因対策、CGImageSourceCreateWithData で frame 数を
+            // 認識しない WebP variant が E-Hentai 配信に存在する)。
+            // 判定 true なら保存維持 + holder.animatedFileURL 設定、false なら disk から削除 (cache 圧迫回避)。
+            let preliminaryURL = ImageCache.shared.saveAnimatedWebPData(imageData, for: imageURL, gid: gallery.gid, page: index)
+            if WebPAnimationDetector.isAnimatedWebP(url: preliminaryURL) {
                 await MainActor.run {
-                    self.holder(for: index).animatedFileURL = animURL
+                    self.holder(for: index).animatedFileURL = preliminaryURL
                 }
                 LogManager.shared.log("Anim", "page \(index) detected animated WebP, persisted \(imageData.count)B → disk URL")
+            } else {
+                // 静画判定 → 動画 cache から削除 (副 index も)
+                try? FileManager.default.removeItem(at: preliminaryURL)
+                let byGidDir = preliminaryURL.deletingLastPathComponent().appendingPathComponent("byGid")
+                try? FileManager.default.removeItem(at: byGidDir.appendingPathComponent("\(gallery.gid)_\(index).webp"))
             }
 
             let decodeStart = CFAbsoluteTimeGetCurrent()
