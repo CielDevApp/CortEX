@@ -142,6 +142,9 @@ struct GalleryDetailView: View {
     @State private var thumbnails: [ThumbnailInfo] = []
     @State private var croppedThumbs: [Int: PlatformImage] = [:]
     @State private var visibleThumbCount = 50
+    /// コメント欄展開フラグ。false なら 1 件目だけ通常表示、2 件目以降は
+    /// グラデーション fade + 「続きを読む」ボタン (田中指示 2026-04-25)。
+    @State private var commentsExpanded = false
     /// 大規模 DL 警告ダイアログ (70 画面 = 1400p 以上)
     @State private var showLargeDLWarning = false
 
@@ -587,38 +590,77 @@ struct GalleryDetailView: View {
     private func commentsSection(_ comments: [GalleryComment]) -> some View {
         GroupBox("コメント（\(comments.count)）") {
             VStack(alignment: .leading, spacing: 12) {
-                ForEach(Array(comments.prefix(10).enumerated()), id: \.offset) { _, comment in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(comment.author)
-                                .font(.caption.bold())
-                                .foregroundStyle(.blue)
-                            Spacer()
-                            if let score = comment.score {
-                                Text(score)
-                                    .font(.caption2)
-                                    .foregroundStyle(score.hasPrefix("-") ? .red : .green)
-                            }
-                        }
-                        Text(comment.date)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        // 自動翻訳: translationLang AppStorage の言語に翻訳して表示 (iOS 18+)。
-                        // OFF or 古い OS は原文表示 (TranslatedCommentText 内で fallback)。
-                        TranslatedCommentText(original: comment.content)
-                    }
-                    .padding(.vertical, 4)
-                    if comment.author != comments.prefix(10).last?.author || comment.date != comments.prefix(10).last?.date {
-                        Divider()
-                    }
+                // 1 件目は常に通常表示
+                if let first = comments.first {
+                    commentRow(first)
                 }
-                if comments.count > 10 {
-                    Text("他 \(comments.count - 10) 件のコメント")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+
+                if comments.count > 1 {
+                    if commentsExpanded {
+                        // 展開状態: 2 件目以降を全部 (上限 10) 表示
+                        ForEach(Array(comments.prefix(10).dropFirst().enumerated()), id: \.offset) { _, comment in
+                            Divider()
+                            commentRow(comment)
+                        }
+                        if comments.count > 10 {
+                            Text("他 \(comments.count - 10) 件のコメント")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        // 折りたたみ状態: 2 件目をグラデーション fade で見せて続きがあることを示唆
+                        Divider()
+                        ZStack(alignment: .center) {
+                            commentRow(comments[1])
+                                .frame(maxHeight: 60)
+                                .clipped()
+                                .mask(
+                                    LinearGradient(
+                                        colors: [.black, .black.opacity(0.4), .clear],
+                                        startPoint: .top, endPoint: .bottom
+                                    )
+                                )
+                                .allowsHitTesting(false)
+                            Button {
+                                withAnimation(.easeOut(duration: 0.25)) { commentsExpanded = true }
+                            } label: {
+                                Text("続きを読む（\(comments.count - 1) 件）")
+                                    .font(.caption.bold())
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 8)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                                    .overlay(Capsule().stroke(.secondary.opacity(0.3), lineWidth: 0.5))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .frame(height: 60)
+                    }
                 }
             }
         }
+    }
+
+    /// コメント 1 件の行表示。展開状態と折りたたみ状態で共通利用するため抽出。
+    @ViewBuilder
+    private func commentRow(_ comment: GalleryComment) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(comment.author)
+                    .font(.caption.bold())
+                    .foregroundStyle(.blue)
+                Spacer()
+                if let score = comment.score {
+                    Text(score)
+                        .font(.caption2)
+                        .foregroundStyle(score.hasPrefix("-") ? .red : .green)
+                }
+            }
+            Text(comment.date)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            TranslatedCommentText(original: comment.content)
+        }
+        .padding(.vertical, 4)
     }
 
     // MARK: - Read Button
