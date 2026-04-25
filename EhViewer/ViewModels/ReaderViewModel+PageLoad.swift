@@ -370,6 +370,20 @@ extension ReaderViewModel {
                     }
                     if let retryImage {
                         ImageCache.shared.set(retryImage, for: freshURL)
+                        // 動画判定 (新規 fetch path と同じロジック、retry path でも漏れなく)。
+                        // disk file 経由 URL ベース判定 = ローカル / DL 経路と一致。
+                        // 田中報告 2026-04-25 緊急: retry 多発時に動画 page が静画扱いになる根因。
+                        let preliminaryURL = ImageCache.shared.saveAnimatedWebPData(imageData, for: freshURL, gid: gallery.gid, page: index)
+                        if WebPAnimationDetector.isAnimatedWebP(url: preliminaryURL) {
+                            await MainActor.run {
+                                self.holder(for: index).animatedFileURL = preliminaryURL
+                            }
+                            LogManager.shared.log("Anim", "page \(index) detected animated WebP (retry), persisted \(imageData.count)B → disk URL")
+                        } else {
+                            try? FileManager.default.removeItem(at: preliminaryURL)
+                            let byGidDir = preliminaryURL.deletingLastPathComponent().appendingPathComponent("byGid")
+                            try? FileManager.default.removeItem(at: byGidDir.appendingPathComponent("\(gallery.gid)_\(index).webp"))
+                        }
                         let display = Self.downsample(retryImage)
                         rawImages[index] = display
                         applyFilterPipeline(index: index, raw: display)
