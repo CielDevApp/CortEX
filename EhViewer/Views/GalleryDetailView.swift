@@ -607,6 +607,23 @@ struct GalleryDetailView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
+                        // 折りたたむボタン
+                        HStack {
+                            Spacer()
+                            Button {
+                                withAnimation(.easeOut(duration: 0.25)) { commentsExpanded = false }
+                            } label: {
+                                Label("折りたたむ", systemImage: "chevron.up")
+                                    .font(.caption.bold())
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 8)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                                    .overlay(Capsule().stroke(.secondary.opacity(0.3), lineWidth: 0.5))
+                            }
+                            .buttonStyle(.plain)
+                            Spacer()
+                        }
+                        .padding(.top, 4)
                     } else {
                         // 折りたたみ状態: 2 件目をグラデーション fade で見せて続きがあることを示唆
                         Divider()
