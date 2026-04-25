@@ -68,6 +68,9 @@ enum CortexURLRouter {
         case "action/log-rotate":
             rotateLog()
             return true
+        case "action/copy-log-to-tmp":
+            copyLogToTmp()
+            return true
         case "reader/online":
             return openOnlineReader(params: params)
         case "reader/local":
@@ -134,6 +137,21 @@ enum CortexURLRouter {
         try? fm.removeItem(at: docs.appendingPathComponent("EhViewer/cache"))
         try? fm.removeItem(at: docs.appendingPathComponent("animated_cache"))
         LogManager.shared.log("CortexURL", "cache cleared (EhViewer/cache + animated_cache)")
+    }
+
+    /// ehviewer.log を /tmp にコピーする (Bash の TCC で Documents read 拒否される
+    /// 環境で Claude が直接ログ読めるよう回避策、田中指示 2026-04-25)。
+    private static func copyLogToTmp() {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let src = docs.appendingPathComponent("ehviewer.log")
+        let dest = URL(fileURLWithPath: "/tmp/ehviewer_copy.log")
+        try? FileManager.default.removeItem(at: dest)
+        do {
+            try FileManager.default.copyItem(at: src, to: dest)
+            LogManager.shared.log("CortexURL", "log copied to \(dest.path)")
+        } catch {
+            LogManager.shared.log("CortexURL", "log copy failed: \(error.localizedDescription)")
+        }
     }
 
     private static func rotateLog() {
