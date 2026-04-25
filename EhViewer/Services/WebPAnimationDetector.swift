@@ -1,18 +1,30 @@
 import Foundation
+import ImageIO
 
 /// WebP RIFF コンテナ先頭 21 バイトを読み VP8X chunk の ANIM flag (bit1, 0x02) を判定。
 /// ImageIO 全フレームデコードより軽量。静止 WebP (VP8 / VP8L) は即 false。
+///
+/// VP8X header 無しでも複数 frame を含む WebP variant (E-Hentai 配信で観測) があるため、
+/// header 判定で false の場合のみ ImageIO の `CGImageSourceGetCount > 1` で再判定する。
+/// ローカルビューワー (AnimatedImageDecoder.isAnimatedFile) と判定結果を揃えるための
+/// fallback (田中報告 2026-04-25「DLすれば動画になるのに通常リーダーで static 扱い」)。
 enum WebPAnimationDetector {
     static func isAnimatedWebP(url: URL) -> Bool {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? handle.close() }
         guard let data = try? handle.read(upToCount: 32), data.count >= 21 else { return false }
-        return checkHeader(Array(data))
+        if checkHeader(Array(data)) { return true }
+        // VP8X 無し variant: ImageIO で frame 数判定 (mmap、メモリ負荷軽い)
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return false }
+        return CGImageSourceGetCount(src) > 1
     }
 
     static func isAnimatedWebP(data: Data) -> Bool {
         guard data.count >= 21 else { return false }
-        return checkHeader(Array(data.prefix(32)))
+        if checkHeader(Array(data.prefix(32))) { return true }
+        // VP8X 無し variant: ImageIO で frame 数判定
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return false }
+        return CGImageSourceGetCount(src) > 1
     }
 
     private static func checkHeader(_ b: [UInt8]) -> Bool {
