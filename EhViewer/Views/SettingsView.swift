@@ -27,6 +27,8 @@ struct SettingsView: View {
     @AppStorage("animatedPersonSegmentation") private var animatedPersonSegmentation = true
     @AppStorage("translationMode") private var translationMode = false
     @AppStorage("translationLang") private var translationLang = "ja"
+    /// コメント自動翻訳 ON/OFF (Apple Translation Framework, iOS 18+)。default true。
+    @AppStorage("autoTranslateComments") private var autoTranslateComments = true
     @AppStorage("translationSourceLang") private var translationSourceLang = "auto"
     @AppStorage("autoSaveOnRead") private var autoSaveOnRead = false
     @State private var favBackupURL: URL?
@@ -265,6 +267,11 @@ struct SettingsView: View {
                     Button("翻訳キャッシュをリセット", role: .destructive) {
                         TranslationService.shared.clearCache()
                     }
+
+                    // コメント自動翻訳 (Apple Translation Framework, iOS 18+)
+                    Toggle("コメントを自動翻訳", isOn: $autoTranslateComments)
+                    Text("ギャラリー詳細画面のコメントを上の「翻訳先」言語に自動翻訳。Apple 標準翻訳エンジン使用 (iOS 18+/macOS 15+)、初回利用時に言語パック DL 確認ダイアログが出ます。")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
 
                 // 8. セキュリティ
