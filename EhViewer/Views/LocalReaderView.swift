@@ -193,6 +193,9 @@ struct LocalReaderView: View {
             // rolling prefetch が reader 外で回り続け CPU 100% になる。
             // 加えて複数 animated source を開いた後 memory パンパンで戻る問題の回避も兼ねる。
             AnimatedPlaybackCoordinator.shared.closeReader("local-\(meta.gid)")
+            // 静画フィルタ済みキャッシュも全解放: 400 ページ gallery で enhancedImages が
+            // 数百 MB 居座る (田中報告 2026-04-25 二度目)。
+            enhancedImages.removeAll()
         }
         .focusable()
         .focusEffectDisabled()

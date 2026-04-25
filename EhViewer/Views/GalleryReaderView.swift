@@ -192,6 +192,10 @@ struct GalleryReaderView: View {
             // displayLink + rolling prefetch が reader 外で回り続け CPU 100% になる。
             // 加えて複数 animated source を開いた後 memory パンパンで戻る問題の回避も兼ねる。
             AnimatedPlaybackCoordinator.shared.closeReader("cell-\(gallery.gid)")
+            // 静画系メモリも全解放: rawImages / pageHolders.image / processedPages 等を
+            // 強制 nil 化しないと、リーダー閉じてもギャラリーリストに戻った時にメモリが
+            // 数百 MB 居座る (田中報告 2026-04-25 二度目)。
+            viewModel.resetAllState()
         }
         .focusable()
         .focusEffectDisabled()
