@@ -741,14 +741,17 @@ struct BoomerangWebPView: View {
         case ultraFugen
 
         /// プリロード予算 (decode のみ、rolling で残りを追いかける)。
-        /// ultraFugen は 208f × ~250ms/frame の iPhone 実測で 1.8s → 14% しか preload できず
-        /// 再生側が後半到達前に rolling 追いつき失敗 → drops=160+ を記録。3.0s に緩和して
-        /// 先頭 ~25% まで preload + rolling で稼ぐ構成。
+        /// ultraFugen は 208f × ~180-250ms/frame の iPhone 16,2 実測で段階的に tune:
+        ///   - 1.8s → 14% preload、rolling 追いつき失敗、drops=160+
+        ///   - 3.0s → 48% preload (100/208)、後半 tick で miss=343 まで累積、drops=46
+        ///   - 6.0s → ~95% preload (200/208) 想定、実質 preload 完了で再生開始 → miss ほぼゼロ狙い
+        /// 田中指示 2026-04-25: 超フゲン級は思い切って 6s 確保して drop を抑える方針。
+        /// 待ち時間は伸びるが再生品質優先 (PSP PMDVis 方式の思想)。
         var targetSeconds: Double {
             switch self {
             case .none: return 0
             case .fugen: return 1.8
-            case .ultraFugen: return 3.0
+            case .ultraFugen: return 6.0
             }
         }
 
