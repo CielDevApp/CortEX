@@ -181,6 +181,14 @@ struct EhViewerApp: App {
             "noFilterMode": false,
             // アニメ per-frame NE 人物セグメンテーション (本命機能、デフォルト ON)
             "animatedPersonSegmentation": true,
+            // プリロード再生 (default ON)。SwiftUI @AppStorage の default は読み出し時にしか効かず、
+            // ユーザがトグル操作するまで UserDefaults 本体には書き込まれない。
+            // UIImageView 側 (UIKit) から `bool(forKey:)` で読むと未登録 → false が返り、
+            // rolling timer の `if !preloadOn` 分岐に入って ultraFugen で retainOnly が動作 →
+            // preload した frame が即 evict されて再生中 miss が大量発生する根本原因 (2026-04-25)。
+            "preloadPlayback": true,
+            // 同じパターンで Boomerang Mode も UIView 側から読まれているので併せて register。
+            "boomerangMode": true,
         ])
 
         ImageCache.shared.cleanupOnLaunch()
