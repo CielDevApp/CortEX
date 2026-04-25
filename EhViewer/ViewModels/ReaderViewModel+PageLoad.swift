@@ -212,12 +212,31 @@ extension ReaderViewModel {
                 // ImageCache は JPEG 再エンコードでアニメ情報を捨てる。別 dir に保存した生 WebP を
                 // ファイル URL 経由で holder に注ぐ (Data をメモリ常駐させると 1ページ 5-10MB × 全アニメ
                 // ページで数百 MB に膨らむため URL 経由で disk 直 stream を AVPlayer に任せる)。
-                if let animURL = ImageCache.shared.animatedWebPFileURL(for: imageURL),
-                   WebPAnimationDetector.isAnimatedWebP(url: animURL) {
+                //
+                // ローカルビューワーは「個別 file の存在確認 + 実バイト判定」で動画判定するので、
+                // 通常リーダーでも同じ手順で 3 段階 fallback (田中指示 2026-04-25):
+                //   (1) DownloadManager DL path (autoSave 経由で保存済) → ローカルと同じ経路
+                //   (2) ImageCache 副 index (gid+page key) → 過去 reader fetch で副 index 作られた
+                //   (3) ImageCache URL hash key (既存経路) → 過去 fetch の URL ベース cache
+                let dlURL = DownloadManager.shared.imageFilePath(gid: gallery.gid, page: index)
+                if FileManager.default.fileExists(atPath: dlURL.path),
+                   WebPAnimationDetector.isAnimatedWebP(url: dlURL) {
+                    await MainActor.run {
+                        self.holder(for: index).animatedFileURL = dlURL
+                    }
+                    LogManager.shared.log("Anim", "cache hit page \(index) restored animatedFileURL from DL path")
+                } else if let animURL = ImageCache.shared.animatedWebPFileURL(gid: gallery.gid, page: index),
+                          WebPAnimationDetector.isAnimatedWebP(url: animURL) {
                     await MainActor.run {
                         self.holder(for: index).animatedFileURL = animURL
                     }
-                    LogManager.shared.log("Anim", "cache hit page \(index) restored animatedFileURL from disk")
+                    LogManager.shared.log("Anim", "cache hit page \(index) restored animatedFileURL from gid+page index")
+                } else if let animURL = ImageCache.shared.animatedWebPFileURL(for: imageURL),
+                          WebPAnimationDetector.isAnimatedWebP(url: animURL) {
+                    await MainActor.run {
+                        self.holder(for: index).animatedFileURL = animURL
+                    }
+                    LogManager.shared.log("Anim", "cache hit page \(index) restored animatedFileURL from URL hash")
                 }
 
                 let display = Self.downsample(cached)
