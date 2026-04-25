@@ -13,7 +13,9 @@ struct SettingsView: View {
     @AppStorage("aiImageProcessing") private var aiImageProcessing = false
     @AppStorage("hdrEnhancement") private var hdrEnhancement = false
     @AppStorage("imageEnhanceFilter") private var imageEnhanceFilter = false
-    @AppStorage("boomerangMode") private var boomerangMode = false
+    /// Boomerang Mode (β) default は true。EhViewerApp.swift register defaults と一致させる
+    /// (両者で default 不一致だと「register が効かない条件下で OFF 表示」になる混乱の元、2026-04-25)。
+    @AppStorage("boomerangMode") private var boomerangMode = true
     /// アニメ再生方式: "webp" (WebP 原本 CGImageSource + CADisplayLink 逐次 decode) /
     ///              "mp4"  (旧来の HEVC MP4 変換経由 AVPlayer)。default=webp。
     @AppStorage("animPlaybackMode") private var animPlaybackMode = "webp"

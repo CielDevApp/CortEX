@@ -140,14 +140,38 @@ final class AnimatedSourceImageView: UIImageView {
         #endif
     }
 
+    /// 直前にログ出力した boomerang 有効性。状態変化時のみログ出すための snapshot。
+    private var lastLoggedBoomerangState: Bool? = nil
+
     /// Boomerang の実効有効性: iPhone で thermalState が serious 以上なら強制 OFF。
+    /// 状態変化を検知したら理由付きでログ出力 (再発時の追跡用、2026-04-25「いつの間にか切れた」報告)。
     private var effectiveBoomerangEnabled: Bool {
-        guard UserDefaults.standard.bool(forKey: "boomerangMode") else { return false }
-        #if !targetEnvironment(macCatalyst)
-        let st = ProcessInfo.processInfo.thermalState
-        if st == .serious || st == .critical { return false }
-        #endif
-        return true
+        let toggleOn = UserDefaults.standard.bool(forKey: "boomerangMode")
+        let effective: Bool
+        let reason: String
+        if !toggleOn {
+            effective = false
+            reason = "UserDefaults boomerangMode=false"
+        } else {
+            #if !targetEnvironment(macCatalyst)
+            let st = ProcessInfo.processInfo.thermalState
+            if st == .serious || st == .critical {
+                effective = false
+                reason = "thermal=\(st == .critical ? "critical" : "serious")"
+            } else {
+                effective = true
+                reason = "toggle=ON, thermal=OK"
+            }
+            #else
+            effective = true
+            reason = "toggle=ON, macCatalyst"
+            #endif
+        }
+        if lastLoggedBoomerangState != effective {
+            lastLoggedBoomerangState = effective
+            LogManager.shared.log("Boomerang", "state=\(effective ? "ON" : "OFF") reason=\(reason)")
+        }
+        return effective
     }
 
     private func startRollingPrefetch() {
