@@ -785,6 +785,8 @@ struct GalleryDetailView: View {
     private let thumbCellHeight: CGFloat = 150
 
     private func thumbnailCell(index: Int) -> some View {
+        // 動画判定は ThumbnailCellView 内で DL 済みファイルを実バイト走査 (ページ単位)。
+        // 動画と静画混在作品で動画ページにだけ再生マーク表示するため、外部から isAnimated を渡さない。
         ThumbnailCellView(
             index: index,
             coverURL: gallery.coverURL,
@@ -792,8 +794,7 @@ struct GalleryDetailView: View {
             info: index < thumbnails.count ? thumbnails[index] : nil,
             cellHeight: thumbCellHeight,
             onTap: { readerRequest = ReaderRequest(page: index) },
-            gid: gallery.gid,
-            isAnimated: detail.map(isAnimatedDetail) ?? false
+            gid: gallery.gid
         )
     }
 
