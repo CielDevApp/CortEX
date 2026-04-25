@@ -190,6 +190,11 @@ struct NhentaiReaderView: View {
             // nhentai reader の PageCellView は "cell-\(mp4Gid)" readerID を使い、mp4Gid=-gallery.id。
             // cache cleanup は readerID に関係なく global に全解放するため問題なし。
             AnimatedPlaybackCoordinator.shared.closeReader("cell-\(-gallery.id)")
+            // 静画系メモリ全解放: images (フィルタ後) / rawImages (元画像) / pageDataCache (Data)
+            // が State として残ると、リーダー閉じてもメモリ常駐 (田中報告 2026-04-25 二度目)。
+            images.removeAll()
+            rawImages.removeAll()
+            pageDataCache.removeAll()
         }
         .onChange(of: noFilterMode) { _, _ in reapplyFilters() }
         .onChange(of: imageEnhanceFilter) { _, _ in reapplyFilters() }
