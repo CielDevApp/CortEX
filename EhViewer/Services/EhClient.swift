@@ -305,7 +305,8 @@ final class EhClient: Sendable {
         let t0 = CFAbsoluteTimeGetCurrent()
         var request = URLRequest(url: url)
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue(Self.buildCookieHeader(for: host), forHTTPHeaderField: "Cookie")
+        // forImageFetch=true: uh=1280/iir=3 を含めない → Original 配信 (動画 WebP も原本のまま)
+        request.setValue(Self.buildCookieHeader(for: host, forImageFetch: true), forHTTPHeaderField: "Cookie")
 
         let (data, response) = try await session.data(for: request)
 
@@ -395,8 +396,13 @@ final class EhClient: Sendable {
 
     private static let userAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
 
-    /// Keychainから直接cookieヘッダを組み立てる（HTTPCookieStorageに依存しない）
-    nonisolated private static func buildCookieHeader(for host: GalleryHost) -> String {
+    /// Keychainから直接cookieヘッダを組み立てる（HTTPCookieStorageに依存しない）。
+    /// `forImageFetch=true` は画像取得 (`fetchImageData`) 専用で、`uh`/`iir` の resample 指示
+    /// を含めない。`uh=1280; iir=3` を付けると E-Hentai が動画 WebP を 1 frame static に
+    /// ダウンサンプリングして配信し、通常リーダーで動画として認識できなくなる
+    /// (田中報告 2026-04-25「DL すれば動画になるのに通常リーダーで static 扱い」根因、
+    /// DL 経路は Cookie 無しなので Original 動画 WebP が降ってくる)。
+    nonisolated private static func buildCookieHeader(for host: GalleryHost, forImageFetch: Bool = false) -> String {
         var parts: [String] = []
         let memberID = KeychainService.load(key: "ipb_member_id")
         let passHash = KeychainService.load(key: "ipb_pass_hash")
@@ -416,11 +422,11 @@ final class EhClient: Sendable {
         }
         // コンテンツ警告スキップ
         parts.append("nw=1")
-        // 画像サイズを強制的に 1280px（スタンダード）にする
-        // EH の account 設定が Original だと xres=org が配信され、動画WebP等で
-        // 配信できないページが出る。スタンダード強制で安定性優先
-        parts.append("uh=1280")
-        parts.append("iir=3")  // 3=1280 in EH inline image resolution table
+        // HTML fetch 等は uh=1280 で安定 (GP 消費抑制)、画像取得は無指定で Original 配信を狙う
+        if !forImageFetch {
+            parts.append("uh=1280")
+            parts.append("iir=3")  // 3=1280 in EH inline image resolution table
+        }
         return parts.joined(separator: "; ")
     }
 
