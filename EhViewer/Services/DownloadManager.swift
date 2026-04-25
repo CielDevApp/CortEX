@@ -38,8 +38,13 @@ struct DownloadedGallery: Codable, Identifiable, Sendable {
     var id: Int { gid }
     nonisolated var directoryName: String { "\(gid)" }
     var isNhentai: Bool { source == "nhentai" || token.hasPrefix("nh") }
-    /// タイトル文字列から動画作品を推定（"Animated"/"GIF"/"🎥" を含むか）
+    /// 動画作品判定: 実 scan 結果 (hasAnimatedWebp) を最優先、未 scan ならタイトル絵文字 heuristic。
+    /// 投稿者がタイトルに "Animated"/"🎥" を入れない動画作品もマーク表示するため、
+    /// scan 完了済 (true) なら絵文字無関係に動画扱い (田中報告 2026-04-25 全部動画なのにマーク無し作品多発)。
     var isAnimatedGallery: Bool {
+        if hasAnimatedWebp == true { return true }
+        if hasAnimatedWebp == false { return false }
+        // 未 scan (nil): タイトル heuristic にフォールバック
         let t = title
         return t.contains("Animated") || t.contains("GIF") || t.contains("gif") || t.contains("🎥")
     }
