@@ -603,9 +603,9 @@ struct GalleryDetailView: View {
                         Text(comment.date)
                             .font(.caption2)
                             .foregroundStyle(.secondary)
-                        Text(comment.content)
-                            .font(.caption)
-                            .lineLimit(8)
+                        // 自動翻訳: translationLang AppStorage の言語に翻訳して表示 (iOS 18+)。
+                        // OFF or 古い OS は原文表示 (TranslatedCommentText 内で fallback)。
+                        TranslatedCommentText(original: comment.content)
                     }
                     .padding(.vertical, 4)
                     if comment.author != comments.prefix(10).last?.author || comment.date != comments.prefix(10).last?.date {
