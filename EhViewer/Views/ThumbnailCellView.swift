@@ -10,11 +10,12 @@ struct ThumbnailCellView: View {
     let onTap: () -> Void
     /// ダウンロード済み画像流用（gid指定時はローカルを先にチェック）
     var gid: Int? = nil
-    /// 動画作品判定 (作品単位、全セル共通)。true なら各セルに再生マーク overlay 表示。
-    /// 詳細 API で normalizedTags に "animated" を含むかで判定 (作品単位なので個別ページの動画判定ではない)。
-    var isAnimated: Bool = false
 
     @State private var image: PlatformImage?
+    /// 個別ページの動画判定 (DL 済みファイルを実バイト走査)。動画と静画混在作品で
+    /// 動画ページにだけ再生マーク overlay 表示するため、ページ単位で判定 (田中指示 2026-04-25)。
+    /// gid 指定 + DL 済みファイルがある時のみ true になりうる、未 DL ページは false のまま。
+    @State private var isAnimated: Bool = false
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -47,20 +48,39 @@ struct ThumbnailCellView: View {
         }
         .frame(maxWidth: .infinity, minHeight: cellHeight, maxHeight: cellHeight)
         .clipShape(RoundedRectangle(cornerRadius: 6))
-        .overlay(alignment: .topLeading) {
+        .overlay(alignment: .center) {
+            // DL一覧 PageThumbCell の長押しプレビューと同じ形・位置: 中央 .title2 白 shadow。
             if isAnimated {
                 Image(systemName: "play.circle.fill")
-                    .font(.caption)
+                    .font(.title2)
                     .foregroundStyle(.white)
                     .shadow(radius: 2)
-                    .padding(3)
+            }
+        }
+        .overlay {
+            // 紫枠線も DL 一覧 PageThumbCell (line 822-826) と統一 (田中指示「ドラの枠もパクって」)。
+            if isAnimated {
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.purple, lineWidth: 2)
             }
         }
         .contentShape(Rectangle())
         .onTapGesture { onTap() }
         .task(id: info?.spriteURL ?? URL(string: "local://\(index)")) {
             await loadThumb()
+            await detectAnimated()
         }
+    }
+
+    /// gid 指定 + DL 済みファイルがある時のみ実バイト判定、未 DL は判定スキップ。
+    private func detectAnimated() async {
+        guard let gid else { return }
+        let url = DownloadManager.shared.imageFilePath(gid: gid, page: index)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        let animated = await Task.detached(priority: .utility) {
+            WebPFileDetector.isAnimatedWebP(url: url)
+        }.value
+        await MainActor.run { self.isAnimated = animated }
     }
 
     private func loadThumb() async {
