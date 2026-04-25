@@ -13,6 +13,8 @@ struct ContentView: View {
     @StateObject private var authVM = AuthViewModel()
     @ObservedObject private var bioAuth = BiometricAuth.shared
     @ObservedObject private var pinManager = PINManager.shared
+    /// CUI から reader 直接 open する用の bus (cortex:// scheme で書き換えられる)。
+    @ObservedObject private var cortexBus = CortexCommandBus.shared
     @Environment(\.scenePhase) private var scenePhase
     @State private var lockBlur: CGFloat = 30
     @State private var lockTiles: [LockTile] = []
@@ -126,6 +128,29 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToDownloadsTab)) { _ in
             withAnimation { selectedTab = 3 }
+        }
+        // cortex:// scheme から reader 直接 open (Phase B、田中指示 2026-04-25)。
+        // 既存の navigation 経由 (一覧 → 詳細 → reader) は触らず、ContentView レベルの
+        // 独立 fullScreenCover で表示。bus を nil にすると閉じる (cortex://reader/close)。
+        .fullScreenCover(item: $cortexBus.openOnlineReader) { req in
+            let host: GalleryHost = req.hostName == "exhentai" ? .exhentai : .ehentai
+            let gallery = Gallery(
+                gid: req.gid, token: req.token, title: "(cortex debug)",
+                category: nil, coverURL: nil, rating: 0, pageCount: 999,
+                postedDate: "", uploader: nil, tags: []
+            )
+            GalleryReaderView(gallery: gallery, host: host, initialPage: req.page)
+        }
+        .fullScreenCover(item: $cortexBus.openLocalReader) { req in
+            if let meta = DownloadManager.shared.downloads[req.gid] {
+                LocalReaderView(meta: meta, isLiveDownload: false, initialPage: req.page)
+            } else {
+                Text("Local gallery not found for gid=\(req.gid)")
+                    .padding()
+                    .onAppear {
+                        LogManager.shared.log("CortexURL", "local reader meta missing gid=\(req.gid)")
+                    }
+            }
         }
         .overlay {
             if let toast = importToast {
