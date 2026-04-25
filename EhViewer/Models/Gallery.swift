@@ -75,6 +75,16 @@ struct Gallery: Identifiable, Hashable, Sendable, Codable {
     func galleryURL(host: GalleryHost) -> String {
         "\(host.baseURL)/g/\(gid)/\(token)/"
     }
+
+    /// Phase 1 共有: NAS (Mac Catalyst Cort:EX) に AirDrop で渡してバックグラウンド DL を依頼する URL。
+    /// Phase 2 で受信側 (CortexURLRouter) が `cortex://download/queue` をハンドリング予定。
+    /// nhentai は token 概念無いので `source=nhentai&id=X` 分岐 (gid は負数で保存される慣例)。
+    var downloadQueueURL: URL {
+        if gid < 0 {
+            return URL(string: "cortex://download/queue?source=nhentai&id=\(-gid)")!
+        }
+        return URL(string: "cortex://download/queue?gid=\(gid)&token=\(token)")!
+    }
 }
 
 struct GalleryComment: Sendable {

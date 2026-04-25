@@ -371,6 +371,18 @@ struct GalleryDetailView: View {
         }
         .toolbar {
             if let detail {
+                // Phase 1 共有 (heart より左に配置するため先に追加)
+                ToolbarItem(placement: .automatic) {
+                    ShareLink(
+                        item: detail.gallery.downloadQueueURL,
+                        subject: Text(detail.gallery.title),
+                        message: Text("Cort:EX gallery: \(detail.gallery.title)\n\(detail.fileSize ?? "")\n\(detail.gallery.pageCount)P")
+                    ) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 17, weight: .medium))
+                            .foregroundStyle(.primary)
+                    }
+                }
                 ToolbarItem(placement: .automatic) {
                     Button {
                         Task { await toggleFavorite(detail) }

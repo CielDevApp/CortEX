@@ -57,11 +57,25 @@ struct GalleryCardView: View {
                     }
                 }
 
-                HStack {
+                HStack(spacing: 8) {
                     if gallery.rating > 0 {
                         ratingStars(gallery.rating)
                     }
                     Spacer()
+                    // Phase 1 共有: AirDrop で M2 Air NAS Cort:EX に download URL を送る
+                    ShareLink(
+                        item: gallery.downloadQueueURL,
+                        subject: Text(gallery.title),
+                        message: Text("Cort:EX gallery: \(gallery.title)\n\(gallery.pageCount)P")
+                    ) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 4)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                     if gallery.pageCount > 0 {
                         Label("\(gallery.pageCount)P", systemImage: "doc")
                             .font(.caption2)
