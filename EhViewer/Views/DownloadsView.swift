@@ -3,6 +3,9 @@ import UniformTypeIdentifiers
 
 struct DownloadsView: View {
     @ObservedObject private var manager = DownloadManager.shared
+    /// Phase E1 (2026-04-26): 外部参照フォルダ配下の作品リスト (Mac Catalyst のみ表示)。
+    @ObservedObject private var externalFolders = ExternalFolderManager.shared
+    @State private var externalUnsupportedAlert: String?
     @State private var exportShareItem: ShareableURL?
     @State private var showImportPicker = false
     @State private var importMessage: String?
@@ -110,6 +113,17 @@ struct DownloadsView: View {
                     }
                 }
 
+                // Phase E1 (2026-04-26): 外部参照フォルダ配下の作品 (Mac Catalyst のみ)
+                #if targetEnvironment(macCatalyst)
+                if !externalFolders.externalGalleries.isEmpty {
+                    Section("外部参照 (\(externalFolders.externalGalleries.count))") {
+                        ForEach(externalFolders.externalGalleries) { meta in
+                            externalRow(meta: meta)
+                        }
+                    }
+                }
+                #endif
+
                 // 未完了
                 if !incompleteList.isEmpty {
                     Section {
@@ -160,7 +174,7 @@ struct DownloadsView: View {
             #if os(iOS)
             .listStyle(.insetGrouped)
             #endif
-            .navigationTitle("保存済み")
+            .navigationTitle("ライブラリ")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(tabBarHidden ? .hidden : .visible, for: .tabBar)
@@ -278,6 +292,12 @@ struct DownloadsView: View {
                 Button("OK") { exportError = nil }
             } message: {
                 Text(exportError ?? "")
+            }
+            // Phase E1: 外部参照作品タップ時 (Reader 抽象化未対応で alert)
+            .alert("外部参照", isPresented: .constant(externalUnsupportedAlert != nil)) {
+                Button("OK") { externalUnsupportedAlert = nil }
+            } message: {
+                Text(externalUnsupportedAlert ?? "")
             }
             .onChange(of: manager.lastImportedGid) { _, gid in
                 guard let gid else { return }
@@ -557,6 +577,48 @@ struct DownloadsView: View {
                 Task { await DownloadManager.shared.ensureAnimatedWebpScanned(gid: meta.gid) }
             }
         }
+    }
+
+    // MARK: - 外部参照の行 (Phase E1, 2026-04-26)
+    // 外部フォルダ配下の作品。Reader 経路の抽象化 (Step 8) 未実装のため、現状タップで
+    // 「リーダー対応は次フェーズ」alert を出す。サムネ表示は security-scoped resource
+    // 経由で重いので Phase E1 内で別 step で対応 (今は アイコン プレースホルダ)。
+
+    @ViewBuilder
+    private func externalRow(meta: DownloadedGallery) -> some View {
+        Button {
+            externalUnsupportedAlert = "「\(meta.title)」のリーダー対応は次フェーズ実装予定です。\n\n現状は外部フォルダ scan + 作品リスト表示のみ動作確認段階です。"
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "externaldrive.fill")
+                    .font(.system(size: 24))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 60, height: 80)
+                    .background(Color.secondary.opacity(0.1))
+                    .cornerRadius(4)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(meta.title)
+                        .font(.subheadline)
+                        .lineLimit(2)
+                    HStack(spacing: 4) {
+                        Text("\(meta.pageCount) ページ")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text("EXT")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(.purple)
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+                    Text(meta.downloadDate, style: .date)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.vertical, 4)
     }
 
     // MARK: - 未完了の行

@@ -310,7 +310,7 @@ struct ContentView: View {
                 .tabItem { Label("ガチャ", systemImage: "dice.fill") }
                 .tag(2)
             DownloadsView()
-                .tabItem { Label("保存済み", systemImage: "arrow.down.circle.fill") }
+                .tabItem { Label("ライブラリ", systemImage: "books.vertical.fill") }
                 .badge(downloadManager.activeDownloadCount)
                 .tag(3)
             HistoryView()
@@ -746,7 +746,7 @@ struct CatalystTabBar: View {
         (0, "ギャラリー", "photo.on.rectangle.angled"),
         (1, "お気に入り", "heart.fill"),
         (2, "ガチャ", "dice.fill"),
-        (3, "保存済み", "arrow.down.circle.fill"),
+        (3, "ライブラリ", "books.vertical.fill"),
         (4, "履歴", "clock.arrow.circlepath"),
         (5, "お気に入りキャラクター管理", "person.2.fill"),
         (6, "設定", "gearshape.fill"),
