@@ -592,8 +592,16 @@ struct LocalReaderView: View {
         //   "webp": CGImageSource + CADisplayLink 逐次再生 (Boomerang 対応、変換なし)
         //   "mp4" : 旧来 HEVC MP4 変換 + AVPlayer (HDR 全域対応、▶ 手動再生)
         let fileURL = DownloadManager.shared.imageFilePath(gid: meta.gid, page: index)
-        if FileManager.default.fileExists(atPath: fileURL.path),
-           AnimatedImageDecoder.isAnimatedFile(url: fileURL) {
+        // 田中判断 2026-04-26 (b): external_zip cell では isAnimatedFile (CGImageSource 全体読み)
+        // を main で実行すると 30-50MB 動画 WebP の decode で choppy → metadata から確定
+        // (hasAnimatedWebp 不明なら true 仮定、BoomerangWebPView は static にも fallback)
+        let isAnimated: Bool = {
+            if meta.source == "external_zip" {
+                return meta.hasAnimatedWebp ?? true
+            }
+            return AnimatedImageDecoder.isAnimatedFile(url: fileURL)
+        }()
+        if FileManager.default.fileExists(atPath: fileURL.path), isAnimated {
             if animPlaybackMode == "mp4" {
                 GalleryAnimatedWebPView(
                     source: .url(fileURL),

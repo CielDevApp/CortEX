@@ -31,8 +31,9 @@ final class ExternalCortexZipReader: @unchecked Sendable {
     private var zipInfo: [Int: ZipInfo] = [:]
     private let lock = NSLock()
 
-    /// SSD LRU cache 上限 (4GB)。田中判断 2026-04-26 (1GB → 4GB に増加、evict 頻度激減)。
-    private let cacheBudget: UInt64 = 4_294_967_296
+    /// SSD LRU cache 上限 (8GB)。田中判断 2026-04-26 (1GB → 4GB → 8GB、
+    /// pre-cache 中の evict storm 完全抑制 + 既存他 gallery cache の共存余裕確保)。
+    private let cacheBudget: UInt64 = 8_589_934_592
 
     /// evict debounce: 直近 evict から 5 秒以内なら skip (連続 page load で何度も走らない)
     private var lastEvictAt: Date = .distantPast
