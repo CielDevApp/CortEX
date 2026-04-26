@@ -138,10 +138,20 @@ struct DownloadsView: View {
                     }
                 }
                 if !externalFolders.externalGalleries.isEmpty {
-                    Section("外部参照 (\(externalFolders.externalGalleries.count))") {
+                    Section {
+                        // 田中要望 2026-04-26: cover pre-warm 中なら header に進捗表示
+                        if externalFolders.isWarmingCovers {
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small)
+                                Text("読み込み中... \(externalFolders.warmCoverCurrent) / \(externalFolders.warmCoverTotal)")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
                         ForEach(externalFolders.externalGalleries) { meta in
                             externalRow(meta: meta)
                         }
+                    } header: {
+                        Text("外部参照 (\(externalFolders.externalGalleries.count))")
                     }
                 }
                 #endif
