@@ -29,13 +29,27 @@ final class ExternalFolderManager: ObservableObject {
     /// DownloadsView の Section に「NAS 未接続」バナー表示用 (Q-C 確定)。
     @Published private(set) var disconnectedFolderIDs: Set<UUID> = []
 
+    /// Step 9 (Phase E1, 2026-04-26): Mac DL 保存先選択。
+    /// nil = デフォルト (`<documents>/EhViewer/downloads`)、非 nil = ユーザ指定 NAS フォルダ等。
+    /// 起動時 long-running startAccessingSecurityScopedResource() で URL を保持、
+    /// app 終了まで access scope を維持 (DL 中の長期書込に対応)。
+    @Published private(set) var activeDLSaveDestinationURL: URL?
+
+    /// DL 保存先 bookmark の resolve に失敗した (NAS unmount 等)。UI で warning 表示用。
+    @Published private(set) var dlSaveDestinationStale: Bool = false
+
+    /// DL 保存先の表示用パス (UI で「現在のパス」表示用、bookmark 未設定時 nil)。
+    @Published private(set) var dlSaveDestinationDisplayPath: String?
+
     private let storageKey = "com.kanayayuutou.cortex.externalFolders"
+    private let dlSaveDestKey = "com.kanayayuutou.cortex.dlSaveDestination"
     private let userDefaults: UserDefaults
 
     /// テスト容易性のため UserDefaults を inject 可能。デフォルトは .standard。
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
         load()
+        loadDLSaveDestination()
         // 起動時自動 scan (background、main thread をブロックしない)
         Task.detached { [weak self] in await self?.rescanAll() }
     }
@@ -126,6 +140,73 @@ final class ExternalFolderManager: ObservableObject {
         guard let data = userDefaults.data(forKey: storageKey) else { return }
         guard let decoded = try? JSONDecoder().decode([ExternalFolder].self, from: data) else { return }
         folders = decoded
+    }
+
+    // MARK: - DL 保存先選択 (Step 9, Mac Catalyst のみで実機能)
+
+    /// User-chosen folder URL を DL 保存先として永続化 + 即時 access 開始。
+    /// 既存 long-running access があれば stop してから新 URL を start。
+    /// 失敗時は throw、UI で alert + 旧設定維持。
+    /// 田中判断 2026-04-26 Q-2: 既存 DL は旧パスに残る (移動しない)。
+    /// アプリ再起動で DownloadManager.baseDirectory に反映される (DL 中の path 切替は安全に出来ないため)。
+    func setDLSaveDestination(url: URL) throws {
+        // 既存 access を stop
+        if let existing = activeDLSaveDestinationURL {
+            existing.stopAccessingSecurityScopedResource()
+        }
+        // 新 URL を bookmark 化 + 即 long-running access
+        let data = try SecurityScopedBookmark.create(from: url)
+        userDefaults.set(data, forKey: dlSaveDestKey)
+        // resolve + start
+        let resolved = try SecurityScopedBookmark.resolve(data)
+        if resolved.startAccessingSecurityScopedResource() {
+            activeDLSaveDestinationURL = resolved
+            dlSaveDestinationDisplayPath = resolved.path
+            dlSaveDestinationStale = false
+        } else {
+            activeDLSaveDestinationURL = nil
+            dlSaveDestinationStale = true
+            throw SecurityScopedBookmark.BookmarkError.startAccessFailed
+        }
+        LogManager.shared.log("DLSaveDest", "set: \(resolved.path)")
+    }
+
+    /// DL 保存先設定をクリア (デフォルト `<documents>/EhViewer/downloads` に戻す)。
+    func clearDLSaveDestination() {
+        if let existing = activeDLSaveDestinationURL {
+            existing.stopAccessingSecurityScopedResource()
+        }
+        activeDLSaveDestinationURL = nil
+        dlSaveDestinationDisplayPath = nil
+        dlSaveDestinationStale = false
+        userDefaults.removeObject(forKey: dlSaveDestKey)
+        LogManager.shared.log("DLSaveDest", "cleared (default に復帰)")
+    }
+
+    /// 起動時 / 設定変更時の DL 保存先 bookmark 読み込み + long-running access 開始。
+    /// 失敗 (stale 等) 時は activeDLSaveDestinationURL = nil + stale flag set、
+    /// DownloadManager は default にfallback。
+    private func loadDLSaveDestination() {
+        guard let data = userDefaults.data(forKey: dlSaveDestKey) else {
+            return  // 未設定 = デフォルト使用
+        }
+        do {
+            let url = try SecurityScopedBookmark.resolve(data)
+            if url.startAccessingSecurityScopedResource() {
+                activeDLSaveDestinationURL = url
+                dlSaveDestinationDisplayPath = url.path
+                dlSaveDestinationStale = false
+                LogManager.shared.log("DLSaveDest", "loaded: \(url.path)")
+            } else {
+                dlSaveDestinationStale = true
+                dlSaveDestinationDisplayPath = "(NAS 未接続)"
+                LogManager.shared.log("DLSaveDest", "startAccessing failed, fallback to default")
+            }
+        } catch {
+            dlSaveDestinationStale = true
+            dlSaveDestinationDisplayPath = "(bookmark 解決失敗)"
+            LogManager.shared.log("DLSaveDest", "resolve failed: \(error), fallback to default")
+        }
     }
 
     // MARK: - エラー

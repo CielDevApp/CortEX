@@ -290,6 +290,16 @@ class DownloadManager: ObservableObject {
     // MARK: - ディレクトリ
 
     private var baseDirectory: URL {
+        // Step 9 (Phase E1, 2026-04-26): Mac Catalyst で user-selectable DL 保存先を hook。
+        // ExternalFolderManager.activeDLSaveDestinationURL が non-nil ならそれを使う、
+        // nil (未設定 or stale) なら default `<documents>/EhViewer/downloads` に fallback。
+        // 田中判断 Q-2: 既存 DL は旧パスに残る、新規 DL のみ新パスへ。
+        // 切替後は app 再起動で反映 (DL 中の path 切替は safety のため非対応)。
+        #if targetEnvironment(macCatalyst)
+        if let custom = ExternalFolderManager.shared.activeDLSaveDestinationURL {
+            return custom
+        }
+        #endif
         let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
         return docs.appendingPathComponent("EhViewer/downloads", isDirectory: true)
     }
