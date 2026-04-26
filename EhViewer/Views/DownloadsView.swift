@@ -42,6 +42,20 @@ struct DownloadsView: View {
         manager.activeDownloads.sorted(by: { $0.key < $1.key }).map { (gid: $0.key, progress: $0.value) }
     }
 
+    /// 田中要望 2026-04-26: 外部参照を「一覧から削除した gid」と「ソート順」でフィルタ + sort。
+    private var visibleSortedExternal: [DownloadedGallery] {
+        let visible = externalFolders.externalGalleries
+            .filter { !externalFolders.hiddenExternalGids.contains($0.gid) }
+        switch externalFolders.externalSortOrder {
+        case .dateAdded:
+            return visible.sorted { $0.downloadDate > $1.downloadDate }
+        case .nameAsc:
+            return visible.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        case .nameDesc:
+            return visible.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedDescending }
+        }
+    }
+
     private var completedList: [DownloadedGallery] {
         // 田中要望 2026-04-26: Mac で DL 保存先が外部 (NAS 等) に設定されている場合、
         // 同作品が「外部参照」section にも (別 gid で) 表示されて重複するため
@@ -145,7 +159,7 @@ struct DownloadsView: View {
                         }
                     }
                 }
-                if !externalFolders.externalGalleries.isEmpty {
+                if !visibleSortedExternal.isEmpty {
                     Section {
                         // 田中要望 2026-04-26: cover pre-warm 中なら header に進捗表示
                         if externalFolders.isWarmingCovers {
@@ -155,11 +169,28 @@ struct DownloadsView: View {
                                     .font(.caption2).foregroundStyle(.secondary)
                             }
                         }
-                        ForEach(externalFolders.externalGalleries) { meta in
+                        ForEach(visibleSortedExternal) { meta in
                             externalRow(meta: meta)
                         }
                     } header: {
-                        Text("外部参照 (\(externalFolders.externalGalleries.count))")
+                        // 田中要望 2026-04-26: ソート Menu (追加日 / 名前 昇降)
+                        HStack {
+                            Text("外部参照 (\(visibleSortedExternal.count))")
+                            Spacer()
+                            Menu {
+                                Picker("ソート", selection: Binding(
+                                    get: { externalFolders.externalSortOrder },
+                                    set: { externalFolders.externalSortOrder = $0 }
+                                )) {
+                                    Text("追加日順").tag(ExternalFolderManager.ExternalSortOrder.dateAdded)
+                                    Text("名前昇順").tag(ExternalFolderManager.ExternalSortOrder.nameAsc)
+                                    Text("名前降順").tag(ExternalFolderManager.ExternalSortOrder.nameDesc)
+                                }
+                            } label: {
+                                Label("ソート", systemImage: "arrow.up.arrow.down.circle")
+                                    .labelStyle(.iconOnly)
+                            }
+                        }
                     }
                 }
                 #endif
@@ -675,7 +706,7 @@ struct DownloadsView: View {
             }
         }
         .padding(.vertical, 4)
-        // 田中要望 2026-04-26: 長押し (Mac 右クリック) で プレビュー / 詳細
+        // 田中要望 2026-04-26: 長押し (Mac 右クリック) で プレビュー / 詳細 / 一覧から削除
         // 詳細は originalGid (元 server gid) があれば有効、無ければ disabled (旧 .cortex)
         .contextMenu {
             Button {
@@ -690,11 +721,23 @@ struct DownloadsView: View {
                     Label("この作品のページ詳細を見る", systemImage: "doc.text.magnifyingglass")
                 }
             } else {
-                // 旧 .cortex (originalGid 無し) は詳細不可、disabled で UI 上は見えるが押せない
                 Button {} label: {
                     Label("ページ詳細を見る (旧 .cortex 非対応)", systemImage: "doc.text.magnifyingglass")
                 }
                 .disabled(true)
+            }
+            // 一覧から削除 (NAS 実 .cortex は残す、表示のみ非表示)
+            Button(role: .destructive) {
+                externalFolders.hideExternal(gid: meta.gid)
+            } label: {
+                Label("一覧から削除 (NAS は残す)", systemImage: "eye.slash")
+            }
+        }
+        .swipeActions(edge: .trailing) {
+            Button(role: .destructive) {
+                externalFolders.hideExternal(gid: meta.gid)
+            } label: {
+                Label("一覧から削除", systemImage: "eye.slash")
             }
         }
     }

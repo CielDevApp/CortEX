@@ -217,6 +217,9 @@ struct LocalReaderView: View {
             // 静画フィルタ済みキャッシュも全解放: 400 ページ gallery で enhancedImages が
             // 数百 MB 居座る (田中報告 2026-04-25 二度目)。
             enhancedImages.removeAll()
+            // 田中要望 2026-04-26: reader close 時のメモリパンパン対策、cover cache + thumb cache 強制 flush
+            DownloadManager.shared.flushCoverMemoryCache()
+            ImageCache.shared.purgeMemoryCache()
         }
         .focusable()
         .focusEffectDisabled()
@@ -592,18 +595,18 @@ struct LocalReaderView: View {
         //   "webp": CGImageSource + CADisplayLink 逐次再生 (Boomerang 対応、変換なし)
         //   "mp4" : 旧来 HEVC MP4 変換 + AVPlayer (HDR 全域対応、▶ 手動再生)
         let fileURL = DownloadManager.shared.imageFilePath(gid: meta.gid, page: index)
-        // 田中判断 2026-04-26: scan 済 hasAnimatedWebp を全 source で最優先 (internal DL も含む)。
-        // CGImageSource 全体読みの isAnimatedFile を main で実行すると 30-50MB WebP で
-        // 主 bottleneck (sample 810/1503 = 54% main 占有)。post-DL scan 済なら即返却。
-        // 未 scan: external_zip は true 仮定 (metadata 由来)、internal DL は legacy fallback。
+        // 田中判断 2026-04-26 final: external_zip は scan flag が信頼できない (post-DL scan が
+        // false 返してても実際は動画 WebP の場合あり) → 常に animated render 試行 (BoomerangWebPView が
+        // static にも fallback する)。internal DL は scan 済 flag を信頼 (post-DL scan reliable)、
+        // 未 scan のみ legacy isAnimatedFile fallback。
         let isAnimated: Bool = {
+            if meta.source == "external_zip" {
+                return true  // 常に animated 試行 (BoomerangWebPView は static fallback 持つ)
+            }
             if let scanned = meta.hasAnimatedWebp {
                 return scanned
             }
-            if meta.source == "external_zip" {
-                return true  // external_zip 未 scan は default 動画扱い (BoomerangWebPView は static fallback)
-            }
-            return AnimatedImageDecoder.isAnimatedFile(url: fileURL)  // internal DL 未 scan のみ legacy 経路
+            return AnimatedImageDecoder.isAnimatedFile(url: fileURL)
         }()
         if FileManager.default.fileExists(atPath: fileURL.path), isAnimated {
             if animPlaybackMode == "mp4" {

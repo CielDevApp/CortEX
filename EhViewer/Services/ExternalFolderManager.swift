@@ -35,6 +35,21 @@ final class ExternalFolderManager: ObservableObject {
     @Published private(set) var warmCoverCurrent: Int = 0
     @Published private(set) var warmCoverTotal: Int = 0
 
+    /// 田中要望 2026-04-26: 「一覧から削除」した gid 集合 (NAS 実 .cortex は残す)。
+    /// gid は zipPath の SHA256 hash で stable なので rescan 後も同 gid に解決される。
+    /// UserDefaults 永続化。
+    @Published private(set) var hiddenExternalGids: Set<Int> = []
+
+    /// 田中要望 2026-04-26: 外部参照 section のソート方式。UserDefaults 永続化。
+    enum ExternalSortOrder: String, Codable, CaseIterable {
+        case dateAdded   // 追加日 (downloadDate) 降順
+        case nameAsc     // 名前 (title) 昇順
+        case nameDesc    // 名前 (title) 降順
+    }
+    @Published var externalSortOrder: ExternalSortOrder = .dateAdded {
+        didSet { userDefaults.set(externalSortOrder.rawValue, forKey: sortOrderKey) }
+    }
+
     /// Step 9 (Phase E1, 2026-04-26): Mac DL 保存先選択。
     /// nil = デフォルト (`<documents>/EhViewer/downloads`)、非 nil = ユーザ指定 NAS フォルダ等。
     /// 起動時 long-running startAccessingSecurityScopedResource() で URL を保持、
@@ -49,6 +64,8 @@ final class ExternalFolderManager: ObservableObject {
 
     private let storageKey = "com.kanayayuutou.cortex.externalFolders"
     private let dlSaveDestKey = "com.kanayayuutou.cortex.dlSaveDestination"
+    private let hiddenGidsKey = "com.kanayayuutou.cortex.hiddenExternalGids"
+    private let sortOrderKey = "com.kanayayuutou.cortex.externalSortOrder"
     private let userDefaults: UserDefaults
 
     /// テスト容易性のため UserDefaults を inject 可能。デフォルトは .standard。
@@ -56,8 +73,38 @@ final class ExternalFolderManager: ObservableObject {
         self.userDefaults = userDefaults
         load()
         loadDLSaveDestination()
+        loadHiddenGids()
+        loadSortOrder()
         // 起動時自動 scan (background、main thread をブロックしない)
         Task.detached { [weak self] in await self?.rescanAll() }
+    }
+
+    private func loadHiddenGids() {
+        guard let arr = userDefaults.array(forKey: hiddenGidsKey) as? [Int] else { return }
+        hiddenExternalGids = Set(arr)
+    }
+
+    private func saveHiddenGids() {
+        userDefaults.set(Array(hiddenExternalGids), forKey: hiddenGidsKey)
+    }
+
+    /// 一覧から削除 (NAS 実 .cortex は触らない、表示のみ非表示)。
+    func hideExternal(gid: Int) {
+        hiddenExternalGids.insert(gid)
+        saveHiddenGids()
+    }
+
+    /// 表示復活 (将来の UI 用、今夜未使用)。
+    func unhideExternal(gid: Int) {
+        hiddenExternalGids.remove(gid)
+        saveHiddenGids()
+    }
+
+    private func loadSortOrder() {
+        if let raw = userDefaults.string(forKey: sortOrderKey),
+           let val = ExternalSortOrder(rawValue: raw) {
+            externalSortOrder = val
+        }
     }
 
     // MARK: - 登録 / 削除
