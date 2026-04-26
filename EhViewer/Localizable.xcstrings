@@ -1981,6 +1981,26 @@
     "Cort:EX" : {
 
     },
+    "Cort:EX gallery: %@\n%@\n%lldP" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Cort:EX gallery: %1$@\n%2$@\n%3$lldP"
+          }
+        }
+      }
+    },
+    "Cort:EX gallery: %@\n%lldP" : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Cort:EX gallery: %1$@\n%2$lldP"
+          }
+        }
+      }
+    },
     "Cort:EX ver.02a f5" : {
 
     },
@@ -5667,6 +5687,9 @@
           }
         }
       }
+    },
+    "この作品のページ詳細を見る" : {
+
     },
     "この作品は %lld ページ (約 %lld 画面) です。100 画面超で E-Hentai 側から一時 BAN (約 4 分) を踏む可能性があります。\n\nセーフティモード ON の場合、50 画面毎に 60 秒の cooldown を自動挿入します (推定所要: 約 %lld 分)。\n\nセーフティ OFF にすると cooldown はスキップされますが BAN リスクが上がります。続行しますか？" : {
       "localizations" : {

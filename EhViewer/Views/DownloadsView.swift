@@ -12,6 +12,9 @@ struct DownloadsView: View {
     @State private var tabBarHidden = false
     /// 長押しプレビュー表示中のギャラリー（nil = 非表示）
     @State private var previewMeta: DownloadedGallery?
+    /// 「この作品のページ詳細を見る」で開く DetailView 用 (nil = 非表示)。
+    /// 田中指示 2026-04-25: 保存済み作品から server 詳細 (キャラ名/タグ等) を閲覧する経路。
+    @State private var detailMeta: DownloadedGallery?
     /// プレビューからリーダー起動する時の初期ページ（通常起動では 0）
     @State private var readerInitialPage: Int = 0
     /// エクスポート進行フェーズ（nil = idle）。
@@ -78,6 +81,11 @@ struct DownloadsView: View {
                                         previewMeta = meta
                                     } label: {
                                         Label("プレビュー表示", systemImage: "rectangle.grid.3x2")
+                                    }
+                                    Button {
+                                        detailMeta = meta
+                                    } label: {
+                                        Label("この作品のページ詳細を見る", systemImage: "doc.text.magnifyingglass")
                                     }
                                     Button {
                                         performExport(meta: meta)
@@ -225,6 +233,25 @@ struct DownloadsView: View {
                 LocalReaderView(meta: meta, isLiveDownload: true)
             }
             #endif
+            // 「この作品のページ詳細を見る」(田中指示 2026-04-25)
+            // E-Hentai/EXhentai は GalleryDetailView (host=.exhentai 固定、ログイン中前提)、
+            // nhentai (gid<0) は NhentaiDetailView (stub NhGallery、サーバから refetch)。
+            .sheet(item: $detailMeta) { meta in
+                NavigationStack {
+                    Group {
+                        if meta.isNhentai {
+                            NhentaiDetailView(gallery: stubNhGallery(from: meta))
+                        } else {
+                            GalleryDetailView(gallery: stubGallery(from: meta), host: .exhentai)
+                        }
+                    }
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("閉じる") { detailMeta = nil }
+                        }
+                    }
+                }
+            }
             .overlay {
                 if let m = previewMeta {
                     LocalPreviewOverlay(
@@ -653,6 +680,38 @@ struct DownloadsView: View {
         if b >= 1_048_576 { return String(format: "%.1f MB", b / 1_048_576) }
         if b >= 1_024 { return String(format: "%.0f KB", b / 1_024) }
         return "\(bytes) B"
+    }
+
+    // MARK: - 詳細ページ stub 生成 (田中指示 2026-04-25)
+    // 保存済み作品から DetailView を開く時、DownloadedGallery に無いフィールド (rating /
+    // postedDate / category / coverURL 等) は default 値で埋める。サーバ refetch で実値が入る。
+
+    private func stubGallery(from meta: DownloadedGallery) -> Gallery {
+        Gallery(
+            gid: meta.gid,
+            token: meta.token,
+            title: meta.title,
+            category: nil,
+            coverURL: nil,
+            rating: 0,
+            pageCount: meta.pageCount,
+            postedDate: "",
+            uploader: nil,
+            tags: meta.tags ?? []
+        )
+    }
+
+    private func stubNhGallery(from meta: DownloadedGallery) -> NhentaiClient.NhGallery {
+        let id = meta.nhentaiId ?? abs(meta.gid)
+        return NhentaiClient.NhGallery(
+            id: id,
+            media_id: "",
+            title: NhentaiClient.NhTitle(english: nil, japanese: meta.title, pretty: nil),
+            images: nil,
+            num_pages: meta.pageCount,
+            tags: nil,
+            thumbnailPath: nil
+        )
     }
 
     private func formatETA(_ seconds: Int) -> String {
