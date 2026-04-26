@@ -25,6 +25,10 @@ final class ExternalFolderManager: ObservableObject {
     /// 最終 scan 日時 (UI で「最終更新」表示用、nil = 未 scan)。
     @Published private(set) var lastScanAt: Date?
 
+    /// scan 失敗した (= bookmark resolve 失敗 or NAS 切断) folder ID 集合。
+    /// DownloadsView の Section に「NAS 未接続」バナー表示用 (Q-C 確定)。
+    @Published private(set) var disconnectedFolderIDs: Set<UUID> = []
+
     private let storageKey = "com.kanayayuutou.cortex.externalFolders"
     private let userDefaults: UserDefaults
 
@@ -72,24 +76,30 @@ final class ExternalFolderManager: ObservableObject {
     func rescanAll() async {
         // main actor で folders snapshot 取得 (Sendable な ExternalFolder は detached に渡せる)
         let snapshot = folders
-        let aggregated: [DownloadedGallery] = await Task.detached {
-            var result: [DownloadedGallery] = []
+        // 前回登録分を一度全クリア (rescan で消えた gallery が残らないように)
+        ExternalCortexZipReader.shared.unregisterAll()
+
+        let result: (galleries: [DownloadedGallery], disconnected: Set<UUID>) = await Task.detached {
+            var galleries: [DownloadedGallery] = []
+            var disconnected: Set<UUID> = []
             for folder in snapshot {
                 do {
                     let scanned: [DownloadedGallery] = try SecurityScopedBookmark.access(folder.bookmarkData) { url in
-                        return ExternalGalleryScanner.scan(rootURL: url, bookmarkID: folder.id)
+                        return ExternalGalleryScanner.scan(rootURL: url, bookmarkID: folder.id, bookmarkData: folder.bookmarkData)
                     }
-                    result.append(contentsOf: scanned)
+                    galleries.append(contentsOf: scanned)
                 } catch {
                     LogManager.shared.log("ExternalScan", "folder \(folder.displayName) scan failed: \(error)")
+                    disconnected.insert(folder.id)
                 }
             }
-            return result
+            return (galleries, disconnected)
         }.value
         // @Published 更新は main actor で
-        externalGalleries = aggregated
+        externalGalleries = result.galleries
+        disconnectedFolderIDs = result.disconnected
         lastScanAt = Date()
-        LogManager.shared.log("ExternalScan", "rescanAll done, total \(aggregated.count) galleries")
+        LogManager.shared.log("ExternalScan", "rescanAll done, total \(result.galleries.count) galleries (disconnected=\(result.disconnected.count))")
     }
 
     // MARK: - access (短命)

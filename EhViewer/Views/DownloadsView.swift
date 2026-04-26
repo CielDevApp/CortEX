@@ -115,6 +115,17 @@ struct DownloadsView: View {
 
                 // Phase E1 (2026-04-26): 外部参照フォルダ配下の作品 (Mac Catalyst のみ)
                 #if targetEnvironment(macCatalyst)
+                if !externalFolders.disconnectedFolderIDs.isEmpty {
+                    Section {
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                            Text("NAS 未接続: \(externalFolders.disconnectedFolderIDs.count) 件のフォルダにアクセス不可")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
                 if !externalFolders.externalGalleries.isEmpty {
                     Section("外部参照 (\(externalFolders.externalGalleries.count))") {
                         ForEach(externalFolders.externalGalleries) { meta in
@@ -587,7 +598,10 @@ struct DownloadsView: View {
     @ViewBuilder
     private func externalRow(meta: DownloadedGallery) -> some View {
         Button {
-            externalUnsupportedAlert = "「\(meta.title)」のリーダー対応は次フェーズ実装予定です。\n\n現状は外部フォルダ scan + 作品リスト表示のみ動作確認段階です。"
+            // Phase E1.B (2026-04-26): 外部参照 ZIP gallery を LocalReaderView で開く。
+            // DownloadManager.imageFilePath / coverFilePath が ExternalCortexZipReader に
+            // hook 済のため、Reader からは internal DL と同一 API で透過的に画像取得可能。
+            readerMeta = meta
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: "externaldrive.fill")
