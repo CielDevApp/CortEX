@@ -302,8 +302,132 @@ struct GalleryScrollList: View {
     @State private var previewReaderRequest: GalleryPreviewReaderRequest?
     var onScrollDown: (() -> Void)?
     var onScrollUp: (() -> Void)?
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+
+    /// Phase G-A iPad-only パイロット (2026-04-26): iPad のみ Grid、Mac/iPhone は既存 List。
+    private var isIPadGrid: Bool {
+        #if canImport(UIKit) && !targetEnvironment(macCatalyst)
+        return UIDevice.current.userInterfaceIdiom == .pad
+        #else
+        return false
+        #endif
+    }
 
     var body: some View {
+        if isIPadGrid {
+            iPadGridScroll
+        } else {
+            originalListScroll
+        }
+    }
+
+    @ViewBuilder
+    private var iPadGridScroll: some View {
+        #if canImport(UIKit)
+        let columns = GalleryGridColumns.iPadColumns(horizontalSizeClass: hSizeClass)
+        ScrollView {
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(Array(viewModel.galleries.enumerated()), id: \.element.gid) { index, gallery in
+                    GalleryGridCellView(gallery: gallery)
+                        .onTapGesture { navPath.append(gallery) }
+                        .highPriorityGesture(
+                            LongPressGesture(minimumDuration: 0.4, maximumDistance: 15)
+                                .onEnded { _ in
+                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                    previewGallery = gallery
+                                }
+                        )
+                        .id(gallery.gid)
+                        .onAppear {
+                            // LazyVGrid 末尾の ProgressView().task は安定発火しないので
+                            // 末尾近傍セルの onAppear で loadNextPage トリガ。
+                            if index >= viewModel.galleries.count - 4 && viewModel.hasMore && !viewModel.isLoading {
+                                Task { await viewModel.loadNextPage() }
+                            }
+                            let prefetchRange = (index + 1)...(index + 4)
+                            let galleries = viewModel.galleries
+                            Task.detached(priority: .userInitiated) {
+                                for i in prefetchRange {
+                                    guard i < galleries.count else { break }
+                                    if let url = galleries[i].coverURL,
+                                       ImageCache.shared.image(for: url) == nil,
+                                       !ImageCache.shared.isLoading(url) {
+                                        ImageCache.shared.setLoading(url)
+                                        do {
+                                            let data = try await EhClient.shared.fetchThumbData(url: url, host: .exhentai)
+                                            let ciCtx = SpriteCache.ciContext
+                                            if let ciImage = CIImage(data: data),
+                                               let cgImage = ciCtx.createCGImage(ciImage, from: ciImage.extent) {
+                                                let img = UIImage(cgImage: cgImage)
+                                                ImageCache.shared.setThumb(img, for: url)
+                                            } else if let img = PlatformImage(data: data) {
+                                                ImageCache.shared.setThumb(img, for: url)
+                                            }
+                                        } catch {}
+                                        ImageCache.shared.removeLoading(url)
+                                    }
+                                }
+                            }
+                        }
+                }
+                if viewModel.hasMore {
+                    ProgressView().padding().task { await viewModel.loadNextPage() }
+                }
+            }
+            .padding(8)
+
+            if viewModel.galleries.isEmpty && !viewModel.isLoading {
+                ContentUnavailableView {
+                    Label(
+                        authVM.isLoggedIn ? "ギャラリーがありません" : "未ログイン",
+                        systemImage: authVM.isLoggedIn ? "photo.on.rectangle.angled" : "person.crop.circle.badge.exclamationmark"
+                    )
+                } description: {
+                    if let error = viewModel.errorMessage { Text(error) }
+                    else if !authVM.isLoggedIn { Text("ログインしてください") }
+                    else { Text("プルダウンして再読み込み") }
+                }
+                .padding(.top, 100)
+            }
+        }
+        .onScrollGeometryChange(for: CGFloat.self) { geo in geo.contentOffset.y } action: { oldVal, newVal in
+            let delta = newVal - oldVal
+            if abs(delta) > 100 { return }
+            if delta > 8 { onScrollDown?() } else if delta < -5 { onScrollUp?() }
+        }
+        .refreshable { await viewModel.refresh() }
+        .overlay {
+            if let gallery = previewGallery {
+                GalleryPreviewOverlay(
+                    gallery: gallery,
+                    host: viewModel.host,
+                    onDismiss: { previewGallery = nil },
+                    onTapPage: { thumbnails, page in
+                        previewReaderRequest = GalleryPreviewReaderRequest(gallery: gallery, page: page, thumbnails: thumbnails)
+                    }
+                )
+                .transition(.opacity)
+            }
+        }
+        #if os(iOS)
+        .fullScreenCover(item: $previewReaderRequest) { req in
+            GalleryReaderView(
+                gallery: req.gallery,
+                host: viewModel.host,
+                initialPage: req.page,
+                thumbnails: req.thumbnails
+            )
+            .onAppear {
+                HistoryManager.shared.record(gallery: req.gallery, page: req.page)
+                previewGallery = nil
+            }
+        }
+        #endif
+        #endif
+    }
+
+    @ViewBuilder
+    private var originalListScroll: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 ForEach(Array(viewModel.galleries.enumerated()), id: \.element.gid) { index, gallery in
@@ -613,8 +737,87 @@ struct NhentaiScrollList: View {
     @State private var previewReaderRequest: NhentaiPreviewReaderRequest?
     var onScrollDown: (() -> Void)?
     var onScrollUp: (() -> Void)?
+    @Environment(\.horizontalSizeClass) private var hSizeClass
+
+    private var isIPadGrid: Bool {
+        #if canImport(UIKit) && !targetEnvironment(macCatalyst)
+        return UIDevice.current.userInterfaceIdiom == .pad
+        #else
+        return false
+        #endif
+    }
 
     var body: some View {
+        if isIPadGrid {
+            iPadGridScroll
+        } else {
+            originalListScroll
+        }
+    }
+
+    @ViewBuilder
+    private var iPadGridScroll: some View {
+        #if canImport(UIKit)
+        let columns = GalleryGridColumns.iPadColumns(horizontalSizeClass: hSizeClass)
+        ScrollView {
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(Array(viewModel.galleries.enumerated()), id: \.element.id) { index, nh in
+                    NhentaiGridCellView(gallery: nh)
+                        .onTapGesture { navPath.append(nh) }
+                        .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 15) {
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                            previewGallery = nh
+                        }
+                        .id(nh.id)
+                        .onAppear {
+                            // 末尾近傍で次ページトリガ (LazyVGrid 内 ProgressView の .task 不安定対策)
+                            if index >= viewModel.galleries.count - 4 && viewModel.hasMore && !viewModel.isLoading {
+                                Task { await viewModel.loadNextPage() }
+                            }
+                        }
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 8)
+
+            if viewModel.galleries.isEmpty && !viewModel.isLoading {
+                ContentUnavailableView {
+                    Label("ギャラリーがありません", systemImage: "photo.on.rectangle.angled")
+                }
+                .padding(.top, 100)
+            }
+        }
+        .onScrollGeometryChange(for: CGFloat.self) { geo in geo.contentOffset.y } action: { oldVal, newVal in
+            let delta = newVal - oldVal
+            if delta > 15 { onScrollDown?() } else if delta < -15 { onScrollUp?() }
+        }
+        .refreshable { await viewModel.refresh() }
+        .overlay {
+            if let nh = previewGallery {
+                NhentaiPreviewOverlay(
+                    gallery: nh,
+                    onDismiss: { previewGallery = nil },
+                    onTapPage: { loadedGallery, page in
+                        previewReaderRequest = NhentaiPreviewReaderRequest(gallery: loadedGallery, page: page)
+                    }
+                )
+                .transition(.opacity)
+            }
+        }
+        #if os(iOS)
+        .fullScreenCover(item: $previewReaderRequest) { req in
+            NhentaiReaderView(gallery: req.gallery, initialPage: req.page)
+                .onAppear {
+                    HistoryManager.shared.recordNhentai(gallery: req.gallery, page: req.page)
+                    previewGallery = nil
+                }
+        }
+        #endif
+        #endif
+    }
+
+    @ViewBuilder
+    private var originalListScroll: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 ForEach(viewModel.galleries) { nh in
