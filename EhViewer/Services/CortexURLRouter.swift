@@ -86,6 +86,15 @@ enum CortexURLRouter {
             return true
         case "download/queue":
             return queueDownload(params: params)
+        case "external/list":
+            listExternalFolders()
+            return true
+        case "external/remove":
+            return removeExternalFolder(params: params)
+        case "external/rescan":
+            Task { @MainActor in await ExternalFolderManager.shared.rescanAll() }
+            LogManager.shared.log("CortexURL", "external/rescan triggered")
+            return true
         default:
             LogManager.shared.log("CortexURL", "unknown action: \(key)")
             return false
@@ -222,6 +231,33 @@ enum CortexURLRouter {
             CortexCommandBus.shared.openLocalReader = req
         }
         LogManager.shared.log("CortexURL", "local reader request gid=\(gid) page=\(page)")
+        return true
+    }
+
+    /// `cortex://external/list` 全外部フォルダを log に列挙 (id / displayName / disconnected)。
+    /// CUI から `tail -f ~/Documents/ehviewer.log` で観測する想定。
+    private static func listExternalFolders() {
+        Task { @MainActor in
+            let mgr = ExternalFolderManager.shared
+            LogManager.shared.log("CortexURL", "external/list: count=\(mgr.folders.count)")
+            for folder in mgr.folders {
+                let stale = mgr.disconnectedFolderIDs.contains(folder.id) ? " STALE" : ""
+                LogManager.shared.log("CortexURL", "  id=\(folder.id.uuidString) name=\(folder.displayName)\(stale)")
+            }
+        }
+    }
+
+    /// `cortex://external/remove?id=<UUID>` 指定 UUID の外部フォルダを削除 (実 NAS データは残る)。
+    /// 削除後 rescanAll が走り disconnectedFolderIDs から外れる。
+    private static func removeExternalFolder(params: [String: String]) -> Bool {
+        guard let idStr = params["id"], let uuid = UUID(uuidString: idStr) else {
+            LogManager.shared.log("CortexURL", "external/remove: missing/invalid id")
+            return false
+        }
+        Task { @MainActor in
+            ExternalFolderManager.shared.remove(id: uuid)
+            LogManager.shared.log("CortexURL", "external/remove done id=\(idStr)")
+        }
         return true
     }
 }

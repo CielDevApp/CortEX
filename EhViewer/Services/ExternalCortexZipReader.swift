@@ -215,14 +215,20 @@ final class ExternalCortexZipReader: @unchecked Sendable {
 
         // miss: ZIP から抽出。リーダー側経路では security-scoped access scope 外のため、
         // 保持している bookmarkData から再 resolve + access する。
+        // ただし path-override 経路 (bookmark 不要、sandbox=off) では bookmarkData が空 →
+        // bookmark 解決を bypass してパス直接アクセス。
         var extracted: Data?
-        do {
-            try SecurityScopedBookmark.access(info.bookmarkData) { _ in
-                extracted = ExternalCortexZipReader.extractEntry(zipPath: info.zipPath, entry: entry)
+        if info.bookmarkData.isEmpty {
+            extracted = ExternalCortexZipReader.extractEntry(zipPath: info.zipPath, entry: entry)
+        } else {
+            do {
+                try SecurityScopedBookmark.access(info.bookmarkData) { _ in
+                    extracted = ExternalCortexZipReader.extractEntry(zipPath: info.zipPath, entry: entry)
+                }
+            } catch {
+                LogManager.shared.log("ExtZipReader", "access failed for gid=\(gid): \(error)")
+                return nil
             }
-        } catch {
-            LogManager.shared.log("ExtZipReader", "access failed for gid=\(gid): \(error)")
-            return nil
         }
         guard let data = extracted else { return nil }
 

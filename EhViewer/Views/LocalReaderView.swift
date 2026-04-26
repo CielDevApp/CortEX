@@ -161,7 +161,7 @@ struct LocalReaderView: View {
                             }
                     )
             }
-            // Phase E1.B 後追加 (2026-04-26): 大幅 jump pre-cache overlay (外部参照 ZIP のみ発火)
+            // Phase E1.B 後追加 (2026-04-26): 大幅 jump pre-cache overlay (external_zip / internal DL 共通)
             if jumpPreCacheActive {
                 jumpPreCacheOverlay
                     .transition(.opacity)
@@ -217,8 +217,8 @@ struct LocalReaderView: View {
             // 静画フィルタ済みキャッシュも全解放: 400 ページ gallery で enhancedImages が
             // 数百 MB 居座る (田中報告 2026-04-25 二度目)。
             enhancedImages.removeAll()
-            // 田中要望 2026-04-26: reader close 時のメモリパンパン対策、cover cache + thumb cache 強制 flush
-            DownloadManager.shared.flushCoverMemoryCache()
+            // 田中要望 2026-04-26: reader close 時のメモリパンパン対策、page image cache 強制 flush
+            // cover cache は flush しない (Library 戻り時に NAS sync 再読込 → 5s freeze の原因)
             ImageCache.shared.purgeMemoryCache()
         }
         .focusable()
@@ -356,7 +356,14 @@ struct LocalReaderView: View {
                 #endif
             Button("ジャンプ") {
                 if let page = Int(jumpPageText), page >= 1, page <= meta.pageCount {
-                    horizontalPage = page - 1
+                    let target = page - 1
+                    if abs(target - currentIndex) >= jumpThreshold {
+                        startJumpPreCache(target: target) {
+                            horizontalPage = target
+                        }
+                    } else {
+                        horizontalPage = target
+                    }
                 }
                 jumpPageText = ""
             }
@@ -452,8 +459,13 @@ struct LocalReaderView: View {
                     if let page = Int(jumpPageText), page >= 1, page <= meta.pageCount {
                         // .scrollPosition(id:) と ScrollViewReader.scrollTo の併用で
                         // scrolledID と実スクロール位置が乖離するため、scrolledID 直接代入に統一。
-                        withAnimation {
-                            scrolledID = page - 1
+                        let target = page - 1
+                        if abs(target - currentIndex) >= jumpThreshold {
+                            startJumpPreCache(target: target) {
+                                withAnimation { scrolledID = target }
+                            }
+                        } else {
+                            withAnimation { scrolledID = target }
                         }
                     }
                     jumpPageText = ""
@@ -467,8 +479,9 @@ struct LocalReaderView: View {
             .onChange(of: sliderJumpTarget) { _, target in
                 if let target {
                     LogManager.shared.log("iPadScroll", "slider set: target=\(target)")
-                    // Phase E1.B 後追加 (2026-04-26): 外部参照 ZIP で大幅 jump → background pre-cache
-                    if meta.source == "external_zip" && abs(target - currentIndex) >= jumpThreshold {
+                    // 田中要望 2026-04-26: 大幅 jump (external_zip / internal DL 両方) で
+                    // background pre-cache + loading overlay 表示。
+                    if abs(target - currentIndex) >= jumpThreshold {
                         startJumpPreCache(target: target) {
                             withAnimation { scrolledID = target }
                         }
@@ -600,8 +613,12 @@ struct LocalReaderView: View {
         // static にも fallback する)。internal DL は scan 済 flag を信頼 (post-DL scan reliable)、
         // 未 scan のみ legacy isAnimatedFile fallback。
         let isAnimated: Bool = {
+            // external_zip は gallery-level scan flag が不正確なので per-page で実ファイル判定。
+            // 静画なのに mp4 モードで GalleryAnimatedWebPView (▶ 付き) にルーティングされる
+            // 問題を防ぐ。fileURL は materialize 後にしか存在しないので、未存在ページは
+            // どのみち下の fileExists ガードで else 経路に流れる。
             if meta.source == "external_zip" {
-                return true  // 常に animated 試行 (BoomerangWebPView は static fallback 持つ)
+                return AnimatedImageDecoder.isAnimatedFile(url: fileURL)
             }
             if let scanned = meta.hasAnimatedWebp {
                 return scanned
@@ -610,9 +627,11 @@ struct LocalReaderView: View {
         }()
         if FileManager.default.fileExists(atPath: fileURL.path), isAnimated {
             if animPlaybackMode == "mp4" {
+                // staticImage は enhancedImages のみ参照 (sync loadLocalImage は動画 WebP の
+                // 全フレーム展開で main thread 14秒級に固まるため使わない)。processPage 完了で nil → 画像。
                 GalleryAnimatedWebPView(
                     source: .url(fileURL),
-                    staticImage: enhancedImages[index] ?? DownloadManager.shared.loadLocalImage(gid: meta.gid, page: index),
+                    staticImage: enhancedImages[index],
                     gid: meta.gid,
                     page: index,
                     onToggleControls: {
@@ -651,8 +670,12 @@ struct LocalReaderView: View {
 
     @ViewBuilder
     private func animatedOrStaticBody(index: Int) -> some View {
-        let displayImage = enhancedImages[index] ?? DownloadManager.shared.loadLocalImage(gid: meta.gid, page: index)
-        if let displayImage {
+        // 静画ジャンプ freeze fix (2026-04-26): sync `loadLocalImage` を View body から削除。
+        // LRU 直後等で enhancedImages[index] が nil の時、main で UIImage(contentsOfFile:) +
+        // WebP decode が走り 14 秒級フリーズしてた。動画経路 (Boomerang/GalleryAnimatedWebPView)
+        // は staticPlaceholder=nil で Color.clear fallback する設計と揃える。
+        // processPage が detached で完了 → enhancedImages 更新 → 再描画で実画像表示。
+        if let displayImage = enhancedImages[index] {
             Image(platformImage: displayImage)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
@@ -687,6 +710,17 @@ struct LocalReaderView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: isHorizontal ? .infinity : nil, alignment: .center)
             .frame(minHeight: 300)
+        } else if FileManager.default.fileExists(atPath: DownloadManager.shared.imageFilePath(gid: meta.gid, page: index).path)
+                  || ExternalCortexZipReader.shared.isExternalGallery(gid: meta.gid) {
+            // 静画ジャンプ freeze fix: enhancedImages 未充填時は placeholder 表示 + processPage trigger。
+            // sync UIImage(contentsOfFile:) を main から外して main thread を解放する。
+            Color.clear
+                .aspectRatio(2.0/3.0, contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: isHorizontal ? .infinity : nil, alignment: isHorizontal ? .center : .top)
+                .frame(minHeight: 300)
+                .onAppear {
+                    if enhancedImages[index] == nil { processPage(index) }
+                }
         } else {
             VStack(spacing: 8) {
                 Image(systemName: "photo")
@@ -891,8 +925,13 @@ struct LocalReaderView: View {
     // 内部 DL gallery には影響させない (source == "external_zip" 限定)。
 
     private func startJumpPreCache(target: Int, onCompleted: @escaping () -> Void) {
+        // 田中要望 2026-04-26: 静画 (internal DL) の jump も重いから loading 表示。
+        // - external_zip: ZIP entry を materialize (NAS SMB IO)
+        // - internal DL: loadLocalImage で disk 読込 + WebP decode (大画像で重い)
+        // どちらも background で済ませてから scroll、loading overlay 共通表示。
+        let isExternal = (meta.source == "external_zip")
         let lo = max(0, target - 1)
-        let hi = min(meta.pageCount, target + 3)
+        let hi = min(meta.pageCount, target + (isExternal ? 3 : 2))
         let total = hi - lo
         guard total > 0 else { onCompleted(); return }
 
@@ -900,25 +939,41 @@ struct LocalReaderView: View {
         jumpPreCacheCurrent = 0
         jumpPreCacheTotal = total
         let gid = meta.gid
-        let activeAtStart = jumpPreCacheActive
 
         Task.detached(priority: .userInitiated) {
-            for (i, page) in (lo..<hi).enumerated() {
-                _ = ExternalCortexZipReader.shared.materializedImageURL(gid: gid, page: page)
-                await MainActor.run {
-                    // ユーザが overlay タップで cancel した場合は loop は続けるが UI 更新止める
-                    if jumpPreCacheActive {
-                        jumpPreCacheCurrent = i + 1
+            // 各 page を並列 materialize、完了順で progress 更新。
+            // 直列だと 5 ページ × SMB IO で 10〜25 秒級になるため。
+            await withTaskGroup(of: Void.self) { group in
+                for page in lo..<hi {
+                    group.addTask {
+                        if isExternal {
+                            _ = ExternalCortexZipReader.shared.materializedImageURL(gid: gid, page: page)
+                        } else {
+                            _ = DownloadManager.shared.loadLocalImage(gid: gid, page: page)
+                        }
+                    }
+                }
+                var done = 0
+                for await _ in group {
+                    done += 1
+                    let snapshot = done
+                    await MainActor.run {
+                        if jumpPreCacheActive {
+                            jumpPreCacheCurrent = snapshot
+                        }
                     }
                 }
             }
             await MainActor.run {
+                // internal DL: filter pipeline を target page 分だけ trigger (背景で processPage 走る)
+                if !isExternal && enhancedImages[target] == nil {
+                    processPage(target)
+                }
                 if jumpPreCacheActive {
                     jumpPreCacheActive = false
                     onCompleted()
                 }
                 // cancel 済 (jumpPreCacheActive == false) なら scroll しない、background cache だけ完了
-                _ = activeAtStart
             }
         }
     }
