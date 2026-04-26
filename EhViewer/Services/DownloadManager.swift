@@ -37,6 +37,11 @@ struct DownloadedGallery: Codable, Identifiable, Sendable {
     /// E-Hentai タグ (DL 開始時の Gallery.tags をスナップ)。nil = 旧 DL データで未保存。
     /// "other:animated" 等を含めば動画作品として確定判定 (実バイト scan 不要 = 二重判定排除)。
     var tags: [String]? = nil
+    /// 田中要望 2026-04-26: 外部参照 .cortex の original E-Hentai/nhentai gid を保持。
+    /// scanCortexZip で gid が Int.max - hash(zipPath) に namespace 分離されるため、
+    /// 元 server 詳細 fetch (GalleryDetailView) には original gid が必要。
+    /// nil = 旧 .cortex (export 時 metadata 未保存) or non-external、source server 詳細表示不可。
+    var originalGid: Int? = nil
 
     var id: Int { gid }
     nonisolated var directoryName: String { "\(gid)" }

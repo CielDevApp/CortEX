@@ -101,7 +101,9 @@ enum ExternalGalleryScanner {
             // metadata.json から得た gid は元の DL 時の gid (E-Hentai 正数 / nhentai 負数)。
             // 外部 ZIP として参照する場合、内部 DL gid と衝突する可能性があるため
             // namespace を分離 (Q-3 案 1: Int.max - hash(zipPath))
+            // 田中要望 2026-04-26: original gid を originalGid フィールドに保持 → 詳細表示用
             let newGid = gidFromPath(zipURL.path)
+            let originalGid = meta!.gid  // metadata.json 由来の元 server gid
             meta = DownloadedGallery(
                 gid: newGid,
                 token: meta!.token,
@@ -115,7 +117,8 @@ enum ExternalGalleryScanner {
                 isCancelled: nil,
                 hasAnimatedWebp: meta!.hasAnimatedWebp,
                 readerModeOverride: nil,
-                tags: meta!.tags
+                tags: meta!.tags,
+                originalGid: originalGid
             )
         }
 
