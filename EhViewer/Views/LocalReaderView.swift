@@ -41,6 +41,16 @@ struct LocalReaderView: View {
     @State private var resolvedDirection: Int? = nil
     @State private var showAnimationDialog = false
 
+    // Phase E1.B 後追加 (2026-04-26、田中指示): 外部参照 ZIP gallery で大幅 jump 時の
+    // background pre-cache + overlay。main thread SMB IO による freeze 回避。
+    @State private var jumpPreCacheActive = false
+    @State private var jumpPreCacheCurrent = 0
+    @State private var jumpPreCacheTotal = 0
+    /// 大幅 jump 判定閾値 (これ以上のページ移動で pre-cache overlay 起動)
+    private let jumpThreshold = 10
+    /// β-1 (2026-04-26): 外部参照 ZIP background materialize 完了通知で incrément、body 再描画 trigger
+    @State private var externalCortexReadyCounter: Int = 0
+
     init(meta: DownloadedGallery, isLiveDownload: Bool = false, initialPage: Int = 0) {
         self.meta = meta
         self.isLiveDownload = isLiveDownload
@@ -151,6 +161,11 @@ struct LocalReaderView: View {
                             }
                     )
             }
+            // Phase E1.B 後追加 (2026-04-26): 大幅 jump pre-cache overlay (外部参照 ZIP のみ発火)
+            if jumpPreCacheActive {
+                jumpPreCacheOverlay
+                    .transition(.opacity)
+            }
         }
         #if os(iOS)
         .persistentSystemOverlays(showControls && zoomImage == nil ? .automatic : .hidden)
@@ -159,6 +174,12 @@ struct LocalReaderView: View {
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
         #endif
+        .onReceive(NotificationCenter.default.publisher(for: .externalCortexImageReady)) { notif in
+            // β-1 (2026-04-26): 外部参照 ZIP background materialize 完了で body 再描画 trigger。
+            // counter 増分 → SwiftUI body 再評価 → loadLocalImage 再呼出 → 新画像反映。
+            guard let gid = notif.userInfo?["gid"] as? Int, gid == meta.gid else { return }
+            externalCortexReadyCounter += 1
+        }
         .onChange(of: verticalSizeClass) { _, newClass in
             if newClass == .compact && zoomImage != nil {
                 withAnimation(.easeOut(duration: 0.2)) { zoomImage = nil }
@@ -443,6 +464,13 @@ struct LocalReaderView: View {
             .onChange(of: sliderJumpTarget) { _, target in
                 if let target {
                     LogManager.shared.log("iPadScroll", "slider set: target=\(target)")
+                    // Phase E1.B 後追加 (2026-04-26): 外部参照 ZIP で大幅 jump → background pre-cache
+                    if meta.source == "external_zip" && abs(target - currentIndex) >= jumpThreshold {
+                        startJumpPreCache(target: target) {
+                            withAnimation { scrolledID = target }
+                        }
+                        return
+                    }
                     // scrolledID 代入で .scrollPosition が自動スクロール + currentIndex 更新
                     withAnimation {
                         scrolledID = target
@@ -838,6 +866,70 @@ struct LocalReaderView: View {
             }
             .padding(.bottom, 8)
             .background(.ultraThinMaterial.opacity(0.8))
+        }
+    }
+
+    // MARK: - Jump pre-cache (Phase E1.B 後追加, 田中指示 2026-04-26)
+    //
+    // 外部参照 ZIP gallery で slider 大幅 jump 時、target ± N ページを background で
+    // materialize → 完了で実 scroll 実行。pre-cache 中は overlay 表示 (タップで cancel)。
+    // 内部 DL gallery には影響させない (source == "external_zip" 限定)。
+
+    private func startJumpPreCache(target: Int, onCompleted: @escaping () -> Void) {
+        let lo = max(0, target - 1)
+        let hi = min(meta.pageCount, target + 3)
+        let total = hi - lo
+        guard total > 0 else { onCompleted(); return }
+
+        jumpPreCacheActive = true
+        jumpPreCacheCurrent = 0
+        jumpPreCacheTotal = total
+        let gid = meta.gid
+        let activeAtStart = jumpPreCacheActive
+
+        Task.detached(priority: .userInitiated) {
+            for (i, page) in (lo..<hi).enumerated() {
+                _ = ExternalCortexZipReader.shared.materializedImageURL(gid: gid, page: page)
+                await MainActor.run {
+                    // ユーザが overlay タップで cancel した場合は loop は続けるが UI 更新止める
+                    if jumpPreCacheActive {
+                        jumpPreCacheCurrent = i + 1
+                    }
+                }
+            }
+            await MainActor.run {
+                if jumpPreCacheActive {
+                    jumpPreCacheActive = false
+                    onCompleted()
+                }
+                // cancel 済 (jumpPreCacheActive == false) なら scroll しない、background cache だけ完了
+                _ = activeAtStart
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var jumpPreCacheOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.6).ignoresSafeArea()
+                .onTapGesture {
+                    // cancel: overlay 消す + scroll 中止 (background materialize は完走、cache は populate)
+                    jumpPreCacheActive = false
+                }
+            VStack(spacing: 16) {
+                ProgressView(value: Double(jumpPreCacheCurrent), total: Double(max(1, jumpPreCacheTotal)))
+                    .progressViewStyle(.linear)
+                    .frame(width: 240)
+                Text("ジャンプ先を準備中... \(jumpPreCacheCurrent) / \(jumpPreCacheTotal)")
+                    .font(.subheadline)
+                    .foregroundStyle(.white)
+                Text("タップでキャンセル")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+            .padding(24)
+            .background(Color.black.opacity(0.7))
+            .cornerRadius(12)
         }
     }
 }

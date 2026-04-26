@@ -18,6 +18,17 @@ struct DownloadsView: View {
     /// 「この作品のページ詳細を見る」で開く DetailView 用 (nil = 非表示)。
     /// 田中指示 2026-04-25: 保存済み作品から server 詳細 (キャラ名/タグ等) を閲覧する経路。
     @State private var detailMeta: DownloadedGallery?
+    /// Phase E1.B 後追加 (2026-04-26): 外部参照 ZIP gallery を Reader 開く前に
+    /// budget (4GB or 全 pages) まで background pre-cache → Reader 起動後 SMB IO 0。
+    /// 田中案 2026-04-26: cache 容量を完全に使い切ってから開く方針。
+    @State private var preCacheMeta: DownloadedGallery?
+    @State private var preCacheCurrent: Int = 0
+    @State private var preCacheTotal: Int = 0
+    @State private var preCacheBytesDone: UInt64 = 0
+    @State private var preCacheBytesTotal: UInt64 = 0
+    @State private var preCacheCancelled: Bool = false
+    /// β-1 (2026-04-26): 外部参照 ZIP background materialize 完了通知でセル再描画 trigger
+    @State private var externalCortexReadyCounter: Int = 0
     /// プレビューからリーダー起動する時の初期ページ（通常起動では 0）
     @State private var readerInitialPage: Int = 0
     /// エクスポート進行フェーズ（nil = idle）。
@@ -293,6 +304,9 @@ struct DownloadsView: View {
                 if exportPhase != nil {
                     exportProgressOverlay
                 }
+                if let m = preCacheMeta {
+                    preCacheOverlay(meta: m)
+                }
             }
             .alert("インポート", isPresented: .constant(importMessage != nil)) {
                 Button("OK") { importMessage = nil }
@@ -309,6 +323,10 @@ struct DownloadsView: View {
                 Button("OK") { externalUnsupportedAlert = nil }
             } message: {
                 Text(externalUnsupportedAlert ?? "")
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .externalCortexImageReady)) { _ in
+                // β-1: cell サムネ更新 trigger (any external ZIP の materialize 完了で再描画)
+                externalCortexReadyCounter += 1
             }
             .onChange(of: manager.lastImportedGid) { _, gid in
                 guard let gid else { return }
@@ -598,10 +616,10 @@ struct DownloadsView: View {
     @ViewBuilder
     private func externalRow(meta: DownloadedGallery) -> some View {
         Button {
-            // Phase E1.B (2026-04-26): 外部参照 ZIP gallery を LocalReaderView で開く。
-            // DownloadManager.imageFilePath / coverFilePath が ExternalCortexZipReader に
-            // hook 済のため、Reader からは internal DL と同一 API で透過的に画像取得可能。
-            readerMeta = meta
+            // Phase E1.B 後追加 (2026-04-26、田中指示): 外部参照 ZIP は最初の N ページを
+            // background pre-cache してから Reader を開く (main thread freeze 回避)。
+            // pre-cache 済 = imageFilePath が cache hit を返す → Reader 内 SMB IO 無し。
+            startPreCacheAndOpenReader(meta: meta, count: 3)
         } label: {
             HStack(spacing: 10) {
                 // 田中要望 2026-04-26: サムネ表示 (cover.* or page_0001 を ZIP から materialize)
@@ -767,6 +785,98 @@ struct DownloadsView: View {
     // MARK: - 詳細ページ stub 生成 (田中指示 2026-04-25)
     // 保存済み作品から DetailView を開く時、DownloadedGallery に無いフィールド (rating /
     // postedDate / category / coverURL 等) は default 値で埋める。サーバ refetch で実値が入る。
+
+    @ViewBuilder
+    private func preCacheOverlay(meta: DownloadedGallery) -> some View {
+        ZStack {
+            Color.black.opacity(0.5).ignoresSafeArea()
+            VStack(spacing: 14) {
+                ProgressView(value: Double(preCacheCurrent), total: Double(max(1, preCacheTotal)))
+                    .progressViewStyle(.linear)
+                    .frame(width: 280)
+                Text("ロード中... \(preCacheCurrent) / \(preCacheTotal) ページ")
+                    .font(.subheadline)
+                    .foregroundStyle(.white)
+                Text("\(formatMB(preCacheBytesDone)) / \(formatMB(preCacheBytesTotal))")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.white.opacity(0.7))
+                Text(meta.title)
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.7))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                Button("キャンセル") {
+                    preCacheCancelled = true
+                }
+                .buttonStyle(.bordered)
+                .tint(.white)
+            }
+            .padding(24)
+            .background(Color.black.opacity(0.75))
+            .cornerRadius(12)
+        }
+    }
+
+    private func formatMB(_ bytes: UInt64) -> String {
+        let mb = Double(bytes) / 1_048_576.0
+        if mb >= 1024 {
+            return String(format: "%.2f GB", mb / 1024)
+        }
+        return String(format: "%.0f MB", mb)
+    }
+
+    // MARK: - Pre-cache (Phase E1.B 後追加, 田中指示 2026-04-26)
+    //
+    // 外部参照 ZIP gallery の最初の N ページを background materialize してから
+    // Reader を開く。pre-cache 中は overlay で "準備中... K/N" 進捗表示、
+    // 完了で readerMeta = meta セット → Reader 起動時には cache hit のため
+    // main thread の SMB IO ブロックが発生しない。
+
+    private func startPreCacheAndOpenReader(meta: DownloadedGallery, count: Int) {
+        // 田中案 2026-04-26: budget = 3.5GB (cache budget 4GB の余裕分残し evict 回避) で
+        // 入る限り全ページ pre-cache → Reader 起動後 SMB IO 0。
+        // (count 引数は legacy、実際は budget ベースで上書き)
+        _ = count
+        let budget: UInt64 = 3_758_096_384  // 3.5GB
+        let plan = ExternalCortexZipReader.shared.maxPagesWithinBudget(gid: meta.gid, budget: budget)
+        let target = min(max(plan.pages, 1), meta.pageCount)  // 最低 1 ページ
+
+        preCacheMeta = meta
+        preCacheCurrent = 0
+        preCacheTotal = target
+        preCacheBytesDone = 0
+        preCacheBytesTotal = plan.totalBytes
+        preCacheCancelled = false
+        let gid = meta.gid
+
+        Task.detached(priority: .userInitiated) {
+            for i in 0..<target {
+                let cancelled = await MainActor.run { preCacheCancelled }
+                if cancelled { break }
+                _ = ExternalCortexZipReader.shared.materializedImageURL(gid: gid, page: i)
+                let cacheURL = ExternalCortexZipReader.shared.cachedImageURL(gid: gid, page: i)
+                let pageBytes: UInt64 = {
+                    guard let u = cacheURL,
+                          let attrs = try? FileManager.default.attributesOfItem(atPath: u.path),
+                          let s = attrs[.size] as? UInt64 else { return 0 }
+                    return s
+                }()
+                await MainActor.run {
+                    preCacheCurrent = i + 1
+                    preCacheBytesDone += pageBytes
+                }
+            }
+            await MainActor.run {
+                let cancelled = preCacheCancelled
+                preCacheMeta = nil
+                preCacheCancelled = false
+                if !cancelled {
+                    readerMeta = meta  // cancel じゃなければ Reader 起動
+                }
+            }
+        }
+    }
 
     private func stubGallery(from meta: DownloadedGallery) -> Gallery {
         Gallery(

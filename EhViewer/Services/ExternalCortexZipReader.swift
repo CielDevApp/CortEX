@@ -31,8 +31,15 @@ final class ExternalCortexZipReader: @unchecked Sendable {
     private var zipInfo: [Int: ZipInfo] = [:]
     private let lock = NSLock()
 
-    /// SSD LRU cache 上限 (1GB)。設計書 田中判断 Q-B。
-    private let cacheBudget: UInt64 = 1_073_741_824
+    /// SSD LRU cache 上限 (4GB)。田中判断 2026-04-26 (1GB → 4GB に増加、evict 頻度激減)。
+    private let cacheBudget: UInt64 = 4_294_967_296
+
+    /// evict debounce: 直近 evict から 5 秒以内なら skip (連続 page load で何度も走らない)
+    private var lastEvictAt: Date = .distantPast
+    /// 既に evict task が pending なら重複起動しない
+    private var evictPending: Bool = false
+    private let evictLock = NSLock()
+    private let evictDebounce: TimeInterval = 5.0
 
     // MARK: - cache directory
 
@@ -85,10 +92,84 @@ final class ExternalCortexZipReader: @unchecked Sendable {
         lock.lock(); zipInfo.removeAll(); lock.unlock()
     }
 
+    // MARK: - β-1 (2026-04-26): non-blocking 経路 (Reader freeze 回避)
+
+    /// in-flight materialize の dedupe 用 (gid:page → 1 task)
+    private var materializeInFlight: Set<String> = []
+    private let materializeFlightLock = NSLock()
+
+    /// 期待される cache file URL (存在するかは別問題)。imageFilePath hook の戻り値用。
+    /// Reader 側 loadLocalImage は file が無ければ nil を返すので placeholder 描画される。
+    func expectedCacheURL(gid: Int, page: Int) -> URL? {
+        lock.lock(); let info = zipInfo[gid]; lock.unlock()
+        guard let info else { return nil }
+        guard page >= 0 && page < info.imageNames.count else { return nil }
+        let entryName = info.imageNames[page]
+        let ext = (entryName as NSString).pathExtension.isEmpty ? "bin" : (entryName as NSString).pathExtension
+        return cacheRoot
+            .appendingPathComponent("\(gid)", isDirectory: true)
+            .appendingPathComponent("page_\(String(format: "%04d", page)).\(ext)")
+    }
+
+    /// 高速 cache 存在確認 (no SMB IO)。hit なら URL、miss なら nil。
+    func cachedImageURL(gid: Int, page: Int) -> URL? {
+        guard let url = expectedCacheURL(gid: gid, page: page) else { return nil }
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    /// β-1 main API: cache 存在チェック + 未取得なら background materialize trigger (dedupe)。
+    /// 戻り値: cache hit なら URL、miss なら expectedCacheURL (存在しない URL、loadLocalImage は nil 返す)。
+    /// main thread からの呼び出しでも SMB IO ブロック発生しない。完了で Notification 通知。
+    func cachedOrTriggerBackground(gid: Int, page: Int) -> URL? {
+        if let hit = cachedImageURL(gid: gid, page: page) {
+            return hit
+        }
+        // miss: background materialize trigger (dedupe)
+        let key = "\(gid):\(page)"
+        materializeFlightLock.lock()
+        let already = materializeInFlight.contains(key)
+        if !already { materializeInFlight.insert(key) }
+        materializeFlightLock.unlock()
+
+        if !already {
+            Task.detached(priority: .userInitiated) { [weak self] in
+                guard let self else { return }
+                _ = self.materializedImageURL(gid: gid, page: page)
+                self.materializeFlightLock.lock()
+                self.materializeInFlight.remove(key)
+                self.materializeFlightLock.unlock()
+                NotificationCenter.default.post(
+                    name: .externalCortexImageReady,
+                    object: nil,
+                    userInfo: ["gid": gid, "page": page]
+                )
+            }
+        }
+        // 存在しないかもしれない URL を返す (caller は file exists check でハンドル)
+        return expectedCacheURL(gid: gid, page: page)
+    }
+
     /// 指定 gid の image 件数 (Scanner で metadata から取れない場合用)。
     func imageCount(gid: Int) -> Int {
         lock.lock(); defer { lock.unlock() }
         return zipInfo[gid]?.imageNames.count ?? 0
+    }
+
+    /// 田中案 2026-04-26: budget bytes 内に収まる最大 page 数 (累積 compressedSize ≤ budget)。
+    /// pre-cache の事前計算用、SMB IO 不要 (TOC は scan 時に既読込み)。
+    /// 戻り値: (pages: 取得対象ページ数, totalBytes: その累積サイズ)
+    func maxPagesWithinBudget(gid: Int, budget: UInt64) -> (pages: Int, totalBytes: UInt64) {
+        lock.lock(); let info = zipInfo[gid]; lock.unlock()
+        guard let info else { return (0, 0) }
+        var sum: UInt64 = 0
+        var count = 0
+        for name in info.imageNames {
+            let size = info.entries[name]?.compressedSize ?? 0
+            if sum + size > budget { break }
+            sum += size
+            count += 1
+        }
+        return (count, sum)
     }
 
     // MARK: - materialized URL (DownloadManager の imageFilePath hook 用)
@@ -151,13 +232,39 @@ final class ExternalCortexZipReader: @unchecked Sendable {
             return nil
         }
 
-        // LRU 退避 (size budget 超過なら oldest 削除)
-        evictIfNeeded()
+        // LRU 退避 (background + debounce、main thread 完全に解放)
+        // 田中判断 2026-04-26: 400p 動画 WebP page jump で main 占有しないよう
+        // background priority + 5 秒 debounce で連続発火を抑制。
+        scheduleEvict()
 
         return cacheURL
     }
 
-    // MARK: - LRU 退避
+    // MARK: - LRU 退避 (background + debounce)
+
+    /// evict の起動制御。直近 5 秒以内 or 既に pending なら skip、それ以外は detached task 起動。
+    private func scheduleEvict() {
+        evictLock.lock()
+        let now = Date()
+        if evictPending || now.timeIntervalSince(lastEvictAt) < evictDebounce {
+            evictLock.unlock()
+            return
+        }
+        evictPending = true
+        evictLock.unlock()
+
+        Task.detached(priority: .background) { [weak self] in
+            self?.evictNow()
+        }
+    }
+
+    private func evictNow() {
+        evictIfNeeded()
+        evictLock.lock()
+        lastEvictAt = Date()
+        evictPending = false
+        evictLock.unlock()
+    }
 
     private func evictIfNeeded() {
         let fm = FileManager.default
@@ -349,4 +456,10 @@ struct ZipEntry: Sendable {
     let compressedSize: UInt64
     let uncompressedSize: UInt64
     let localHeaderOffset: UInt64
+}
+
+extension Notification.Name {
+    /// β-1 (2026-04-26): 外部参照 ZIP の background materialize 完了通知。
+    /// userInfo: ["gid": Int, "page": Int]。Reader / Library cell が観察して再描画 trigger。
+    static let externalCortexImageReady = Notification.Name("externalCortexImageReady")
 }

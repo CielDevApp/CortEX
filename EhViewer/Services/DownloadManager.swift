@@ -348,18 +348,23 @@ class DownloadManager: ObservableObject {
     // MARK: - 画像ファイルパス
 
     func imageFilePath(gid: Int, page: Int) -> URL {
-        // Phase E1.B (2026-04-26): 外部参照 ZIP gallery 経路を最優先で check。
-        // ExternalCortexZipReader が登録 gid なら ZIP entry を SSD cache に materialize
-        // して URL を返す (cache hit なら即返却、miss なら SMB IO + 展開 → cache 書込)。
-        if let extURL = ExternalCortexZipReader.shared.materializedImageURL(gid: gid, page: page) {
+        // Phase E1.B β-1 (2026-04-26 田中指示): 外部参照 ZIP gallery を non-blocking 経路で hook。
+        // cachedOrTriggerBackground = cache hit URL を即返す or background materialize trigger 後
+        // (存在しないかもしれない) URL を返す。main thread で SMB IO 同期実行は発生しない。
+        // 完了で Notification.externalCortexImageReady 発火、Reader が再描画 trigger。
+        if let extURL = ExternalCortexZipReader.shared.cachedOrTriggerBackground(gid: gid, page: page) {
             return extURL
         }
         return galleryDirectory(gid: gid).appendingPathComponent("page_\(String(format: "%04d", page)).jpg")
     }
 
     func coverFilePath(gid: Int) -> URL {
-        if let extURL = ExternalCortexZipReader.shared.materializedCoverURL(gid: gid) {
-            return extURL
+        // β-1: cover も non-blocking 化 (cover.* or page_0001 を background materialize)
+        if ExternalCortexZipReader.shared.isExternalGallery(gid: gid) {
+            // cover はまず cachedOrTriggerBackground(page: 0) で代用 (cover.* と page_0001 は同等視)
+            if let extURL = ExternalCortexZipReader.shared.cachedOrTriggerBackground(gid: gid, page: 0) {
+                return extURL
+            }
         }
         return galleryDirectory(gid: gid).appendingPathComponent("cover.jpg")
     }
