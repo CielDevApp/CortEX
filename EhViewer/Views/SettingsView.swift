@@ -68,12 +68,19 @@ struct SettingsView: View {
 
     // Phase E1 (2026-04-26): 外部参照フォルダ (Mac Catalyst のみ実機能、iPhone は無表示)
     @ObservedObject private var externalFolders = ExternalFolderManager.shared
-    @State private var showExternalFolderPicker = false
     @State private var externalFolderError: String?
 
     // Phase E1 Step 9 (2026-04-26): Mac DL 保存先選択
-    @State private var showDLSaveDestPicker = false
     @State private var showDLSaveDestRestart = false
+
+    // 田中報告 2026-04-26 fix: 同 View に .fileImporter を複数 chain すると後勝ち上書きで
+    // 前のが効かなくなる SwiftUI 制約回避のため、2 つの .folder picker (external / DLSaveDest)
+    // を 1 つの fileImporter で discriminator 識別経由で multiplex。
+    // Binding の set で nil リセットすると closure 実行時に既に nil で kind 取得できないため、
+    // showFolderPicker (Bool) と folderPickerKind (enum) を分離保持。
+    enum FolderPickerKind { case externalFolder, dlSaveDest }
+    @State private var showFolderPicker = false
+    @State private var folderPickerKind: FolderPickerKind = .externalFolder
 
     private var maxMB: Int { ImageCache.shared.maxDiskBytes / 1_048_576 }
     private var isOverLimit: Bool { readerCacheMB > maxMB }
@@ -474,7 +481,8 @@ struct SettingsView: View {
                         }
                     }
                     Button {
-                        showDLSaveDestPicker = true
+                        folderPickerKind = .dlSaveDest
+                        showFolderPicker = true
                     } label: {
                         Label("変更...", systemImage: "folder.badge.gearshape")
                     }
@@ -528,7 +536,8 @@ struct SettingsView: View {
                         }
                     }
                     Button {
-                        showExternalFolderPicker = true
+                        folderPickerKind = .externalFolder
+                        showFolderPicker = true
                     } label: {
                         Label("フォルダを追加...", systemImage: "plus.circle")
                     }
@@ -696,19 +705,29 @@ struct SettingsView: View {
                 phoenixImportCount = FavoritesBackup.importBackup(from: url)
             }
         }
-        // Phase E1: 外部参照フォルダ追加用 picker (Mac Catalyst のみ動作)
+        // 田中報告 2026-04-26 fix: 同 View に .fileImporter を chain すると後勝ち上書きで
+        // 前のが効かなくなる SwiftUI 制約回避、外部参照 + DL 保存先を 1 picker で multiplex。
+        // showFolderPicker (Bool) と folderPickerKind (enum) を分離保持し、Binding 即時 reset で
+        // result closure 到達前に kind 紛失する race を回避。
         .fileImporter(
-            isPresented: $showExternalFolderPicker,
+            isPresented: $showFolderPicker,
             allowedContentTypes: [.folder],
             allowsMultipleSelection: false
         ) { result in
+            let kind = folderPickerKind
             switch result {
             case .success(let urls):
                 guard let url = urls.first else { return }
                 let accessing = url.startAccessingSecurityScopedResource()
                 defer { if accessing { url.stopAccessingSecurityScopedResource() } }
                 do {
-                    try externalFolders.add(url: url)
+                    switch kind {
+                    case .externalFolder:
+                        try externalFolders.add(url: url)
+                    case .dlSaveDest:
+                        try externalFolders.setDLSaveDestination(url: url)
+                        showDLSaveDestRestart = true
+                    }
                 } catch {
                     externalFolderError = "フォルダ登録失敗: \(error)"
                 }
@@ -720,27 +739,6 @@ struct SettingsView: View {
             Button("OK") { externalFolderError = nil }
         } message: {
             Text(externalFolderError ?? "")
-        }
-        // Phase E1 Step 9: DL 保存先 picker (Mac Catalyst のみ動作)
-        .fileImporter(
-            isPresented: $showDLSaveDestPicker,
-            allowedContentTypes: [.folder],
-            allowsMultipleSelection: false
-        ) { result in
-            switch result {
-            case .success(let urls):
-                guard let url = urls.first else { return }
-                let accessing = url.startAccessingSecurityScopedResource()
-                defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-                do {
-                    try externalFolders.setDLSaveDestination(url: url)
-                    showDLSaveDestRestart = true
-                } catch {
-                    externalFolderError = "DL 保存先設定失敗: \(error)"
-                }
-            case .failure(let error):
-                externalFolderError = "選択失敗: \(error.localizedDescription)"
-            }
         }
         .alert("DL 保存先 変更", isPresented: $showDLSaveDestRestart) {
             Button("OK") { showDLSaveDestRestart = false }
