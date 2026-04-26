@@ -146,6 +146,31 @@ final class ExternalFolderManager: ObservableObject {
         // 前回登録分を一度全クリア (rescan で消えた gallery が残らないように)
         ExternalCortexZipReader.shared.unregisterAll()
 
+        // app-sandbox=false 環境の override: bookmark を bypass して plain path から scan。
+        // `com.kanayayuutou.cortex.externalFolderPathsOverride` (String 配列) が定義されていれば、
+        // それぞれを ExternalGalleryScanner.scan に直接渡す。CLI 救済用。
+        let rawArr = userDefaults.array(forKey: "com.kanayayuutou.cortex.externalFolderPathsOverride")
+        let pathsOverride = (rawArr as? [String]) ?? []
+        LogManager.shared.log("ExternalScan", "override probe: rawArr=\(String(describing: rawArr)) count=\(pathsOverride.count)")
+        if !pathsOverride.isEmpty {
+            let result: [DownloadedGallery] = await Task.detached {
+                var galleries: [DownloadedGallery] = []
+                for path in pathsOverride where FileManager.default.fileExists(atPath: path) {
+                    let url = URL(fileURLWithPath: path, isDirectory: true)
+                    let dummyData = Data()
+                    let scanned = ExternalGalleryScanner.scan(rootURL: url, bookmarkID: UUID(), bookmarkData: dummyData)
+                    galleries.append(contentsOf: scanned)
+                }
+                return galleries
+            }.value
+            externalGalleries = result
+            disconnectedFolderIDs = []
+            lastScanAt = Date()
+            LogManager.shared.log("ExternalScan", "rescanAll (path override) done, total \(result.count) galleries")
+            await warmCovers(galleries: result)
+            return
+        }
+
         // 田中報告 2026-04-26: Mac 再起動で SMB volume の device id 変化 → bookmark stale 化
         // → 旧コードが throw → 「NAS 未接続」誤判定 + DL 不可。
         // 対応: resolveAndDetectStale で URL は問題なく取得しつつ、stale 化していたら
@@ -294,33 +319,66 @@ final class ExternalFolderManager: ObservableObject {
     /// 失敗 (stale 等) 時は activeDLSaveDestinationURL = nil + stale flag set、
     /// DownloadManager は default にfallback。
     private func loadDLSaveDestination() {
+        // app-sandbox=false 環境で bookmark resolve が壊れた時の override:
+        // `com.kanayayuutou.cortex.dlSaveDestinationPathOverride` (String) が定義されていれば
+        // bookmark を bypass して直接そのパスを採用。CLI から救済注入する用途。
+        if let pathOverride = userDefaults.string(forKey: "com.kanayayuutou.cortex.dlSaveDestinationPathOverride"),
+           !pathOverride.isEmpty,
+           FileManager.default.fileExists(atPath: pathOverride) {
+            let url = URL(fileURLWithPath: pathOverride, isDirectory: true)
+            activeDLSaveDestinationURL = url
+            dlSaveDestinationDisplayPath = pathOverride
+            dlSaveDestinationStale = false
+            LogManager.shared.log("DLSaveDest", "path override (no bookmark): \(pathOverride)")
+            return
+        }
         guard let data = userDefaults.data(forKey: dlSaveDestKey) else {
             return  // 未設定 = デフォルト使用
         }
-        do {
-            // 田中報告 2026-04-26: Mac 再起動で bookmark stale 化する地雷対策。
-            // resolveAndDetectStale で stale 化していたら新 bookmark data を userDefaults に
-            // 上書き保存して次回起動以降の再発防止。
-            let resolved = try SecurityScopedBookmark.resolveAndDetectStale(data)
-            if let newData = resolved.newData {
-                userDefaults.set(newData, forKey: dlSaveDestKey)
-                LogManager.shared.log("DLSaveDest", "stale bookmark refreshed for \(resolved.url.path)")
+        // 田中報告 2026-04-26 (sample で根因確定): Apple の URL(resolvingBookmarkData:) 自体が
+        // 内部で NAS path に対し stat() を実行 → SMB IO 完了まで block。これを main thread で
+        // 呼ぶと app 起動が永久 hang (DownloadManager.shared init 経由で連鎖)。
+        //
+        // 対策: resolve 全体を Task.detached に逃がす。init 中は activeDLSaveDestinationURL=nil
+        // のため baseDirectory は default Documents に fallback、loadAllMetadata は local 読込で
+        // 即完了。NAS resolve 完了後に activeDLSaveDestinationURL がセットされ、その後の新規 DL は
+        // NAS dest に向く。NAS 上の既存 .cortex は ExternalFolderManager.rescanAll 経由で別途読込。
+        dlSaveDestinationDisplayPath = "(NAS 解決中...)"
+        Task.detached(priority: .userInitiated) { [data, weak self] in
+            do {
+                let url = try SecurityScopedBookmark.resolve(data)
+                let started = url.startAccessingSecurityScopedResource()
+                await MainActor.run {
+                    guard let self else {
+                        if started { url.stopAccessingSecurityScopedResource() }
+                        return
+                    }
+                    if started {
+                        self.activeDLSaveDestinationURL = url
+                        self.dlSaveDestinationDisplayPath = url.path
+                        self.dlSaveDestinationStale = false
+                        LogManager.shared.log("DLSaveDest", "loaded async: \(url.path)")
+                    } else {
+                        self.dlSaveDestinationStale = true
+                        self.dlSaveDestinationDisplayPath = "(NAS 未接続)"
+                        LogManager.shared.log("DLSaveDest", "startAccessing failed, fallback to default")
+                    }
+                }
+                // stale refresh も同 detached 内で続行 (main 戻り後に再 schedule する必要なし)
+                if started, let resolved = try? SecurityScopedBookmark.resolveAndDetectStale(data),
+                   let newData = resolved.newData {
+                    await MainActor.run {
+                        self?.userDefaults.set(newData, forKey: self?.dlSaveDestKey ?? "")
+                        LogManager.shared.log("DLSaveDest", "stale bookmark refreshed in background")
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self?.dlSaveDestinationStale = true
+                    self?.dlSaveDestinationDisplayPath = "(bookmark 解決失敗)"
+                    LogManager.shared.log("DLSaveDest", "resolve failed: \(error), fallback to default")
+                }
             }
-            let url = resolved.url
-            if url.startAccessingSecurityScopedResource() {
-                activeDLSaveDestinationURL = url
-                dlSaveDestinationDisplayPath = url.path
-                dlSaveDestinationStale = false
-                LogManager.shared.log("DLSaveDest", "loaded: \(url.path)")
-            } else {
-                dlSaveDestinationStale = true
-                dlSaveDestinationDisplayPath = "(NAS 未接続)"
-                LogManager.shared.log("DLSaveDest", "startAccessing failed, fallback to default")
-            }
-        } catch {
-            dlSaveDestinationStale = true
-            dlSaveDestinationDisplayPath = "(bookmark 解決失敗)"
-            LogManager.shared.log("DLSaveDest", "resolve failed: \(error), fallback to default")
         }
     }
 

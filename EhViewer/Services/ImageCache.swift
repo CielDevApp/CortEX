@@ -11,8 +11,13 @@ final class ImageCache {
 
     private let memoryCache = NSCache<NSURL, PlatformImage>()
     private var loading: Set<URL> = []
+    /// loading Set への並行 read/write 保護 (FavoritesViewModel.prefetchThumbnails が
+    /// detached task から removeLoading 呼ぶと Set の COW で race → swift_isUniquelyReferenced
+    /// で SIGSEGV、2026-04-26 観測)。
+    private let loadingLock = NSLock()
     /// ディスクキャッシュのファイル名一覧（高速存在チェック用）
     private var diskIndex: Set<String> = []
+    private let diskIndexLock = NSLock()
 
     /// サムネ同時ダウンロード数制限（GPU化済みなので並列数を増やせる）
     private let thumbDownloadSemaphore = AsyncSemaphore(limit: 20)
@@ -158,9 +163,18 @@ final class ImageCache {
         saveToDisk(image: image, url: url, directory: thumbsCacheDir)
     }
 
-    func isLoading(_ url: URL) -> Bool { loading.contains(url) }
-    func setLoading(_ url: URL) { loading.insert(url) }
-    func removeLoading(_ url: URL) { loading.remove(url) }
+    func isLoading(_ url: URL) -> Bool {
+        loadingLock.lock(); defer { loadingLock.unlock() }
+        return loading.contains(url)
+    }
+    func setLoading(_ url: URL) {
+        loadingLock.lock(); defer { loadingLock.unlock() }
+        loading.insert(url)
+    }
+    func removeLoading(_ url: URL) {
+        loadingLock.lock(); defer { loadingLock.unlock() }
+        loading.remove(url)
+    }
 
     /// サムネダウンロードスロットを取得（5並列制限）
     func acquireThumbSlot() async {
@@ -252,7 +266,9 @@ final class ImageCache {
                 index.formUnion(files)
             }
         }
+        diskIndexLock.lock()
         diskIndex = index
+        diskIndexLock.unlock()
         LogManager.shared.log("App", "disk index: \(index.count) files")
     }
 
@@ -288,7 +304,10 @@ final class ImageCache {
     private func loadFromDisk(url: URL) -> PlatformImage? {
         let filename = cacheFileHash(for: url)
         // diskIndexで高速存在チェック（FileManager.fileExists不要）
-        guard diskIndex.isEmpty || diskIndex.contains(filename) else { return nil }
+        diskIndexLock.lock()
+        let snapshot = diskIndex
+        diskIndexLock.unlock()
+        guard snapshot.isEmpty || snapshot.contains(filename) else { return nil }
         for dir in [readerCacheDir, thumbsCacheDir, legacyCacheDir] {
             let path = dir.appendingPathComponent(filename)
             if let data = try? Data(contentsOf: path) {
@@ -306,7 +325,9 @@ final class ImageCache {
 
     private func saveToDisk(image: PlatformImage, url: URL, directory: URL) {
         let filename = cacheFileHash(for: url)
+        diskIndexLock.lock()
         diskIndex.insert(filename)
+        diskIndexLock.unlock()
         let path = directory.appendingPathComponent(filename)
         // JPEG エンコード + disk write を専用キューで実行（MainActor ブロック防止）
         let capturedImage = image

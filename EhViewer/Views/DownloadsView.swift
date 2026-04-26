@@ -1026,20 +1026,45 @@ struct DownloadsView: View {
 
     @ViewBuilder
     private func coverThumbnail(gid: Int) -> some View {
-        if let cover = manager.loadCoverImage(gid: gid) {
-            Image(platformImage: cover)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(width: 50, height: 70)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
-        } else {
-            RoundedRectangle(cornerRadius: 4)
-                .fill(Color.gray.opacity(0.2))
-                .frame(width: 50, height: 70)
-                .overlay {
-                    Image(systemName: "photo")
-                        .foregroundStyle(.secondary)
-                }
+        AsyncCoverThumbnail(gid: gid)
+    }
+}
+
+// ライブラリ行の cover を main thread を塞がず非同期ロード。
+// 旧実装は body 内で loadCoverImage を sync 呼出 → cache miss 時に
+// fileExists + CGImageSource decode が main で走り、行数 N でフリーズ。
+private struct AsyncCoverThumbnail: View {
+    let gid: Int
+    @State private var image: PlatformImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(platformImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.gray.opacity(0.2))
+                    .overlay {
+                        Image(systemName: "photo")
+                            .foregroundStyle(.secondary)
+                    }
+            }
+        }
+        .frame(width: 50, height: 70)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .onAppear { loadIfNeeded() }
+    }
+
+    private func loadIfNeeded() {
+        guard image == nil else { return }
+        let gid = gid
+        Task.detached(priority: .userInitiated) {
+            let img = DownloadManager.shared.loadCoverImage(gid: gid)
+            await MainActor.run {
+                self.image = img
+            }
         }
     }
 }
