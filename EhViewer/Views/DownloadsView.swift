@@ -675,14 +675,26 @@ struct DownloadsView: View {
             }
         }
         .padding(.vertical, 4)
-        // 田中要望 2026-04-26: 長押し (Mac 右クリック) で プレビュー
-        // 「ページ詳細」は外部参照 ZIP では元の E-Hentai/nhentai gid/token が無いため
-        // server fetch が「削除作品」誤判定するので drop (田中判断 2026-04-26)
+        // 田中要望 2026-04-26: 長押し (Mac 右クリック) で プレビュー / 詳細
+        // 詳細は originalGid (元 server gid) があれば有効、無ければ disabled (旧 .cortex)
         .contextMenu {
             Button {
                 previewMeta = meta
             } label: {
                 Label("プレビュー表示", systemImage: "rectangle.grid.3x2")
+            }
+            if meta.originalGid != nil {
+                Button {
+                    detailMeta = meta
+                } label: {
+                    Label("この作品のページ詳細を見る", systemImage: "doc.text.magnifyingglass")
+                }
+            } else {
+                // 旧 .cortex (originalGid 無し) は詳細不可、disabled で UI 上は見えるが押せない
+                Button {} label: {
+                    Label("ページ詳細を見る (旧 .cortex 非対応)", systemImage: "doc.text.magnifyingglass")
+                }
+                .disabled(true)
             }
         }
     }
@@ -921,8 +933,11 @@ struct DownloadsView: View {
     }
 
     private func stubGallery(from meta: DownloadedGallery) -> Gallery {
-        Gallery(
-            gid: meta.gid,
+        // 田中要望 2026-04-26: external_zip では originalGid を優先 (元 server fetch 用)。
+        // 通常 internal DL では meta.gid そのまま (originalGid は nil)。
+        let serverGid = meta.originalGid ?? meta.gid
+        return Gallery(
+            gid: serverGid,
             token: meta.token,
             title: meta.title,
             category: nil,
@@ -936,7 +951,9 @@ struct DownloadsView: View {
     }
 
     private func stubNhGallery(from meta: DownloadedGallery) -> NhentaiClient.NhGallery {
-        let id = meta.nhentaiId ?? abs(meta.gid)
+        // nhentai は元 ID を originalGid (負数) → 絶対値で渡す
+        let serverGid = meta.originalGid ?? meta.gid
+        let id = serverGid < 0 ? -serverGid : abs(serverGid)
         return NhentaiClient.NhGallery(
             id: id,
             media_id: "",
