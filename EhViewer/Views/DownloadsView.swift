@@ -214,6 +214,11 @@ struct DownloadsView: View {
             #if os(iOS)
             .listStyle(.insetGrouped)
             #endif
+            // 田中要望 2026-04-26: ライブラリ pull-to-refresh で外部参照フォルダ rescan。
+            // staging → NAS bulk move 完了後、新しい gallery を即取得可能。
+            .refreshable {
+                await externalFolders.rescanAll()
+            }
             .navigationTitle("ライブラリ")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

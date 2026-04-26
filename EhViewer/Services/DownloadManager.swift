@@ -305,13 +305,105 @@ class DownloadManager: ObservableObject {
     }
 
     func galleryDirectory(gid: Int) -> URL {
-        baseDirectory.appendingPathComponent("\(gid)", isDirectory: true)
+        // Phase E1.B (2026-04-26 田中要望): NAS DL save dest 設定時の per-page SMB roundtrip
+        // 削減のため、DL 中は local SSD staging に書込 → 完了で bulk move。
+        // staging gid 集合で判定、DL 完了後は通常 baseDirectory に解決される。
+        if isStaging(gid: gid) {
+            return dlStagingBase.appendingPathComponent("\(gid)", isDirectory: true)
+        }
+        return baseDirectory.appendingPathComponent("\(gid)", isDirectory: true)
     }
 
     func ensureDirectory(_ url: URL) {
         if !fileManager.fileExists(atPath: url.path) {
             try? fileManager.createDirectory(at: url, withIntermediateDirectories: true)
         }
+    }
+
+    // MARK: - Staging-based DL (Phase E1.B 田中要望 2026-04-26)
+    //
+    // NAS DL save dest 設定時に DL 中は local SSD staging へ書込、完了で bulk move。
+    // per-page SMB metadata roundtrip を撲滅、推定 2-3x DL 高速化。
+
+    private var stagingGids: Set<Int> = []
+    private let stagingLock = NSLock()
+
+    /// staging directory (常に local SSD)。
+    private var dlStagingBase: URL {
+        let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        return docs.appendingPathComponent("EhViewer/dl_staging", isDirectory: true)
+    }
+
+    func isStaging(gid: Int) -> Bool {
+        stagingLock.lock(); defer { stagingLock.unlock() }
+        return stagingGids.contains(gid)
+    }
+
+    /// DL 開始時に呼ぶ (NAS DL save dest 設定時のみ)。staging set に追加。
+    func addStaging(gid: Int) {
+        stagingLock.lock(); stagingGids.insert(gid); stagingLock.unlock()
+        LogManager.shared.log("DLStaging", "added gid=\(gid)")
+    }
+
+    private func removeStaging(gid: Int) {
+        stagingLock.lock(); stagingGids.remove(gid); stagingLock.unlock()
+    }
+
+    /// staging/<gid> を ZIP 圧縮 (.cortex) → NAS に **単一ファイル書込** で転送。
+    /// 田中要望 2026-04-26: per-page (1228 ファイル) の SMB metadata roundtrip 撲滅、
+    /// 1 つの sequential file write のみ → 体感「爆速」転送。
+    /// 完了後 staging 削除 + downloads[gid] 解除 (外部参照 .cortex として scan 拾上げ)。
+    func moveStagingToFinalDest(gid: Int) async {
+        let sourceDir = dlStagingBase.appendingPathComponent("\(gid)")
+        guard fileManager.fileExists(atPath: sourceDir.path) else {
+            LogManager.shared.log("DLStaging", "no staging dir for gid=\(gid), skip move")
+            removeStaging(gid: gid)
+            return
+        }
+
+        // 1. staging → tmp/<title>.cortex (local SSD ZIP stream、isStaging 中なので
+        //    GalleryExporter.exportAsZipStreaming は galleryDirectory 経由で staging を読む)
+        let exportedURL: URL
+        do {
+            exportedURL = try await Task.detached(priority: .userInitiated) {
+                try GalleryExporter.exportAsZipStreaming(gid: gid)
+            }.value
+        } catch {
+            LogManager.shared.log("DLStaging", "export ZIP failed gid=\(gid): \(error)")
+            removeStaging(gid: gid)
+            return
+        }
+
+        // 2. tmp/<title>.cortex → NAS/<title>.cortex (single SMB file write)
+        let destURL = baseDirectory.appendingPathComponent(exportedURL.lastPathComponent)
+        do {
+            if fileManager.fileExists(atPath: destURL.path) {
+                try? fileManager.removeItem(at: destURL)
+            }
+            try fileManager.copyItem(at: exportedURL, to: destURL)
+            try? fileManager.removeItem(at: exportedURL)
+            let size = (try? fileManager.attributesOfItem(atPath: destURL.path)[.size] as? UInt64) ?? 0
+            LogManager.shared.log("DLStaging", "moved gid=\(gid) → NAS:\(destURL.lastPathComponent) (size=\(size))")
+        } catch {
+            LogManager.shared.log("DLStaging", "NAS write failed gid=\(gid): \(error)")
+            removeStaging(gid: gid)
+            return
+        }
+
+        // 3. staging dir 削除 (DL 中の各 page file を local SSD から完全消去)
+        try? fileManager.removeItem(at: sourceDir)
+
+        // 4. removeStaging (galleryDirectory が baseDirectory に解決される、ただし NAS に
+        //    folder 形式では存在しない、.cortex 形式なので external scan 経由でアクセス)
+        removeStaging(gid: gid)
+
+        // 5. downloads[gid] 削除 (gallery は外部参照 .cortex として再認識される)
+        await MainActor.run {
+            downloads[gid] = nil
+        }
+
+        // 6. 外部参照 rescan で新 .cortex を Library に表示
+        await ExternalFolderManager.shared.rescanAll()
     }
 
     // MARK: - メタデータ
@@ -716,6 +808,13 @@ class DownloadManager: ObservableObject {
 
         LogManager.shared.log("Download", "nhentai download START: id=\(nhGallery.id) pages=\(totalPages)")
 
+        // 田中要望 2026-04-26: NAS DL save dest 設定時は staging に書込む
+        #if targetEnvironment(macCatalyst)
+        if ExternalFolderManager.shared.activeDLSaveDestinationURL != nil {
+            addStaging(gid: gid)
+        }
+        #endif
+
         // 残り容量推定用バイト累計を初期化
         initializeBytesCounter(gid: gid)
 
@@ -877,6 +976,13 @@ class DownloadManager: ObservableObject {
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             #endif
             sendDownloadCompleteNotification(title: finalMeta.title)
+        }
+
+        // 田中要望 2026-04-26: 完了後 staging → NAS bulk move (background)
+        if completed && isStaging(gid: gid) {
+            Task.detached(priority: .userInitiated) { [weak self] in
+                await self?.moveStagingToFinalDest(gid: gid)
+            }
         }
     }
 
@@ -1209,6 +1315,13 @@ class DownloadManager: ObservableObject {
         galleryURLStr: String, host: GalleryHost
     ) async {
         LogManager.shared.log("Download", "performDownload START: gid=\(gid) pageCount=\(pageCount) url=\(galleryURLStr)")
+
+        // 田中要望 2026-04-26: NAS DL save dest 設定時は staging に書込む (per-page SMB roundtrip 削減)
+        #if targetEnvironment(macCatalyst)
+        if ExternalFolderManager.shared.activeDLSaveDestinationURL != nil {
+            addStaging(gid: gid)
+        }
+        #endif
 
         // レート制限計測フラグを前回 DL のぶんクリア（新規 DL 開始につき解除）
         BackgroundDownloadManager.shared.clearRateLimit(gid: gid)
@@ -1780,6 +1893,13 @@ class DownloadManager: ObservableObject {
             endLiveActivity(gid: gid, success: completed)
         }
         LogManager.shared.log("Download", "gid=\(gid) finished: \(state.downloadedSet.count)/\(totalPages) isComplete=\(completed)")
+
+        // 田中要望 2026-04-26: 完了後 staging → NAS bulk move (background)
+        if completed && isStaging(gid: gid) {
+            Task.detached(priority: .userInitiated) { [weak self] in
+                await self?.moveStagingToFinalDest(gid: gid)
+            }
+        }
 
         // DL 完了 / 中断後に /home.php を叩いてアカウント状態の前後比較ログ（失敗しても無視）
         Task.detached(priority: .utility) { [client, host] in

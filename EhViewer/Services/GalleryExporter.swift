@@ -609,8 +609,10 @@ nonisolated enum GalleryExporter {
     // MARK: - ヘルパー
 
     private static func galleryDirectory(gid: Int) -> URL {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        return docs.appendingPathComponent("EhViewer/downloads/\(gid)", isDirectory: true)
+        // 田中要望 2026-04-26 staging fix: DL save dest 設定時の staging 経路を尊重するため、
+        // DownloadManager.shared.galleryDirectory を使う (旧: Documents/EhViewer/downloads ハードコード)。
+        // これで isStaging gid なら staging dir、それ以外は baseDirectory に解決される。
+        return DownloadManager.shared.galleryDirectory(gid: gid)
     }
 }
 
