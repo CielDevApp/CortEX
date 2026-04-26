@@ -342,8 +342,11 @@ struct GalleryScrollList: View {
             LazyVGrid(columns: columns, spacing: 8) {
                 ForEach(Array(viewModel.galleries.enumerated()), id: \.element.gid) { index, gallery in
                     GalleryGridCellView(gallery: gallery)
+                        .contentShape(Rectangle())
                         .onTapGesture { navPath.append(gallery) }
-                        .highPriorityGesture(
+                        // simultaneousGesture: 長押しが tap を抑制せず即遷移する。
+                        // .highPriorityGesture(LongPress) だと minimumDuration 経過まで tap が保留される。
+                        .simultaneousGesture(
                             LongPressGesture(minimumDuration: 0.4, maximumDistance: 15)
                                 .onEnded { _ in
                                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
@@ -777,11 +780,17 @@ struct NhentaiScrollList: View {
             LazyVGrid(columns: columns, spacing: 8) {
                 ForEach(Array(viewModel.galleries.enumerated()), id: \.element.id) { index, nh in
                     NhentaiGridCellView(gallery: nh)
+                        .contentShape(Rectangle())
                         .onTapGesture { navPath.append(nh) }
-                        .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 15) {
-                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                            previewGallery = nh
-                        }
+                        // simultaneousGesture: 長押しが tap を抑制せず即遷移する。
+                        // .onLongPressGesture を直接付けると minimumDuration 経過まで tap が保留される。
+                        .simultaneousGesture(
+                            LongPressGesture(minimumDuration: 0.4, maximumDistance: 15)
+                                .onEnded { _ in
+                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                    previewGallery = nh
+                                }
+                        )
                         .id(nh.id)
                         .onAppear {
                             // 末尾近傍で次ページトリガ (LazyVGrid 内 ProgressView の .task 不安定対策)
