@@ -20,6 +20,10 @@ class GalleryListViewModel: ObservableObject {
     private var currentPage: Int = 0
     private var cacheKey: String?
 
+    /// 検索 race 対策 (2026-04-27): Enter 連打 / 連続検索で前のリクエストを cancel。
+    /// URLSession async API は Task キャンセル時に in-flight HTTP も中断する。
+    private var searchTask: Task<Void, Never>?
+
     func loadGalleries(reset: Bool = true) async {
         if reset {
             currentPage = 0
@@ -63,6 +67,9 @@ class GalleryListViewModel: ObservableObject {
                 )
             }
 
+            // 検索 race 対策: 後続の search() で cancel 済みなら結果を反映せず終了。
+            if Task.isCancelled { return }
+
             let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1000
             LogManager.shared.log("Reader", "gallery list: \(result.galleries.count) items in \(String(format: "%.0f", elapsed))ms")
             LogManager.shared.log("Perf", "loadGalleries: \(Int(elapsed))ms count=\(result.galleries.count) page=\(currentPage) reset=\(reset)")
@@ -78,10 +85,15 @@ class GalleryListViewModel: ObservableObject {
             }
             nextPageURL = result.pageNumber.nextURL
             hasMore = result.pageNumber.hasNext
+        } catch is CancellationError {
+            return
+        } catch let urlErr as URLError where urlErr.code == .cancelled {
+            return
         } catch {
             errorMessage = error.localizedDescription
         }
 
+        if Task.isCancelled { return }
         isLoading = false
     }
 
@@ -122,7 +134,14 @@ class GalleryListViewModel: ObservableObject {
     }
 
     func search() async {
-        await loadGalleries(reset: true)
+        // 既存の検索 in-flight があれば cancel (Enter 連打 / 連続検索の race 防止)。
+        searchTask?.cancel()
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.loadGalleries(reset: true)
+        }
+        searchTask = task
+        await task.value
     }
 
     func refresh() async {
