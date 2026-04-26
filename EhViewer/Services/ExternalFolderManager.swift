@@ -29,6 +29,12 @@ final class ExternalFolderManager: ObservableObject {
     /// DownloadsView の Section に「NAS 未接続」バナー表示用 (Q-C 確定)。
     @Published private(set) var disconnectedFolderIDs: Set<UUID> = []
 
+    /// 田中要望 2026-04-26: rescan 後の cover 一括 pre-warm 中フラグ。
+    /// DownloadsView の Library Section ヘッダで「読み込み中...」表示用。
+    @Published private(set) var isWarmingCovers: Bool = false
+    @Published private(set) var warmCoverCurrent: Int = 0
+    @Published private(set) var warmCoverTotal: Int = 0
+
     /// Step 9 (Phase E1, 2026-04-26): Mac DL 保存先選択。
     /// nil = デフォルト (`<documents>/EhViewer/downloads`)、非 nil = ユーザ指定 NAS フォルダ等。
     /// 起動時 long-running startAccessingSecurityScopedResource() で URL を保持、
@@ -114,6 +120,31 @@ final class ExternalFolderManager: ObservableObject {
         disconnectedFolderIDs = result.disconnected
         lastScanAt = Date()
         LogManager.shared.log("ExternalScan", "rescanAll done, total \(result.galleries.count) galleries (disconnected=\(result.disconnected.count))")
+
+        // 田中要望 2026-04-26: scan 後に cover (page 0) を background sequential pre-warm。
+        // Library tab を初回開く時の thumb cell トリガ storm を回避、UI freeze 防止。
+        await warmCovers(galleries: result.galleries)
+    }
+
+    /// rescan 後の cover 一括 pre-warm。各 gallery の page 0 を sequential materialize。
+    /// 既に cache hit なら no-op で速い、miss なら SMB IO + ZIP extract。
+    /// 進捗は @Published で UI に通知、Library Section に loading indicator 表示。
+    private func warmCovers(galleries: [DownloadedGallery]) async {
+        let externalOnly = galleries.filter { $0.source == "external_zip" }
+        guard !externalOnly.isEmpty else { return }
+        isWarmingCovers = true
+        warmCoverCurrent = 0
+        warmCoverTotal = externalOnly.count
+
+        let snapshot = externalOnly
+        await Task.detached {
+            for (i, meta) in snapshot.enumerated() {
+                _ = ExternalCortexZipReader.shared.materializedImageURL(gid: meta.gid, page: 0)
+                await MainActor.run { ExternalFolderManager.shared.warmCoverCurrent = i + 1 }
+            }
+        }.value
+        isWarmingCovers = false
+        LogManager.shared.log("ExternalScan", "cover warm done: \(externalOnly.count) galleries")
     }
 
     // MARK: - access (短命)
