@@ -43,7 +43,15 @@ struct DownloadsView: View {
     }
 
     private var completedList: [DownloadedGallery] {
-        manager.downloads.values
+        // 田中要望 2026-04-26: Mac で DL 保存先が外部 (NAS 等) に設定されている場合、
+        // 同作品が「外部参照」section にも (別 gid で) 表示されて重複するため
+        // 「保存済み」section は非表示。DL 保存先を default に戻すと再表示。
+        #if targetEnvironment(macCatalyst)
+        if externalFolders.activeDLSaveDestinationURL != nil {
+            return []
+        }
+        #endif
+        return manager.downloads.values
             .filter { $0.isComplete }
             .sorted(by: { $0.downloadDate > $1.downloadDate })
     }
@@ -304,9 +312,12 @@ struct DownloadsView: View {
                         meta: m,
                         onDismiss: { previewMeta = nil },
                         onTapPage: { page in
+                            // 田中要望 2026-04-26: external_zip 以外 (internal DL / external subfolder)
+                            // も pre-cache 経路に統一。non-animated WebP / 大容量 internal DL でも
+                            // ensureAnimatedWebpScanned 等の主処理を background 完了させて Reader 起動。
                             readerInitialPage = page
                             previewMeta = nil
-                            readerMeta = m
+                            startPreCacheAndOpenReader(meta: m, count: 0)
                         }
                     )
                     .transition(.opacity)
@@ -554,7 +565,9 @@ struct DownloadsView: View {
     private func completedRow(meta: DownloadedGallery) -> some View {
         let isHighlighted = highlightedGid == meta.gid
         Button {
-            readerMeta = meta
+            // 田中要望 2026-04-26: internal DL も pre-cache 経路に統一、ensureAnimatedWebpScanned
+            // を background 完了させてから Reader 起動 (1000+ ページ初回 scan の freeze 回避)。
+            startPreCacheAndOpenReader(meta: meta, count: 0)
         } label: {
             HStack(spacing: 10) {
                 coverThumbnail(gid: meta.gid)
@@ -846,11 +859,18 @@ struct DownloadsView: View {
     private func startPreCacheAndOpenReader(meta: DownloadedGallery, count: Int) {
         // 田中案 2026-04-26: budget = 3.5GB (cache budget 4GB の余裕分残し evict 回避) で
         // 入る限り全ページ pre-cache → Reader 起動後 SMB IO 0。
-        // (count 引数は legacy、実際は budget ベースで上書き)
+        // (count 引数は legacy)
         _ = count
         let budget: UInt64 = 3_758_096_384  // 3.5GB
-        let plan = ExternalCortexZipReader.shared.maxPagesWithinBudget(gid: meta.gid, budget: budget)
-        let target = min(max(plan.pages, 1), meta.pageCount)  // 最低 1 ページ
+
+        // external_zip → ZIP entry materialize loop。それ以外 (internal DL / external subfolder) は
+        // ensureAnimatedWebpScanned を background 完了させてから Reader 起動 (田中要望 2026-04-26)。
+        // どちらも同じ overlay UI で「ロード中」表示、main は完全解放。
+        let isExternalZip = (meta.source == "external_zip")
+        let plan = isExternalZip
+            ? ExternalCortexZipReader.shared.maxPagesWithinBudget(gid: meta.gid, budget: budget)
+            : (pages: 1, totalBytes: UInt64(0))
+        let target = max(plan.pages, 1)
 
         preCacheMeta = meta
         preCacheCurrent = 0
@@ -861,21 +881,28 @@ struct DownloadsView: View {
         let gid = meta.gid
 
         Task.detached(priority: .userInitiated) {
-            for i in 0..<target {
-                let cancelled = await MainActor.run { preCacheCancelled }
-                if cancelled { break }
-                _ = ExternalCortexZipReader.shared.materializedImageURL(gid: gid, page: i)
-                let cacheURL = ExternalCortexZipReader.shared.cachedImageURL(gid: gid, page: i)
-                let pageBytes: UInt64 = {
-                    guard let u = cacheURL,
-                          let attrs = try? FileManager.default.attributesOfItem(atPath: u.path),
-                          let s = attrs[.size] as? UInt64 else { return 0 }
-                    return s
-                }()
-                await MainActor.run {
-                    preCacheCurrent = i + 1
-                    preCacheBytesDone += pageBytes
+            if isExternalZip {
+                for i in 0..<target {
+                    let cancelled = await MainActor.run { preCacheCancelled }
+                    if cancelled { break }
+                    _ = ExternalCortexZipReader.shared.materializedImageURL(gid: gid, page: i)
+                    let cacheURL = ExternalCortexZipReader.shared.cachedImageURL(gid: gid, page: i)
+                    let pageBytes: UInt64 = {
+                        guard let u = cacheURL,
+                              let attrs = try? FileManager.default.attributesOfItem(atPath: u.path),
+                              let s = attrs[.size] as? UInt64 else { return 0 }
+                        return s
+                    }()
+                    await MainActor.run {
+                        preCacheCurrent = i + 1
+                        preCacheBytesDone += pageBytes
+                    }
                 }
+            } else {
+                // internal DL / external subfolder: ensureAnimatedWebpScanned を完了させる
+                // (1000+ ページで初回 scan 数十秒 → Reader 開いてから走ると freeze)
+                await DownloadManager.shared.ensureAnimatedWebpScanned(gid: gid)
+                await MainActor.run { preCacheCurrent = 1 }
             }
             await MainActor.run {
                 let cancelled = preCacheCancelled

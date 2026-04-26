@@ -592,14 +592,18 @@ struct LocalReaderView: View {
         //   "webp": CGImageSource + CADisplayLink 逐次再生 (Boomerang 対応、変換なし)
         //   "mp4" : 旧来 HEVC MP4 変換 + AVPlayer (HDR 全域対応、▶ 手動再生)
         let fileURL = DownloadManager.shared.imageFilePath(gid: meta.gid, page: index)
-        // 田中判断 2026-04-26 (b): external_zip cell では isAnimatedFile (CGImageSource 全体読み)
-        // を main で実行すると 30-50MB 動画 WebP の decode で choppy → metadata から確定
-        // (hasAnimatedWebp 不明なら true 仮定、BoomerangWebPView は static にも fallback)
+        // 田中判断 2026-04-26: scan 済 hasAnimatedWebp を全 source で最優先 (internal DL も含む)。
+        // CGImageSource 全体読みの isAnimatedFile を main で実行すると 30-50MB WebP で
+        // 主 bottleneck (sample 810/1503 = 54% main 占有)。post-DL scan 済なら即返却。
+        // 未 scan: external_zip は true 仮定 (metadata 由来)、internal DL は legacy fallback。
         let isAnimated: Bool = {
-            if meta.source == "external_zip" {
-                return meta.hasAnimatedWebp ?? true
+            if let scanned = meta.hasAnimatedWebp {
+                return scanned
             }
-            return AnimatedImageDecoder.isAnimatedFile(url: fileURL)
+            if meta.source == "external_zip" {
+                return true  // external_zip 未 scan は default 動画扱い (BoomerangWebPView は static fallback)
+            }
+            return AnimatedImageDecoder.isAnimatedFile(url: fileURL)  // internal DL 未 scan のみ legacy 経路
         }()
         if FileManager.default.fileExists(atPath: fileURL.path), isAnimated {
             if animPlaybackMode == "mp4" {
