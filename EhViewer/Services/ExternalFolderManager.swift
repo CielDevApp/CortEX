@@ -146,26 +146,55 @@ final class ExternalFolderManager: ObservableObject {
         // 前回登録分を一度全クリア (rescan で消えた gallery が残らないように)
         ExternalCortexZipReader.shared.unregisterAll()
 
-        let result: (galleries: [DownloadedGallery], disconnected: Set<UUID>) = await Task.detached {
+        // 田中報告 2026-04-26: Mac 再起動で SMB volume の device id 変化 → bookmark stale 化
+        // → 旧コードが throw → 「NAS 未接続」誤判定 + DL 不可。
+        // 対応: resolveAndDetectStale で URL は問題なく取得しつつ、stale 化していたら
+        // 新 bookmark data を生成して folder.bookmarkData に上書き保存。次回起動以降の再発防止。
+        let result: (galleries: [DownloadedGallery], disconnected: Set<UUID>, refreshed: [(UUID, Data)]) = await Task.detached {
             var galleries: [DownloadedGallery] = []
             var disconnected: Set<UUID> = []
+            var refreshed: [(UUID, Data)] = []
             for folder in snapshot {
                 do {
-                    let scanned: [DownloadedGallery] = try SecurityScopedBookmark.access(folder.bookmarkData) { url in
-                        return ExternalGalleryScanner.scan(rootURL: url, bookmarkID: folder.id, bookmarkData: folder.bookmarkData)
+                    let resolved = try SecurityScopedBookmark.resolveAndDetectStale(folder.bookmarkData)
+                    let effectiveBookmark = resolved.newData ?? folder.bookmarkData
+                    if let newData = resolved.newData {
+                        refreshed.append((folder.id, newData))
                     }
+                    guard resolved.url.startAccessingSecurityScopedResource() else {
+                        LogManager.shared.log("ExternalScan", "folder \(folder.displayName) startAccess failed")
+                        disconnected.insert(folder.id)
+                        continue
+                    }
+                    let scanned = ExternalGalleryScanner.scan(rootURL: resolved.url, bookmarkID: folder.id, bookmarkData: effectiveBookmark)
+                    resolved.url.stopAccessingSecurityScopedResource()
                     galleries.append(contentsOf: scanned)
                 } catch {
                     LogManager.shared.log("ExternalScan", "folder \(folder.displayName) scan failed: \(error)")
                     disconnected.insert(folder.id)
                 }
             }
-            return (galleries, disconnected)
+            return (galleries, disconnected, refreshed)
         }.value
         // @Published 更新は main actor で
         externalGalleries = result.galleries
         disconnectedFolderIDs = result.disconnected
         lastScanAt = Date()
+        // stale から refresh された bookmark を folders に反映 + 永続化
+        if !result.refreshed.isEmpty {
+            for (id, newData) in result.refreshed {
+                if let idx = folders.firstIndex(where: { $0.id == id }) {
+                    folders[idx] = ExternalFolder(
+                        id: folders[idx].id,
+                        displayName: folders[idx].displayName,
+                        bookmarkData: newData,
+                        addedAt: folders[idx].addedAt
+                    )
+                }
+            }
+            save()
+            LogManager.shared.log("ExternalScan", "refreshed \(result.refreshed.count) stale bookmarks")
+        }
         LogManager.shared.log("ExternalScan", "rescanAll done, total \(result.galleries.count) galleries (disconnected=\(result.disconnected.count))")
 
         // 田中要望 2026-04-26: scan 後に cover (page 0) を background sequential pre-warm。
@@ -269,7 +298,15 @@ final class ExternalFolderManager: ObservableObject {
             return  // 未設定 = デフォルト使用
         }
         do {
-            let url = try SecurityScopedBookmark.resolve(data)
+            // 田中報告 2026-04-26: Mac 再起動で bookmark stale 化する地雷対策。
+            // resolveAndDetectStale で stale 化していたら新 bookmark data を userDefaults に
+            // 上書き保存して次回起動以降の再発防止。
+            let resolved = try SecurityScopedBookmark.resolveAndDetectStale(data)
+            if let newData = resolved.newData {
+                userDefaults.set(newData, forKey: dlSaveDestKey)
+                LogManager.shared.log("DLSaveDest", "stale bookmark refreshed for \(resolved.url.path)")
+            }
+            let url = resolved.url
             if url.startAccessingSecurityScopedResource() {
                 activeDLSaveDestinationURL = url
                 dlSaveDestinationDisplayPath = url.path
