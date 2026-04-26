@@ -604,12 +604,8 @@ struct DownloadsView: View {
             readerMeta = meta
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: "externaldrive.fill")
-                    .font(.system(size: 24))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 60, height: 80)
-                    .background(Color.secondary.opacity(0.1))
-                    .cornerRadius(4)
+                // 田中要望 2026-04-26: サムネ表示 (cover.* or page_0001 を ZIP から materialize)
+                coverThumbnail(gid: meta.gid)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(meta.title)
                         .font(.subheadline)
@@ -633,6 +629,16 @@ struct DownloadsView: View {
             }
         }
         .padding(.vertical, 4)
+        // 田中要望 2026-04-26: 長押し (Mac 右クリック) で プレビュー
+        // 「ページ詳細」は外部参照 ZIP では元の E-Hentai/nhentai gid/token が無いため
+        // server fetch が「削除作品」誤判定するので drop (田中判断 2026-04-26)
+        .contextMenu {
+            Button {
+                previewMeta = meta
+            } label: {
+                Label("プレビュー表示", systemImage: "rectangle.grid.3x2")
+            }
+        }
     }
 
     // MARK: - 未完了の行
