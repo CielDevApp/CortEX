@@ -66,6 +66,11 @@ struct SettingsView: View {
     @State private var showCortexActivation = false
     @State private var cortexSearchURL: URL?
 
+    // Phase E1 (2026-04-26): 外部参照フォルダ (Mac Catalyst のみ実機能、iPhone は無表示)
+    @ObservedObject private var externalFolders = ExternalFolderManager.shared
+    @State private var showExternalFolderPicker = false
+    @State private var externalFolderError: String?
+
     private var maxMB: Int { ImageCache.shared.maxDiskBytes / 1_048_576 }
     private var isOverLimit: Bool { readerCacheMB > maxMB }
 
@@ -439,6 +444,54 @@ struct SettingsView: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 }
 
+                // Phase E1 (2026-04-26): 外部参照フォルダ (Mac Catalyst のみ表示)
+                #if targetEnvironment(macCatalyst)
+                Section("外部参照フォルダ (Mac)") {
+                    if externalFolders.folders.isEmpty {
+                        Text("登録なし")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        ForEach(externalFolders.folders) { folder in
+                            HStack(spacing: 8) {
+                                Image(systemName: "externaldrive.fill")
+                                    .foregroundStyle(.secondary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(folder.displayName)
+                                        .font(.subheadline)
+                                    Text(folder.addedAt, style: .date)
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                // 田中判断 2026-04-26: Mac Catalyst の Form 内で swipeActions が
+                                // 反応しないケースに対応、明示的な「ゴミ箱」ボタンを追加 (案 b)。
+                                // swipeActions も併存させ、iPhone (Phase E2) でも動作するよう保持。
+                                Button(role: .destructive) {
+                                    externalFolders.remove(id: folder.id)
+                                } label: {
+                                    Image(systemName: "trash")
+                                        .foregroundStyle(.red)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .swipeActions(edge: .trailing) {
+                                Button(role: .destructive) {
+                                    externalFolders.remove(id: folder.id)
+                                } label: {
+                                    Label("削除", systemImage: "trash")
+                                }
+                            }
+                        }
+                    }
+                    Button {
+                        showExternalFolderPicker = true
+                    } label: {
+                        Label("フォルダを追加...", systemImage: "plus.circle")
+                    }
+                    Text("NAS 等の外部フォルダを参照型でライブラリに追加。実体コピーせず、Cort:EX 側ストレージは消費しません。")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                #endif
+
                 // 8. ベンチマーク
                 Section("ベンチマーク") {
                     Button("ベンチマーク実行") { showBenchmark = true }
@@ -597,6 +650,31 @@ struct SettingsView: View {
             if case .success(let urls) = result, let url = urls.first {
                 phoenixImportCount = FavoritesBackup.importBackup(from: url)
             }
+        }
+        // Phase E1: 外部参照フォルダ追加用 picker (Mac Catalyst のみ動作)
+        .fileImporter(
+            isPresented: $showExternalFolderPicker,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                guard let url = urls.first else { return }
+                let accessing = url.startAccessingSecurityScopedResource()
+                defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+                do {
+                    try externalFolders.add(url: url)
+                } catch {
+                    externalFolderError = "フォルダ登録失敗: \(error)"
+                }
+            case .failure(let error):
+                externalFolderError = "選択失敗: \(error.localizedDescription)"
+            }
+        }
+        .alert("外部フォルダ", isPresented: .constant(externalFolderError != nil)) {
+            Button("OK") { externalFolderError = nil }
+        } message: {
+            Text(externalFolderError ?? "")
         }
     }
 

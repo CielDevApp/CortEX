@@ -17,6 +17,14 @@ final class ExternalFolderManager: ObservableObject {
     /// 登録済みの外部フォルダリスト (UI が ForEach で表示する source of truth)。
     @Published private(set) var folders: [ExternalFolder] = []
 
+    /// 全外部フォルダを scan した結果の作品リスト (DownloadedGallery 形式、source = "external")。
+    /// 起動時 + folder 追加/削除時 + 明示 rescanAll() で更新。
+    /// DownloadsView の「外部参照」Section が ForEach で表示する source of truth。
+    @Published private(set) var externalGalleries: [DownloadedGallery] = []
+
+    /// 最終 scan 日時 (UI で「最終更新」表示用、nil = 未 scan)。
+    @Published private(set) var lastScanAt: Date?
+
     private let storageKey = "com.kanayayuutou.cortex.externalFolders"
     private let userDefaults: UserDefaults
 
@@ -24,6 +32,8 @@ final class ExternalFolderManager: ObservableObject {
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
         load()
+        // 起動時自動 scan (background、main thread をブロックしない)
+        Task.detached { [weak self] in await self?.rescanAll() }
     }
 
     // MARK: - 登録 / 削除
@@ -41,12 +51,45 @@ final class ExternalFolderManager: ObservableObject {
         )
         folders.append(folder)
         save()
+        // 追加 folder を即 scan して externalGalleries に反映
+        Task { await rescanAll() }
     }
 
     /// 指定 ID の登録を削除。bookmark Data を捨てるだけで実フォルダには触らない。
     func remove(id: UUID) {
         folders.removeAll { $0.id == id }
         save()
+        // 削除した folder の作品も externalGalleries から除外
+        Task { await rescanAll() }
+    }
+
+    // MARK: - 全フォルダ scan
+
+    /// 登録済みの全外部フォルダを scan して externalGalleries に flatten。
+    /// SMB 越し IO で main thread が blocked しないよう、scan 本体は detached task で実行。
+    /// @Published の代入のみ main actor に戻して行う。
+    /// failure は個別 folder 単位で吸収 (1 folder の失敗で全体停止しない)。
+    func rescanAll() async {
+        // main actor で folders snapshot 取得 (Sendable な ExternalFolder は detached に渡せる)
+        let snapshot = folders
+        let aggregated: [DownloadedGallery] = await Task.detached {
+            var result: [DownloadedGallery] = []
+            for folder in snapshot {
+                do {
+                    let scanned: [DownloadedGallery] = try SecurityScopedBookmark.access(folder.bookmarkData) { url in
+                        return ExternalGalleryScanner.scan(rootURL: url, bookmarkID: folder.id)
+                    }
+                    result.append(contentsOf: scanned)
+                } catch {
+                    LogManager.shared.log("ExternalScan", "folder \(folder.displayName) scan failed: \(error)")
+                }
+            }
+            return result
+        }.value
+        // @Published 更新は main actor で
+        externalGalleries = aggregated
+        lastScanAt = Date()
+        LogManager.shared.log("ExternalScan", "rescanAll done, total \(aggregated.count) galleries")
     }
 
     // MARK: - access (短命)
