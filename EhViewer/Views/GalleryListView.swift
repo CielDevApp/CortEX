@@ -42,6 +42,7 @@ struct GalleryListView: View {
     @State private var searchText = ""
     @State private var tabBarHidden = false
     @StateObject private var navPathBox = NavigationPathBox()
+    @AppStorage("galleryListLayout") private var galleryListLayout: String = "grid"
 
     private var currentVM: GalleryListViewModel {
         switch selectedTab {
@@ -105,6 +106,17 @@ struct GalleryListView: View {
                             Image(systemName: "person.crop.circle")
                         }
                     }
+                }
+                ToolbarItem(placement: .automatic) {
+                    #if canImport(UIKit) && !targetEnvironment(macCatalyst)
+                    if UIDevice.current.userInterfaceIdiom == .pad {
+                        Button {
+                            galleryListLayout = (galleryListLayout == "grid") ? "list" : "grid"
+                        } label: {
+                            Image(systemName: galleryListLayout == "grid" ? "list.bullet" : "square.grid.2x2")
+                        }
+                    }
+                    #endif
                 }
             }
             .searchable(text: $searchText, prompt: selectedSource == .nhentai ? "nhentai検索..." : "検索...")
@@ -303,11 +315,12 @@ struct GalleryScrollList: View {
     var onScrollDown: (() -> Void)?
     var onScrollUp: (() -> Void)?
     @Environment(\.horizontalSizeClass) private var hSizeClass
+    @AppStorage("galleryListLayout") private var galleryListLayout: String = "grid"
 
     /// Phase G-A iPad-only パイロット (2026-04-26): iPad のみ Grid、Mac/iPhone は既存 List。
     private var isIPadGrid: Bool {
         #if canImport(UIKit) && !targetEnvironment(macCatalyst)
-        return UIDevice.current.userInterfaceIdiom == .pad
+        return UIDevice.current.userInterfaceIdiom == .pad && galleryListLayout == "grid"
         #else
         return false
         #endif
@@ -738,10 +751,11 @@ struct NhentaiScrollList: View {
     var onScrollDown: (() -> Void)?
     var onScrollUp: (() -> Void)?
     @Environment(\.horizontalSizeClass) private var hSizeClass
+    @AppStorage("galleryListLayout") private var galleryListLayout: String = "grid"
 
     private var isIPadGrid: Bool {
         #if canImport(UIKit) && !targetEnvironment(macCatalyst)
-        return UIDevice.current.userInterfaceIdiom == .pad
+        return UIDevice.current.userInterfaceIdiom == .pad && galleryListLayout == "grid"
         #else
         return false
         #endif
