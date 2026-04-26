@@ -206,6 +206,11 @@ final class ImageCache {
         memoryCache.removeAllObjects()
     }
 
+    /// 田中要望 2026-04-26: メモリキャッシュのみ flush (disk は残す)、reader close 時の RAM 開放用。
+    func purgeMemoryCache() {
+        memoryCache.removeAllObjects()
+    }
+
     /// サムネキャッシュを削除
     func clearThumbsCache() {
         clearDir(thumbsCacheDir)

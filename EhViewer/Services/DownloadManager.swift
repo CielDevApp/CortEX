@@ -80,6 +80,11 @@ class DownloadManager: ObservableObject {
         c.countLimit = 100
         return c
     }()
+
+    /// 田中要望 2026-04-26: reader close 時に coverCache を flush する API。
+    func flushCoverMemoryCache() {
+        coverCache.removeAllObjects()
+    }
     /// gid ごとの DL 済みバイト累積（ページ完了単位。残り容量推定の平均計算用）
     private var downloadedBytes: [Int: Int64] = [:]
     /// gid ごとの DL 開始時点の on-disk バイト数（リアルタイム表示の基準値）
@@ -210,6 +215,7 @@ class DownloadManager: ObservableObject {
         loadAllMetadata()
         repairBrokenDownloads()
         cleanupTrashDownloads()
+        cleanupOrphanNasSubdirs()  // 田中報告 2026-04-26: 復活防止、resumeIncompleteDownloads より先に実行
         // Live Activityクリーンアップ→ダウンロード再開を順序保証
         Task {
             await cleanupStaleLiveActivities()
@@ -239,8 +245,28 @@ class DownloadManager: ObservableObject {
 
     /// 未完了ダウンロードを自動再開（キャンセル済みはスキップ）
     private func resumeIncompleteDownloads() async {
+        // 田中 emergency fix 2026-04-26: NAS に対応 .cortex がある gid は phantom resume 阻止
+        let cortexBaseNames: Set<String> = {
+            #if targetEnvironment(macCatalyst)
+            guard ExternalFolderManager.shared.activeDLSaveDestinationURL != nil else { return [] }
+            guard let entries = try? fileManager.contentsOfDirectory(at: baseDirectory, includingPropertiesForKeys: nil) else { return [] }
+            return Set(entries.filter { $0.pathExtension.lowercased() == "cortex" }
+                              .map { $0.deletingPathExtension().lastPathComponent })
+            #else
+            return []
+            #endif
+        }()
         let incompleteItems = downloads.filter {
-            !$0.value.isComplete && !$0.value.token.isEmpty && $0.value.isCancelled != true
+            guard !$0.value.isComplete && !$0.value.token.isEmpty && $0.value.isCancelled != true else { return false }
+            // .cortex 名 = title.prefix(50) (GalleryExporter と整合)
+            let safeName = String($0.value.title.replacingOccurrences(of: "/", with: "_").prefix(50))
+            if cortexBaseNames.contains(safeName) {
+                LogManager.shared.log("Download", "skip phantom resume gid=\($0.key) title='\(safeName)' (matching .cortex on NAS)")
+                // downloads dict からも除去 (UI からも消す)
+                downloads.removeValue(forKey: $0.key)
+                return false
+            }
+            return true
         }
         if incompleteItems.isEmpty { return }
         LogManager.shared.log("Download", "found \(incompleteItems.count) incomplete downloads to resume")
@@ -407,8 +433,53 @@ class DownloadManager: ObservableObject {
             downloads[gid] = nil
         }
 
-        // 6. 外部参照 rescan で新 .cortex を Library に表示
+        // 6. NAS の旧 subdir 形式残骸を削除 (next launch で auto-resume されるのを防ぐ)
+        let oldNasSubdir = baseDirectory.appendingPathComponent("\(gid)", isDirectory: true)
+        if fileManager.fileExists(atPath: oldNasSubdir.path) {
+            try? fileManager.removeItem(at: oldNasSubdir)
+            LogManager.shared.log("DLStaging", "removed old NAS subdir gid=\(gid) (orphan after .cortex move)")
+        }
+
+        // 7. 外部参照 rescan で新 .cortex を Library に表示
         await ExternalFolderManager.shared.rescanAll()
+    }
+
+    /// 田中報告 2026-04-26 fix: 起動時 NAS folder の orphan subdir cleanup。
+    /// `<gid>/` subdir があり、対応する `<title>.cortex` が同 folder にあれば
+    /// その subdir は staging→ZIP move 時の cleanup 漏れと判定して削除。
+    /// resumeIncompleteDownloads より先に呼ぶ必要あり (= init 中に呼ぶ)。
+    func cleanupOrphanNasSubdirs() {
+        #if targetEnvironment(macCatalyst)
+        guard ExternalFolderManager.shared.activeDLSaveDestinationURL != nil else { return }
+        guard let entries = try? fileManager.contentsOfDirectory(at: baseDirectory, includingPropertiesForKeys: nil) else { return }
+        let cortexBaseNames = Set(entries
+            .filter { $0.pathExtension.lowercased() == "cortex" }
+            .map { $0.deletingPathExtension().lastPathComponent })
+        guard !cortexBaseNames.isEmpty else { return }
+        var cleaned = 0
+        for entry in entries {
+            var isDir: ObjCBool = false
+            let exists = fileManager.fileExists(atPath: entry.path, isDirectory: &isDir)
+            guard exists, isDir.boolValue, Int(entry.lastPathComponent) != nil else { continue }
+            // この subdir の metadata.json から title 取得
+            let metaURL = entry.appendingPathComponent("metadata.json")
+            guard let data = try? Data(contentsOf: metaURL),
+                  let meta = try? JSONDecoder().decode(DownloadedGallery.self, from: data) else { continue }
+            let safeName = String(meta.title.replacingOccurrences(of: "/", with: "_").prefix(50))
+            if cortexBaseNames.contains(safeName) {
+                try? fileManager.removeItem(at: entry)
+                cleaned += 1
+                LogManager.shared.log("DLStaging", "startup cleanup: removed orphan NAS subdir \(entry.lastPathComponent) (matching .cortex=\(safeName))")
+                // downloads dict からも除去 (loadAllMetadata で読み込まれてた場合)
+                if let gid = Int(entry.lastPathComponent) {
+                    downloads.removeValue(forKey: gid)
+                }
+            }
+        }
+        if cleaned > 0 {
+            LogManager.shared.log("DLStaging", "startup cleanup done: \(cleaned) orphan subdirs removed")
+        }
+        #endif
     }
 
     // MARK: - メタデータ
