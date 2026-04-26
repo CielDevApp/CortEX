@@ -21,11 +21,16 @@ enum ExternalGalleryScanner {
     /// access scope は caller 側 (ExternalFolderManager.accessFolder) で確保された前提。
     /// 失敗時は空配列を返し、ログのみ出力 (個別 gallery scan 失敗で全体停止しない方針)。
     ///
+    /// 検出対象 (Phase E1.A 拡張):
+    /// 1. サブフォルダ (= 1 作品、画像ファイル群を中に持つ前提)
+    /// 2. `.cortex` ZIP ファイル (= 1 作品、ZIP 内 metadata.json を読む、Reader は ZIP streaming)
+    ///
     /// - Parameters:
     ///   - rootURL: scan 対象のフォルダ (security-scoped access 中前提)
     ///   - bookmarkID: 内部キャッシュ用 ID (`.cortex_managed` 無し時の metadata 退避先)
-    /// - Returns: 各サブフォルダから生成された DownloadedGallery 配列 (空可)
-    static func scan(rootURL: URL, bookmarkID: UUID) -> [DownloadedGallery] {
+    ///   - bookmarkData: Reader 経路から再 access するため ExternalCortexZipReader.register に渡す
+    /// - Returns: 各サブフォルダ + .cortex から生成された DownloadedGallery 配列 (空可)
+    static func scan(rootURL: URL, bookmarkID: UUID, bookmarkData: Data) -> [DownloadedGallery] {
         let fm = FileManager.default
         let isManaged = fm.fileExists(atPath: rootURL.appendingPathComponent(".cortex_managed").path)
 
@@ -39,15 +44,87 @@ enum ExternalGalleryScanner {
         }
 
         var galleries: [DownloadedGallery] = []
+        var subfolderCount = 0
+        var zipCount = 0
         for entry in entries {
             var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: entry.path, isDirectory: &isDir), isDir.boolValue else { continue }
-            if let g = scanGalleryFolder(folderURL: entry, isManagedRoot: isManaged, bookmarkID: bookmarkID) {
-                galleries.append(g)
+            let exists = fm.fileExists(atPath: entry.path, isDirectory: &isDir)
+            guard exists else { continue }
+            if isDir.boolValue {
+                if let g = scanGalleryFolder(folderURL: entry, isManagedRoot: isManaged, bookmarkID: bookmarkID) {
+                    galleries.append(g)
+                    subfolderCount += 1
+                }
+            } else if entry.pathExtension.lowercased() == "cortex" {
+                if let g = scanCortexZip(zipURL: entry, bookmarkData: bookmarkData) {
+                    galleries.append(g)
+                    zipCount += 1
+                }
             }
         }
-        LogManager.shared.log("ExternalScan", "rootURL=\(rootURL.lastPathComponent) found \(galleries.count) galleries (managed=\(isManaged))")
+        LogManager.shared.log("ExternalScan", "rootURL=\(rootURL.lastPathComponent) found \(galleries.count) galleries (subfolder=\(subfolderCount), .cortex=\(zipCount), managed=\(isManaged))")
         return galleries
+    }
+
+    // MARK: - .cortex ZIP scan (Phase E1.A)
+
+    /// 1 つの .cortex ZIP を 1 作品として認識。ZIP TOC から metadata.json を抽出して
+    /// DownloadedGallery を生成、ExternalCortexZipReader に TOC を登録 (Reader 経路から再利用)。
+    private static func scanCortexZip(zipURL: URL, bookmarkData: Data) -> DownloadedGallery? {
+        guard let toc = ExternalCortexZipReader.readTOC(zipPath: zipURL) else {
+            LogManager.shared.log("ExternalScan", "TOC read failed: \(zipURL.lastPathComponent)")
+            return nil
+        }
+
+        // metadata.json を ZIP から取得 (.cortex 形式は metadata.json + page_NNNN + cover が標準)
+        var meta: DownloadedGallery?
+        if let metaEntry = toc["metadata.json"], let metaData = ExternalCortexZipReader.extractEntry(zipPath: zipURL, entry: metaEntry) {
+            meta = try? JSONDecoder().decode(DownloadedGallery.self, from: metaData)
+        }
+
+        // metadata.json 無し or 解読失敗時は ZIP file 名から自動生成
+        if meta == nil {
+            let title = (zipURL.lastPathComponent as NSString).deletingPathExtension
+            let imageEntries = toc.keys.filter { ($0 as NSString).lastPathComponent.lowercased().hasPrefix("page_") }.sorted()
+            guard !imageEntries.isEmpty else {
+                LogManager.shared.log("ExternalScan", "no images in zip: \(zipURL.lastPathComponent)")
+                return nil
+            }
+            let gid = gidFromPath(zipURL.path)
+            meta = DownloadedGallery(
+                gid: gid, token: "external_zip", title: title, coverFileName: nil,
+                pageCount: imageEntries.count, downloadDate: Date(), isComplete: true,
+                downloadedPages: Array(0..<imageEntries.count), source: "external_zip",
+                isCancelled: nil, hasAnimatedWebp: nil, readerModeOverride: nil, tags: nil
+            )
+        } else {
+            // metadata.json から得た gid は元の DL 時の gid (E-Hentai 正数 / nhentai 負数)。
+            // 外部 ZIP として参照する場合、内部 DL gid と衝突する可能性があるため
+            // namespace を分離 (Q-3 案 1: Int.max - hash(zipPath))
+            let newGid = gidFromPath(zipURL.path)
+            meta = DownloadedGallery(
+                gid: newGid,
+                token: meta!.token,
+                title: meta!.title,
+                coverFileName: meta!.coverFileName,
+                pageCount: meta!.pageCount,
+                downloadDate: meta!.downloadDate,
+                isComplete: true,
+                downloadedPages: meta!.downloadedPages,
+                source: "external_zip",
+                isCancelled: nil,
+                hasAnimatedWebp: meta!.hasAnimatedWebp,
+                readerModeOverride: nil,
+                tags: meta!.tags
+            )
+        }
+
+        guard let final = meta else { return nil }
+
+        // Reader 経路用に TOC を ExternalCortexZipReader に登録
+        ExternalCortexZipReader.shared.register(gid: final.gid, bookmarkData: bookmarkData, zipPath: zipURL, toc: toc)
+
+        return final
     }
 
     // MARK: - 1 サブフォルダの scan
