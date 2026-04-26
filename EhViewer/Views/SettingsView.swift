@@ -71,6 +71,10 @@ struct SettingsView: View {
     @State private var showExternalFolderPicker = false
     @State private var externalFolderError: String?
 
+    // Phase E1 Step 9 (2026-04-26): Mac DL 保存先選択
+    @State private var showDLSaveDestPicker = false
+    @State private var showDLSaveDestRestart = false
+
     private var maxMB: Int { ImageCache.shared.maxDiskBytes / 1_048_576 }
     private var isOverLimit: Bool { readerCacheMB > maxMB }
 
@@ -444,6 +448,47 @@ struct SettingsView: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 }
 
+                // Phase E1 Step 9 (2026-04-26): DL 保存先選択 (Mac Catalyst のみ)
+                #if targetEnvironment(macCatalyst)
+                Section("DL 保存先 (Mac)") {
+                    HStack(spacing: 8) {
+                        Image(systemName: "tray.and.arrow.down.fill")
+                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            if let path = externalFolders.dlSaveDestinationDisplayPath {
+                                Text(path)
+                                    .font(.caption.monospaced())
+                                    .lineLimit(2)
+                                if externalFolders.dlSaveDestinationStale {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "exclamationmark.triangle.fill")
+                                            .foregroundStyle(.orange)
+                                        Text("NAS 未接続、デフォルトに fallback 中")
+                                            .font(.caption2).foregroundStyle(.orange)
+                                    }
+                                }
+                            } else {
+                                Text("デフォルト (~/Documents/EhViewer/downloads)")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    Button {
+                        showDLSaveDestPicker = true
+                    } label: {
+                        Label("変更...", systemImage: "folder.badge.gearshape")
+                    }
+                    if externalFolders.dlSaveDestinationDisplayPath != nil {
+                        Button("デフォルトに戻す", role: .destructive) {
+                            externalFolders.clearDLSaveDestination()
+                            showDLSaveDestRestart = true
+                        }
+                    }
+                    Text("新規 DL のみ新パスへ。既存 DL は旧パスに残ります (移動なし)。設定変更後はアプリ再起動で反映。")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                #endif
+
                 // Phase E1 (2026-04-26): 外部参照フォルダ (Mac Catalyst のみ表示)
                 #if targetEnvironment(macCatalyst)
                 Section("外部参照フォルダ (Mac)") {
@@ -675,6 +720,32 @@ struct SettingsView: View {
             Button("OK") { externalFolderError = nil }
         } message: {
             Text(externalFolderError ?? "")
+        }
+        // Phase E1 Step 9: DL 保存先 picker (Mac Catalyst のみ動作)
+        .fileImporter(
+            isPresented: $showDLSaveDestPicker,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                guard let url = urls.first else { return }
+                let accessing = url.startAccessingSecurityScopedResource()
+                defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+                do {
+                    try externalFolders.setDLSaveDestination(url: url)
+                    showDLSaveDestRestart = true
+                } catch {
+                    externalFolderError = "DL 保存先設定失敗: \(error)"
+                }
+            case .failure(let error):
+                externalFolderError = "選択失敗: \(error.localizedDescription)"
+            }
+        }
+        .alert("DL 保存先 変更", isPresented: $showDLSaveDestRestart) {
+            Button("OK") { showDLSaveDestRestart = false }
+        } message: {
+            Text("変更を反映するにはアプリを再起動してください (Cmd+Q → 再 open)。")
         }
     }
 
