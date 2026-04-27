@@ -530,7 +530,15 @@ enum AnimatedImageDecoder {
     }
 
     /// URL 版（ディスク mmap 経由、メモリ負荷軽い）
+    /// 田中要望 2026-04-27: WebP は header 32 バイトで判定し ImageIO 経由を回避。
+    ///   CGImageSourceCreateWithURL + GetCount は huge animated WebP (10MB+) で
+    ///   全 frame 走査され main thread 5-24 秒占有 → ジャンプ後フリーズの根本原因。
     static func isAnimatedFile(url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        if ext == "webp" {
+            return WebPAnimationDetector.isAnimatedWebP(url: url)
+        }
+        // GIF / その他は CGImageSource 経由 (small file 想定、コストは無視できる)
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return false }
         return CGImageSourceGetCount(src) > 1
     }
