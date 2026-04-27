@@ -945,11 +945,17 @@ struct DownloadsView: View {
     // main thread の SMB IO ブロックが発生しない。
 
     private func startPreCacheAndOpenReader(meta: DownloadedGallery, count: Int) {
-        // 田中案 2026-04-26: budget = 3.5GB (cache budget 4GB の余裕分残し evict 回避) で
-        // 入る限り全ページ pre-cache → Reader 起動後 SMB IO 0。
-        // (count 引数は legacy)
+        // 田中要望 2026-04-27: 1000+ ページ作品で precache が 401 ページで止まる件の修正。
+        //   旧 budget = 3.5GB 上限 → 動画 WebP (avg ~9MB/page) で ~388 page しか入らず
+        //   1112 page 作品 (UnityNay 等) の最後まで届かない。
+        //   cache budget 自体は 8GB なので、precache budget を cache budget に合わせる。
+        //   SSD 残量も DL 不要 (cache に書く分なので NAS 経由) だが念のため空き 4GB
+        //   未満なら precache を抑制する (動的 budget)。
         _ = count
-        let budget: UInt64 = 3_758_096_384  // 3.5GB
+        let dmFree = DownloadManager.shared.ssdFreeBytes()
+        let cacheBudget: UInt64 = 8_589_934_592  // 8GB (ExternalCortexZipReader と同値)
+        let safeFromSSD: UInt64 = max(0, dmFree > 4_294_967_296 ? dmFree - 4_294_967_296 : 0)  // SSD free - 4GB headroom
+        let budget: UInt64 = min(cacheBudget, max(safeFromSSD, 1_073_741_824))  // 最低 1GB は確保
 
         // external_zip → ZIP entry materialize loop。それ以外 (internal DL / external subfolder) は
         // ensureAnimatedWebpScanned を background 完了させてから Reader 起動 (田中要望 2026-04-26)。

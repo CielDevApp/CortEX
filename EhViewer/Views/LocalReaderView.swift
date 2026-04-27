@@ -489,8 +489,11 @@ struct LocalReaderView: View {
                         // scrolledID と実スクロール位置が乖離するため、scrolledID 直接代入に統一。
                         let target = page - 1
                         if abs(target - currentIndex) >= jumpThreshold {
+                            // 田中要望 2026-04-27: 大ジャンプは animation 無し + processPage skip
+                            // sliderJumpTarget 設定で onPageAppear の中間 cell processPage 抑制
+                            sliderJumpTarget = target
                             startJumpPreCache(target: target) {
-                                withAnimation { scrolledID = target }
+                                scrolledID = target  // 即値、アニメ無し
                             }
                         } else {
                             withAnimation { scrolledID = target }
@@ -511,11 +514,15 @@ struct LocalReaderView: View {
                     // background pre-cache + loading overlay 表示。
                     if abs(target - currentIndex) >= jumpThreshold {
                         startJumpPreCache(target: target) {
-                            withAnimation { scrolledID = target }
+                            // 田中要望 2026-04-27: 大ジャンプは animation 切って即時 scroll。
+                            // withAnimation 経由だと ScrollView が中間 600+ cells を順次 render
+                            // しようとして 10 秒級フリーズの原因になる。即値スクロールなら
+                            // target 周辺数 cell だけ render すれば済む。
+                            scrolledID = target
                         }
                         return
                     }
-                    // scrolledID 代入で .scrollPosition が自動スクロール + currentIndex 更新
+                    // 小幅 jump (< jumpThreshold) はアニメーション維持で滑らかに
                     withAnimation {
                         scrolledID = target
                     }
