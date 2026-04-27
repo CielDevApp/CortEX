@@ -51,9 +51,14 @@ nonisolated enum GalleryExporter {
     /// 失敗時は throws、成功時は .cortex の URL を返す。
     static func exportAsZipStreaming(
         gid: Int,
-        progress: ((_ completed: Int, _ total: Int) -> Void)? = nil
+        progress: ((_ completed: Int, _ total: Int) -> Void)? = nil,
+        destOverride: URL? = nil
     ) throws -> URL {
-        LogManager.shared.log("Export", "exportAsZipStreaming ENTER gid=\(gid) mainThread=\(Thread.isMainThread)")
+        // 田中要望 2026-04-27: destOverride で NAS final path を直接指定可能。
+        //   旧来の tmp 経由 → NAS copy フローは SSD ピーク使用量が staging × 2 となり
+        //   大容量作品 (~10GB) で ENOSPC 発生。NAS 直接 stream で SSD 倍取り解消。
+        //   nil 時は従来通り tmp に書く (Share Sheet などの export 用)。
+        LogManager.shared.log("Export", "exportAsZipStreaming ENTER gid=\(gid) mainThread=\(Thread.isMainThread) directNAS=\(destOverride != nil)")
         cleanupOldExportFiles()
 
         let dm = DownloadManager.shared
@@ -83,11 +88,16 @@ nonisolated enum GalleryExporter {
                           userInfo: [NSLocalizedDescriptionKey: "ギャラリーにファイルがありません"])
         }
 
-        // 出力先 .cortex（temporaryDirectory）
-        let exportDir = FileManager.default.temporaryDirectory
-        let title = dm.downloads[gid]?.title ?? "\(gid)"
-        let safeName = title.replacingOccurrences(of: "/", with: "_").prefix(50)
-        let destURL = exportDir.appendingPathComponent("\(safeName).cortex")
+        // 出力先 .cortex
+        let destURL: URL
+        if let override = destOverride {
+            destURL = override
+        } else {
+            let exportDir = FileManager.default.temporaryDirectory
+            let title = dm.downloads[gid]?.title ?? "\(gid)"
+            let safeName = title.replacingOccurrences(of: "/", with: "_").prefix(50)
+            destURL = exportDir.appendingPathComponent("\(safeName).cortex")
+        }
         try? FileManager.default.removeItem(at: destURL)
 
         let t0 = Date()
