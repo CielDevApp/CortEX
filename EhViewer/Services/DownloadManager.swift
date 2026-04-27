@@ -1142,8 +1142,10 @@ class DownloadManager: ObservableObject {
 
         // 田中要望 2026-04-26: 完了後 staging → NAS bulk move (background)
         // 田中要望 2026-04-27: failed page が残っていても 1 枚以上 DL 済みなら partial finalize
+        // 田中要望 2026-04-27 (2): cancel/delete された gid は finalize しない (zombie 防止)
         let hasAnyDownloadedNh = state.downloadedSet.count > 0
-        if hasAnyDownloadedNh && isStaging(gid: gid) {
+        let wasCancelledNh = activeDownloads[gid]?.isCancelled == true || (downloads[gid]?.isCancelled ?? false) || recentlyDeletedGids.contains(gid)
+        if hasAnyDownloadedNh && isStaging(gid: gid) && !wasCancelledNh {
             if !completed {
                 let missing = (0..<totalPages).filter { !state.downloadedSet.contains($0) }.map { $0 + 1 }
                 LogManager.shared.log("Download", "nhentai gid=\(gid) partial finalize: \(state.downloadedSet.count)/\(totalPages) (missing=\(missing.prefix(20))\(missing.count > 20 ? "..." : ""))")
@@ -1151,6 +1153,8 @@ class DownloadManager: ObservableObject {
             Task.detached(priority: .userInitiated) { [weak self] in
                 await self?.moveStagingToFinalDest(gid: gid)
             }
+        } else if wasCancelledNh {
+            LogManager.shared.log("Download", "nhentai gid=\(gid) finalize SKIPPED (cancelled/deleted)")
         }
     }
 
@@ -1218,6 +1222,15 @@ class DownloadManager: ObservableObject {
         let bg = BackgroundDownloadManager.shared
         bg.cancelAllTasks(for: gid, session: bg.nhSession)
         bg.cancelAllTasks(for: gid, session: bg.ehSession)
+        // 田中要望 2026-04-27: cancel = staging も全消去 (partial finalize 防止 + SSD 即解放)
+        // 中止 / 削除が動かない bug の root cause: cancel しても staging が残り、
+        // performDownload 末端で partial finalize が走って .cortex 化されてしまう。
+        let stagingDir = dlStagingBase.appendingPathComponent("\(gid)")
+        if fileManager.fileExists(atPath: stagingDir.path) {
+            try? fileManager.removeItem(at: stagingDir)
+            LogManager.shared.log("Download", "cancelDownload: staging removed gid=\(gid)")
+        }
+        removeStaging(gid: gid)
     }
 
     /// 未完了ダウンロードをすべて手動再開（キャンセル済みも含めてリセット）
@@ -1333,10 +1346,28 @@ class DownloadManager: ObservableObject {
         endLiveActivity(gid: gid, success: false)
         // in-flight autoSavePage Task が saveMetadata で復活させないようブロック
         recentlyDeletedGids.insert(gid)
-        let dir = galleryDirectory(gid: gid)
-        try? fileManager.removeItem(at: dir)
+        // 田中要望 2026-04-27: 削除も中止も動くようにする
+        //   - galleryDirectory はファイル参照中の状態によっては staging or baseDirectory を返す
+        //   - どちらにも残骸が出るので両方明示的に消す (partial finalize 防止)
+        let mainDir = galleryDirectory(gid: gid)
+        try? fileManager.removeItem(at: mainDir)
+        let stagingDir = dlStagingBase.appendingPathComponent("\(gid)")
+        if fileManager.fileExists(atPath: stagingDir.path) {
+            try? fileManager.removeItem(at: stagingDir)
+            LogManager.shared.log("Download", "deleteDownload: staging removed gid=\(gid)")
+        }
+        let baseDir = baseDirectory.appendingPathComponent("\(gid)", isDirectory: true)
+        if fileManager.fileExists(atPath: baseDir.path) {
+            try? fileManager.removeItem(at: baseDir)
+            LogManager.shared.log("Download", "deleteDownload: base subdir removed gid=\(gid)")
+        }
+        removeStaging(gid: gid)
         downloads.removeValue(forKey: gid)
         coverCache.removeObject(forKey: NSNumber(value: gid))
+        // metadata.json 自体は galleryDirectory 配下なので mainDir 削除で消えるが、
+        // base path に残っている可能性 (isStaging 切替の race) を念のため
+        let metaPath = baseDirectory.appendingPathComponent("\(gid)/metadata.json")
+        try? fileManager.removeItem(at: metaPath)
     }
 
     /// リーダー再オープン時等、autoSave を再有効化したい場面で呼ぶ
@@ -2101,8 +2132,10 @@ class DownloadManager: ObservableObject {
         // 田中要望 2026-04-26: 完了後 staging → NAS bulk move (background)
         // 田中要望 2026-04-27: retry を尽くしても failed page が残っても、
         //   1 枚以上 DL 済みなら partial finalize で .cortex 化する (途中状態でも救済)。
+        // 田中要望 2026-04-27 (2): cancel/delete された gid は finalize しない (zombie 防止)
         let hasAnyDownloaded = state.downloadedSet.count > 0
-        if hasAnyDownloaded && isStaging(gid: gid) {
+        let wasCancelled = activeDownloads[gid]?.isCancelled == true || (downloads[gid]?.isCancelled ?? false) || recentlyDeletedGids.contains(gid)
+        if hasAnyDownloaded && isStaging(gid: gid) && !wasCancelled {
             if !completed {
                 let missing = (0..<totalPages).filter { !state.downloadedSet.contains($0) }.map { $0 + 1 }
                 LogManager.shared.log("Download", "gid=\(gid) partial finalize: \(state.downloadedSet.count)/\(totalPages) (missing=\(missing.prefix(20))\(missing.count > 20 ? "..." : ""))")
@@ -2110,6 +2143,8 @@ class DownloadManager: ObservableObject {
             Task.detached(priority: .userInitiated) { [weak self] in
                 await self?.moveStagingToFinalDest(gid: gid)
             }
+        } else if wasCancelled {
+            LogManager.shared.log("Download", "gid=\(gid) finalize SKIPPED (cancelled/deleted)")
         }
 
         // DL 完了 / 中断後に /home.php を叩いてアカウント状態の前後比較ログ（失敗しても無視）
