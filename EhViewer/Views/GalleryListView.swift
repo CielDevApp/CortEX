@@ -109,7 +109,8 @@ struct GalleryListView: View {
                 }
                 ToolbarItem(placement: .automatic) {
                     #if canImport(UIKit) && !targetEnvironment(macCatalyst)
-                    if UIDevice.current.userInterfaceIdiom == .pad {
+                    let idiom = UIDevice.current.userInterfaceIdiom
+                    if idiom == .pad || idiom == .phone {
                         Button {
                             galleryListLayout = (galleryListLayout == "grid") ? "list" : "grid"
                         } label: {
@@ -320,9 +321,22 @@ struct GalleryScrollList: View {
     /// Phase G-A iPad-only パイロット (2026-04-26): iPad のみ Grid、Mac/iPhone は既存 List。
     private var isIPadGrid: Bool {
         #if canImport(UIKit) && !targetEnvironment(macCatalyst)
-        return UIDevice.current.userInterfaceIdiom == .pad && galleryListLayout == "grid"
+        let idiom = UIDevice.current.userInterfaceIdiom
+        return (idiom == .pad || idiom == .phone) && galleryListLayout == "grid"
         #else
         return false
+        #endif
+    }
+
+    /// idiom + size class からグリッド列数を決定。iPad regular=6 / compact=4、iPhone=3 固定。
+    private var gridColumns: [GridItem] {
+        #if canImport(UIKit) && !targetEnvironment(macCatalyst)
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            return GalleryGridColumns.iPhoneColumns()
+        }
+        return GalleryGridColumns.iPadColumns(horizontalSizeClass: hSizeClass)
+        #else
+        return []
         #endif
     }
 
@@ -337,7 +351,7 @@ struct GalleryScrollList: View {
     @ViewBuilder
     private var iPadGridScroll: some View {
         #if canImport(UIKit)
-        let columns = GalleryGridColumns.iPadColumns(horizontalSizeClass: hSizeClass)
+        let columns = gridColumns
         ScrollView {
             LazyVGrid(columns: columns, spacing: 8) {
                 ForEach(Array(viewModel.galleries.enumerated()), id: \.element.gid) { index, gallery in
@@ -758,9 +772,22 @@ struct NhentaiScrollList: View {
 
     private var isIPadGrid: Bool {
         #if canImport(UIKit) && !targetEnvironment(macCatalyst)
-        return UIDevice.current.userInterfaceIdiom == .pad && galleryListLayout == "grid"
+        let idiom = UIDevice.current.userInterfaceIdiom
+        return (idiom == .pad || idiom == .phone) && galleryListLayout == "grid"
         #else
         return false
+        #endif
+    }
+
+    /// idiom + size class からグリッド列数を決定。iPad regular=6 / compact=4、iPhone=3 固定。
+    private var gridColumns: [GridItem] {
+        #if canImport(UIKit) && !targetEnvironment(macCatalyst)
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            return GalleryGridColumns.iPhoneColumns()
+        }
+        return GalleryGridColumns.iPadColumns(horizontalSizeClass: hSizeClass)
+        #else
+        return []
         #endif
     }
 
@@ -775,7 +802,7 @@ struct NhentaiScrollList: View {
     @ViewBuilder
     private var iPadGridScroll: some View {
         #if canImport(UIKit)
-        let columns = GalleryGridColumns.iPadColumns(horizontalSizeClass: hSizeClass)
+        let columns = gridColumns
         ScrollView {
             LazyVGrid(columns: columns, spacing: 8) {
                 ForEach(Array(viewModel.galleries.enumerated()), id: \.element.id) { index, nh in

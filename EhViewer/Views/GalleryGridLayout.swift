@@ -16,6 +16,11 @@ enum GalleryGridColumns {
         let cols = (horizontalSizeClass == .regular) ? 6 : 4
         return Array(repeating: GridItem(.flexible(), spacing: 8), count: cols)
     }
+
+    /// iPhone: 固定 3 列 (Amazon Prime Video iOS と同じ感覚)。田中確定 2026-04-27。
+    static func iPhoneColumns() -> [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
+    }
 }
 #endif
 
