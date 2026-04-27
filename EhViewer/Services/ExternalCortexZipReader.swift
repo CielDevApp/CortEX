@@ -31,9 +31,21 @@ final class ExternalCortexZipReader: @unchecked Sendable {
     private var zipInfo: [Int: ZipInfo] = [:]
     private let lock = NSLock()
 
-    /// SSD LRU cache 上限 (8GB)。田中判断 2026-04-26 (1GB → 4GB → 8GB、
-    /// pre-cache 中の evict storm 完全抑制 + 既存他 gallery cache の共存余裕確保)。
-    private let cacheBudget: UInt64 = 8_589_934_592
+    /// SSD LRU cache 上限。田中要望 2026-04-27: 1112 page 動画作品 (UnityNay 10GB 等) を
+    /// 全 page precache できるよう SSD 空きから動的計算 (空き - 4GB ヘッドルーム、上限 32GB、下限 8GB)。
+    /// 取得失敗時は 8GB fallback。
+    private var cacheBudget: UInt64 {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        guard let attrs = try? FileManager.default.attributesOfFileSystem(forPath: docs.path),
+              let free = attrs[.systemFreeSize] as? UInt64 else {
+            return 8_589_934_592  // 8GB fallback
+        }
+        let headroom: UInt64 = 4_294_967_296  // 4GB
+        let dynamic: UInt64 = free > headroom ? free - headroom : 0
+        let cap: UInt64 = 34_359_738_368   // 32GB max
+        let floor: UInt64 = 8_589_934_592   // 8GB min
+        return min(cap, max(floor, dynamic))
+    }
 
     /// evict debounce: 直近 evict から 5 秒以内なら skip (連続 page load で何度も走らない)
     private var lastEvictAt: Date = .distantPast
