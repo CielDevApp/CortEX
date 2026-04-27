@@ -4,6 +4,12 @@ struct LoginView: View {
     @ObservedObject var authVM: AuthViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var showHelp = false
+    @State private var showWebLogin = false
+    /// 田中要望 2026-04-27: 1 回目フォーラム到達後の「閉じて再起動」シミュレート用。
+    /// hasRelaunchedWebLogin: 次回 sheet 提示時 isRelaunched で渡す値 (= 「2 回目モーダル」を意味)
+    /// isRelaunchPending: onDismiss が「閉じて再起動」由来か「手動 ×」由来か区別するフラグ
+    @State private var hasRelaunchedWebLogin = false
+    @State private var isRelaunchPending = false
 
     var body: some View {
         NavigationStack {
@@ -73,6 +79,16 @@ struct LoginView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .foregroundStyle(.secondary)
+
+                    #if canImport(UIKit)
+                    Button {
+                        showWebLogin = true
+                    } label: {
+                        Label("ブラウザでログイン", systemImage: "globe")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .foregroundStyle(.orange)
+                    #endif
                 }
             }
             .navigationTitle("ログイン")
@@ -96,6 +112,31 @@ struct LoginView: View {
             .sheet(isPresented: $showHelp) {
                 LoginHelpView()
             }
+            #if canImport(UIKit)
+            .sheet(isPresented: $showWebLogin, onDismiss: {
+                if isRelaunchPending {
+                    // 「閉じて再起動」由来の dismiss → 0.5 秒後に sheet 再提示 (= 新規 WKWebView)
+                    isRelaunchPending = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        showWebLogin = true
+                    }
+                } else {
+                    // ユーザー手動 × 閉じる → 次回はまた初回扱い
+                    hasRelaunchedWebLogin = false
+                }
+            }) {
+                EhExHentaiLoginView(
+                    authVM: authVM,
+                    isRelaunched: hasRelaunchedWebLogin,
+                    onRequestRelaunch: { _, _ in
+                        // 1 回目フォーラム到達 → WKWebView インスタンス物理破棄 + モーダル dismiss
+                        hasRelaunchedWebLogin = true
+                        isRelaunchPending = true
+                        showWebLogin = false
+                    }
+                )
+            }
+            #endif
         }
     }
 }
