@@ -407,6 +407,20 @@ struct LocalReaderView: View {
             .onPreferenceChange(PagePositionKey.self) { positions in
                 LogManager.shared.log("iPadScroll", "preference update: \(positions.count) positions, keys=\(positions.keys.sorted())")
                 guard UIDevice.current.userInterfaceIdiom == .pad, !positions.isEmpty else { return }
+                // 田中要望 2026-04-27: ジャンプフリーズ修正。
+                // 大ジャンプ (例 page 6 → 634) 直後、ScrollView が target に到達する前は
+                // LazyVStack が古い viewport の cells (6, 7) を preference で報告し続ける。
+                // このまま closest.key = 6 を currentIndex に書き戻すと jump がキャンセルされ、
+                // scrolledID=634 と currentIndex=6 が衝突してフリーズ症状になる。
+                // → scrolledID が positions.keys から大きく離れている場合は mid-scroll と判定し
+                //   preference 由来の currentIndex 更新を skip する。
+                if let sid = scrolledID, !positions.keys.contains(sid) {
+                    let nearest = positions.keys.min(by: { abs($0 - sid) < abs($1 - sid) }) ?? sid
+                    if abs(nearest - sid) > 5 {
+                        LogManager.shared.log("iPadScroll", "preference skipped (mid-scroll): scrolledID=\(sid) keys=\(positions.keys.sorted())")
+                        return
+                    }
+                }
                 let screenMid = UIScreen.main.bounds.height / 2
                 if let closest = positions.min(by: { abs($0.value - screenMid) < abs($1.value - screenMid) }) {
                     LogManager.shared.log("iPadScroll", "closest to center=\(Int(screenMid)): index=\(closest.key) midY=\(Int(closest.value))")
