@@ -330,6 +330,9 @@ struct LocalReaderView: View {
             },
             onPageAppear: { index in
                 currentIndex = index
+                // 田中要望 2026-04-27: 大ジャンプ中は通過する中間 cells で processPage を走らせない
+                // (CoreML enhancement が main を詰まらせ ScrollView が target に到達できない fix)
+                if let target = sliderJumpTarget, index != target { return }
                 if enhancedImages[index] == nil { processPage(index) }
             },
             onDismiss: { dismiss() },
@@ -408,12 +411,18 @@ struct LocalReaderView: View {
                 LogManager.shared.log("iPadScroll", "preference update: \(positions.count) positions, keys=\(positions.keys.sorted())")
                 guard UIDevice.current.userInterfaceIdiom == .pad, !positions.isEmpty else { return }
                 // 田中要望 2026-04-27: ジャンプフリーズ修正。
-                // 大ジャンプ (例 page 6 → 634) 直後、ScrollView が target に到達する前は
-                // LazyVStack が古い viewport の cells (6, 7) を preference で報告し続ける。
-                // このまま closest.key = 6 を currentIndex に書き戻すと jump がキャンセルされ、
-                // scrolledID=634 と currentIndex=6 が衝突してフリーズ症状になる。
-                // → scrolledID が positions.keys から大きく離れている場合は mid-scroll と判定し
-                //   preference 由来の currentIndex 更新を skip する。
+                // (1) 大ジャンプ (例 page 6 → 634) 直後、ScrollView が target に到達する前は
+                //     LazyVStack が古い viewport の cells (6, 7) を preference で報告し続ける。
+                //     このまま closest.key = 6 を currentIndex に書き戻すと jump がキャンセルされ、
+                //     scrolledID=634 と currentIndex=6 が衝突してフリーズ症状になる。
+                //     → scrolledID が positions.keys から大きく離れている場合は mid-scroll と判定し
+                //       preference 由来の currentIndex 更新を skip する。
+                // (2) ジャンプ完了判定: target cell が実際に viewport に現れたら sliderJumpTarget をクリア
+                //     (これ以降は通常通り processPage が走る)
+                if let target = sliderJumpTarget, positions.keys.contains(target) {
+                    LogManager.shared.log("iPadScroll", "jump arrived target=\(target), clearing sliderJumpTarget")
+                    sliderJumpTarget = nil
+                }
                 if let sid = scrolledID, !positions.keys.contains(sid) {
                     let nearest = positions.keys.min(by: { abs($0 - sid) < abs($1 - sid) }) ?? sid
                     if abs(nearest - sid) > 5 {
@@ -435,6 +444,11 @@ struct LocalReaderView: View {
                 LogManager.shared.log("iPadScroll", "scrolledID changed: \(newID ?? -1) idiom=\(UIDevice.current.userInterfaceIdiom.rawValue)")
                 if let newID {
                     currentIndex = newID
+                    // jump 完了判定は scrolledID == target ではなく、preference で target cell が
+                    // 実際に viewport に現れた時点 (onPreferenceChange 内で行う) に統一する。
+                    // ScrollView は scrolledID を即値で受け取るがアニメーション中は viewport に
+                    // target がまだ無いため、ここでのクリアは早すぎる (intermediate cells で
+                    // processPage が走り main を詰まらせフリーズの原因になる)。
                 }
             }
             .onChange(of: currentIndex) { old, new in
