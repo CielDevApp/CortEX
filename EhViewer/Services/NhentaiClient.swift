@@ -267,8 +267,12 @@ enum NhentaiClient {
             let encoded = searchQuery.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? searchQuery
             urlString = "https://nhentai.net/api/v2/search?query=\(encoded)&page=\(page)"
         } else {
-            // 空クエリだがソートあり
-            urlString = "https://nhentai.net/api/v2/galleries?page=\(page)"
+            // 空クエリ + sort あり (人気順など)。
+            // /api/v2/galleries は date-listing 専用で sort=popular を無視。
+            // v1 時代の動作に倣い、search に **クォート付き空文字列 `""`** を投げる。
+            // `query=` (素の空) だと sort も無視されるが `query=""` だと sort が効く (2026-04-27 fix)。
+            let emptyQuoted = "\"\"".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "%22%22"
+            urlString = "https://nhentai.net/api/v2/search?query=\(emptyQuoted)&page=\(page)"
         }
 
         if let sort, !sort.isEmpty {

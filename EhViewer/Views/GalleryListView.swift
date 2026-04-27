@@ -356,8 +356,8 @@ struct GalleryScrollList: View {
                 // 田中設計 (2026-04-27): real セルとダミーを統合 ForEach に。
                 // index < galleries.count → real cell、それ以上 → ダミー (常時 +80 slot 確保)。
                 // SwiftUI の自然な diff で「ダミー → real cell」置換が動く。
-                let totalSlots = Array(0..<(viewModel.galleries.count + 80))
-                ForEach(totalSlots, id: \.self) { index in
+                let totalSlotsEh = Array(0..<(viewModel.galleries.count + 80))
+                ForEach(totalSlotsEh, id: \.self) { index in
                     if index < viewModel.galleries.count {
                         let gallery = viewModel.galleries[index]
                         GalleryGridCellView(gallery: gallery)
@@ -399,6 +399,7 @@ struct GalleryScrollList: View {
                                     }
                                 }
                             }
+                            .id(gallery.gid)
                     } else {
                         RoundedRectangle(cornerRadius: 6)
                             .fill(Color.gray.opacity(0.18))
@@ -832,6 +833,7 @@ struct NhentaiScrollList: View {
                                     Task { await viewModel.loadNextPage() }
                                 }
                             }
+                            .id(nh.id)
                     } else {
                         RoundedRectangle(cornerRadius: 6)
                             .fill(Color.gray.opacity(0.18))
