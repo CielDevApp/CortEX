@@ -38,6 +38,10 @@ struct DownloadsView: View {
     /// エクスポートエラーメッセージ（nil = 成功 or idle）。Alert 表示用。
     @State private var exportError: String?
 
+    /// 田中要望 2026-04-28: NAS 転送中の overlay を「バックグラウンドで実行」で隠す機能。
+    /// 隠した gid を保持し、同 gid の transfer 中は再表示しない。新規 transfer (異なる gid) は表示。
+    @State private var hiddenTransferGid: Int?
+
     /// 田中要望 2026-04-27: 「保存済み」section のソート方式 (全プラットフォーム共通)。
     /// 外部参照側 (Mac Catalyst のみ) は ExternalFolderManager 側で独立管理、enum は共有。
     @AppStorage("downloadsCompletedSortOrderRaw") private var completedSortOrderRaw: String = ExternalFolderManager.ExternalSortOrder.dateAdded.rawValue
@@ -297,6 +301,13 @@ struct DownloadsView: View {
                 else if delta < -5 { tabBarHidden = false }
             }
             .toolbar {
+                // 田中要望 2026-04-28: NAS 転送中の mini indicator (バックグラウンド時のみ表示)。
+                // タップで overlay 再表示。転送自体は overlay 表示と無関係に進行する。
+                if let t = manager.currentTransfer, t.gid == hiddenTransferGid {
+                    ToolbarItem(placement: .automatic) {
+                        transferMiniIndicator(transfer: t)
+                    }
+                }
                 ToolbarItem(placement: .automatic) {
                     Button {
                         showImportPicker = true
@@ -389,9 +400,13 @@ struct DownloadsView: View {
                 if let m = preCacheMeta {
                     preCacheOverlay(meta: m)
                 }
-                if let t = manager.currentTransfer {
+                if let t = manager.currentTransfer, t.gid != hiddenTransferGid {
                     transferOverlay(transfer: t)
                 }
+            }
+            .onChange(of: manager.currentTransfer?.gid) { _, newGid in
+                // 新しい transfer が来た or transfer が終わった (nil) → hide フラグ解除
+                if newGid != hiddenTransferGid { hiddenTransferGid = nil }
             }
             .alert("インポート", isPresented: .constant(importMessage != nil)) {
                 Button("OK") { importMessage = nil }
@@ -860,6 +875,16 @@ struct DownloadsView: View {
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.85))
                     .monospacedDigit()
+                // 田中要望 2026-04-28: 転送中ユーザー操作不能だったため、バックグラウンド継続ボタンを追加
+                Button {
+                    hiddenTransferGid = transfer.gid
+                } label: {
+                    Label("バックグラウンドで実行", systemImage: "arrow.down.right.and.arrow.up.left")
+                        .font(.caption.bold())
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
+                .padding(.top, 4)
             }
             .padding(24)
             .background(.ultraThinMaterial)
@@ -867,6 +892,31 @@ struct DownloadsView: View {
             .shadow(radius: 12)
         }
         .transition(.opacity)
+    }
+
+    /// バックグラウンド転送中の mini indicator (toolbar item 用)。タップで overlay 再表示。
+    @ViewBuilder
+    private func transferMiniIndicator(transfer: DownloadManager.TransferProgress) -> some View {
+        let total = max(transfer.totalBytes, 1)
+        let ratio = Double(transfer.doneBytes) / Double(total)
+        Button {
+            hiddenTransferGid = nil  // 再表示
+        } label: {
+            HStack(spacing: 6) {
+                ProgressView(value: ratio)
+                    .progressViewStyle(.circular)
+                    .controlSize(.small)
+                    .tint(.orange)
+                Text("転送中 \(Int(ratio * 100))%")
+                    .font(.caption2.bold())
+                    .foregroundStyle(.orange)
+                    .monospacedDigit()
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.orange.opacity(0.12), in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     private var exportProgressOverlay: some View {
