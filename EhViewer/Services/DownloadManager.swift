@@ -328,6 +328,53 @@ class DownloadManager: ObservableObject {
         }
     }
 
+    /// 田中要望 2026-04-28: Reader の「再読み込み」ボタンから呼ばれる per-gallery 欠損 page 再 DL。
+    /// 既に isComplete=true の gallery でも、欠損 page があれば DL を再開する。
+    @MainActor
+    func retryMissingPages(gid: Int) {
+        guard var meta = downloads[gid] else { return }
+        let missingCount = meta.pageCount - meta.downloadedPages.count
+        guard missingCount > 0 else {
+            LogManager.shared.log("Download", "retryMissingPages: gid=\(gid) no missing pages")
+            return
+        }
+        guard activeDownloads[gid] == nil else {
+            LogManager.shared.log("Download", "retryMissingPages: gid=\(gid) already active")
+            return
+        }
+        LogManager.shared.log("Download", "retryMissingPages: gid=\(gid) missing=\(missingCount)")
+        // isComplete=false + isCancelled=false に戻して resume 対象化
+        meta.isComplete = false
+        meta.isCancelled = false
+        saveMetadata(meta)
+        let total = max(meta.pageCount, 1)
+        let current = meta.downloadedPages.count
+        activeDownloads[gid] = DownloadProgress(current: current, total: total)
+        startLiveActivity(gid: gid, title: meta.title, totalPages: total, initialPage: current)
+        if meta.isNhentai {
+            guard let nhId = meta.nhentaiId else { return }
+            Task(priority: .utility) {
+                if let nhGallery = try? await NhentaiClient.fetchGallery(id: nhId) {
+                    await performNhentaiDownload(nhGallery: nhGallery)
+                } else {
+                    activeDownloads.removeValue(forKey: gid)
+                    endLiveActivity(gid: gid, success: false)
+                }
+            }
+        } else {
+            let host: GalleryHost = (meta.source == "ehentai") ? .ehentai : .exhentai
+            let baseHost = host == .ehentai ? "e-hentai.org" : "exhentai.org"
+            Task(priority: .utility) {
+                await performDownload(
+                    gid: gid, token: meta.token, title: meta.title,
+                    coverURL: nil, pageCount: meta.pageCount,
+                    galleryURLStr: "https://\(baseHost)/g/\(gid)/\(meta.token)/",
+                    host: host
+                )
+            }
+        }
+    }
+
     // MARK: - ディレクトリ
 
     private var baseDirectory: URL {
@@ -1985,11 +2032,12 @@ class DownloadManager: ObservableObject {
         }
 
         // セカンドパス: 失敗ページを再試行 (BAN 中は skip、BAN 期間延長を防ぐ)
-        // 田中要望 2026-04-27: 失敗してもやり直して .cortex 化 → 2nd→3rd→4thpass まで自動 retry
+        // 田中指示 2026-04-28: 30秒で取れない page は即欠損扱いで完了 → リーダーで再読み込み。
+        //   2thpass まで (合計 2 回試行) で打ち切り、3rd/4thpass は廃止。欠損でも終了。
         if BackgroundDownloadManager.shared.isRateLimited(gid: gid) {
             LogManager.shared.log("Download", "gid=\(gid) 2ndpass SKIP: rate limited (BAN 中は再試行しない)")
         }
-        let maxRetryPasses = 4  // 2nd / 3rd / 4thpass まで
+        let maxRetryPasses = 2  // 2thpass まで
         for passNum in 2...maxRetryPasses {
             // 直前 pass で残った失敗 + reconcile で取りこぼした未 DL を再構築
             for idx in 0..<totalPages where !state.downloadedSet.contains(idx) {
@@ -2036,9 +2084,10 @@ class DownloadManager: ObservableObject {
                         }
                         LogManager.shared.log("Download", "gid=\(gid) \(passNum)thpass page \(index + 1) start url=\(pageURL.absoluteString.suffix(60))")
                         group.addTask { [self] in
+                            // 田中指示 2026-04-28: 30s で取れない page は即欠損扱い → 1 attempt のみ
                             let ok = await downloadSinglePage(
                                 gid: gid, index: index, pageURL: pageURL,
-                                filePath: filePath, host: host, maxRetries: 3,
+                                filePath: filePath, host: host, maxRetries: 1,
                                 forceMirror: true
                             )
                             await SafetyMode.shared.delay(nanoseconds: requestDelay)
@@ -2105,7 +2154,14 @@ class DownloadManager: ObservableObject {
         // 完了処理: @Published dict は subscript mutation だとSwiftUI更新が不確実
         // → MainActor + 再代入パターンで確実に通知発火させる
         meta.downloadedPages = Array(state.downloadedSet)
-        meta.isComplete = totalPages > 0 && state.downloadedSet.count >= totalPages
+        // 田中要望 2026-04-28: EHV (Android) と同様、retry 尽くしても取れない page があっても
+        //   isComplete=true で割り切ってライブラリに入れる (Hath サーバ側で特定 page が
+        //   永続的に取得不可なケース対策、起動時 auto-resume の永久ループ回避)。
+        //   cancel された場合は除外。
+        let wasCancelledForFinalize = activeDownloads[gid]?.isCancelled == true || (downloads[gid]?.isCancelled ?? false) || recentlyDeletedGids.contains(gid)
+        let allPagesDone = totalPages > 0 && state.downloadedSet.count >= totalPages
+        let retryExhaustedPartial = totalPages > 0 && state.downloadedSet.count > 0 && !wasCancelledForFinalize
+        meta.isComplete = allPagesDone || retryExhaustedPartial
         meta.downloadDate = Date()
         if meta.isComplete {
             meta.hasAnimatedWebp = scanHasAnimatedWebp(gid: gid)

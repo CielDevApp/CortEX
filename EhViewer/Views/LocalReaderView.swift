@@ -757,13 +757,24 @@ struct LocalReaderView: View {
                     if enhancedImages[index] == nil { processPage(index) }
                 }
         } else {
-            VStack(spacing: 8) {
+            VStack(spacing: 12) {
                 Image(systemName: "photo")
                     .font(.title)
                     .foregroundStyle(.secondary)
                 Text("ページ \(index + 1) が見つかりません")
                     .font(.caption)
                     .foregroundStyle(.gray)
+                Button {
+                    DownloadManager.shared.retryMissingPages(gid: meta.gid)
+                } label: {
+                    Label("再読み込み", systemImage: "arrow.clockwise")
+                        .font(.footnote.bold())
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Color.accentColor.opacity(0.15), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(DownloadManager.shared.activeDownloadCount > 0 && DownloadManager.shared.downloads[meta.gid] != nil && DownloadManager.shared.downloads[meta.gid]?.isComplete == false)
             }
             .frame(maxWidth: .infinity, maxHeight: isHorizontal ? .infinity : nil, alignment: .center)
             .frame(minHeight: 300)
