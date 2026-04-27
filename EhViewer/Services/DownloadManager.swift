@@ -390,9 +390,9 @@ class DownloadManager: ObservableObject {
         stagingLock.lock(); stagingGids.remove(gid); stagingLock.unlock()
     }
 
-    /// staging/<gid> を ZIP 圧縮 (.cortex) → NAS に **単一ファイル書込** で転送。
-    /// 田中要望 2026-04-26: per-page (1228 ファイル) の SMB metadata roundtrip 撲滅、
-    /// 1 つの sequential file write のみ → 体感「爆速」転送。
+    /// staging/<gid> を ZIP 圧縮 (.cortex) → NAS に **直接 stream write** (tmp 経由しない)。
+    /// 田中要望 2026-04-27: 旧フロー (staging → tmp/.cortex → NAS) は SSD ピーク使用量が
+    /// staging × 2 ≈ 20GB+ となり大容量作品で ENOSPC 発生 → 直接 NAS stream に修正。
     /// 完了後 staging 削除 + downloads[gid] 解除 (外部参照 .cortex として scan 拾上げ)。
     func moveStagingToFinalDest(gid: Int) async {
         let sourceDir = dlStagingBase.appendingPathComponent("\(gid)")
@@ -402,67 +402,104 @@ class DownloadManager: ObservableObject {
             return
         }
 
-        // 1. staging → tmp/<title>.cortex (local SSD ZIP stream、isStaging 中なので
-        //    GalleryExporter.exportAsZipStreaming は galleryDirectory 経由で staging を読む)
-        let exportedURL: URL
-        do {
-            exportedURL = try await Task.detached(priority: .userInitiated) {
-                try GalleryExporter.exportAsZipStreaming(gid: gid)
-            }.value
-        } catch {
-            LogManager.shared.log("DLStaging", "export ZIP failed gid=\(gid): \(error)")
-            removeStaging(gid: gid)
-            return
+        // 出力先 .cortex (NAS final URL)。タイトルから safeName 生成 (existing logic と整合)
+        let title = downloads[gid]?.title ?? "\(gid)"
+        let safeName = title.replacingOccurrences(of: "/", with: "_").prefix(50)
+        let destURL = baseDirectory.appendingPathComponent("\(safeName).cortex")
+
+        // 既存 .cortex が同名であれば上書き
+        if fileManager.fileExists(atPath: destURL.path) {
+            try? fileManager.removeItem(at: destURL)
         }
 
-        // 2. tmp/<title>.cortex → NAS/<title>.cortex (chunked SMB file write、進捗通知付き)
-        let destURL = baseDirectory.appendingPathComponent(exportedURL.lastPathComponent)
-        let totalSize = (try? fileManager.attributesOfItem(atPath: exportedURL.path)[.size] as? UInt64) ?? 0
-        let transferTitle = exportedURL.deletingPathExtension().lastPathComponent
+        // 進捗 UI: ZIP 化 stream は事前総量不明なので staging dir size を推定値に使う
+        let stagingSize = Self.dirSize(sourceDir)
+        let transferTitle = String(safeName)
         await MainActor.run {
-            currentTransfer = TransferProgress(gid: gid, title: transferTitle, totalBytes: totalSize, doneBytes: 0)
+            currentTransfer = TransferProgress(gid: gid, title: transferTitle, totalBytes: stagingSize, doneBytes: 0)
         }
+
+        // staging → NAS/<title>.cortex を 1 段で stream ZIP write (SSD 倍取り解消)
         do {
-            if fileManager.fileExists(atPath: destURL.path) {
-                try? fileManager.removeItem(at: destURL)
-            }
-            try await Self.copyWithProgress(from: exportedURL, to: destURL) { [weak self] done in
-                Task { @MainActor in
-                    self?.currentTransfer?.doneBytes = done
-                }
-            }
-            try? fileManager.removeItem(at: exportedURL)
+            _ = try await Task.detached(priority: .userInitiated) { () throws -> URL in
+                try GalleryExporter.exportAsZipStreaming(
+                    gid: gid,
+                    progress: { completed, total in
+                        Task { @MainActor in
+                            // page count progress を doneBytes に近似変換 (UI 進捗のみ)
+                            let estDone = total > 0 ? UInt64(stagingSize) * UInt64(completed) / UInt64(total) : 0
+                            DownloadManager.shared.currentTransfer?.doneBytes = estDone
+                        }
+                    },
+                    destOverride: destURL
+                )
+            }.value
             let size = (try? fileManager.attributesOfItem(atPath: destURL.path)[.size] as? UInt64) ?? 0
-            LogManager.shared.log("DLStaging", "moved gid=\(gid) → NAS:\(destURL.lastPathComponent) (size=\(size))")
+            LogManager.shared.log("DLStaging", "moved gid=\(gid) → NAS:\(destURL.lastPathComponent) (size=\(size)) [direct stream]")
         } catch {
-            LogManager.shared.log("DLStaging", "NAS write failed gid=\(gid): \(error)")
+            LogManager.shared.log("DLStaging", "direct NAS stream failed gid=\(gid): \(error)")
+            // 失敗時は中途半端な NAS file を片付ける (再試行のクリーン状態に)
+            try? fileManager.removeItem(at: destURL)
             await MainActor.run { currentTransfer = nil }
             removeStaging(gid: gid)
             return
         }
         await MainActor.run { currentTransfer = nil }
 
-        // 3. staging dir 削除 (DL 中の各 page file を local SSD から完全消去)
+        // staging dir 削除 (DL 中の各 page file を local SSD から完全消去)
         try? fileManager.removeItem(at: sourceDir)
 
-        // 4. removeStaging (galleryDirectory が baseDirectory に解決される、ただし NAS に
-        //    folder 形式では存在しない、.cortex 形式なので external scan 経由でアクセス)
+        // removeStaging (galleryDirectory が baseDirectory に解決される、ただし NAS に
+        // folder 形式では存在しない、.cortex 形式なので external scan 経由でアクセス)
         removeStaging(gid: gid)
 
-        // 5. downloads[gid] 削除 (gallery は外部参照 .cortex として再認識される)
+        // downloads[gid] 削除 (gallery は外部参照 .cortex として再認識される)
         await MainActor.run {
             downloads[gid] = nil
         }
 
-        // 6. NAS の旧 subdir 形式残骸を削除 (next launch で auto-resume されるのを防ぐ)
+        // NAS の旧 subdir 形式残骸を削除 (next launch で auto-resume されるのを防ぐ)
         let oldNasSubdir = baseDirectory.appendingPathComponent("\(gid)", isDirectory: true)
         if fileManager.fileExists(atPath: oldNasSubdir.path) {
             try? fileManager.removeItem(at: oldNasSubdir)
             LogManager.shared.log("DLStaging", "removed old NAS subdir gid=\(gid) (orphan after .cortex move)")
         }
 
-        // 7. 外部参照 rescan で新 .cortex を Library に表示
+        // 外部参照 rescan で新 .cortex を Library に表示
         await ExternalFolderManager.shared.rescanAll()
+    }
+
+    /// dirSize: ファイル列挙で総サイズを計算 (進捗 UI 用)
+    private static func dirSize(_ url: URL) -> UInt64 {
+        let fm = FileManager.default
+        guard let it = fm.enumerator(at: url, includingPropertiesForKeys: [.totalFileAllocatedSizeKey]) else { return 0 }
+        var total: UInt64 = 0
+        for case let f as URL in it {
+            let v = try? f.resourceValues(forKeys: [.totalFileAllocatedSizeKey])
+            total += UInt64(v?.totalFileAllocatedSize ?? 0)
+        }
+        return total
+    }
+
+    /// SSD 残量チェック: staging に必要な領域が確保できるかを推定して bool で返す。
+    /// 田中要望 2026-04-27: 「キャッシュがストレージ超えそうなら警告出せ」対応。
+    /// 推定総 DL size が SSD 残量の `safetyRatio` (default 70%) を超えるなら false。
+    func hasSufficientSSDSpaceForDownload(estimatedBytes: UInt64, safetyRatio: Double = 0.7) -> Bool {
+        let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        guard let attrs = try? fileManager.attributesOfFileSystem(forPath: docs.path),
+              let free = attrs[.systemFreeSize] as? UInt64 else {
+            return true  // 取得失敗時は通す (false で全 DL ブロックは厳しすぎ)
+        }
+        let limit = UInt64(Double(free) * safetyRatio)
+        return estimatedBytes < limit
+    }
+
+    /// SSD 残量取得 (CUI debug 用)
+    func ssdFreeBytes() -> UInt64 {
+        let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        guard let attrs = try? fileManager.attributesOfFileSystem(forPath: docs.path),
+              let free = attrs[.systemFreeSize] as? UInt64 else { return 0 }
+        return free
     }
 
     /// チャンク単位でファイルを copy しつつ進捗を通知する。FileManager.copyItem は

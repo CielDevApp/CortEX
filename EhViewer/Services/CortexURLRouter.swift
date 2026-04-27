@@ -37,8 +37,10 @@ final class CortexCommandBus: ObservableObject {
 /// ## サポート action
 /// - `cortex://debug/marker?text=hello` → ログに `[Marker] hello` 追記
 /// - `cortex://debug/dump-state` → 現在のアプリ状態 (paths, sizes 等) を log に dump
+/// - `cortex://debug/disk-space` → SSD 残量 + staging size を log に出す (田中要望 2026-04-27)
 /// - `cortex://action/cache-clear` → ImageCache + animated_cache を削除
 /// - `cortex://action/log-rotate` → ehviewer.log を rotate (旧 → .old)
+/// - `cortex://action/finalize-staging?gid=X` → staging を NAS に強制 finalize (田中要望 2026-04-27)
 /// - `cortex://reader/online?gid=X&token=Y&page=Z[&host=exhentai|ehentai]` → online reader 開く
 /// - `cortex://reader/local?gid=X&page=Y` → local reader 開く (DL 済み作品)
 /// - `cortex://reader/close` → 開いている cortex 経由 reader を閉じる
@@ -62,12 +64,17 @@ enum CortexURLRouter {
         case "debug/dump-state":
             dumpState()
             return true
+        case "debug/disk-space":
+            dumpDiskSpace()
+            return true
         case "action/cache-clear":
             clearCache()
             return true
         case "action/log-rotate":
             rotateLog()
             return true
+        case "action/finalize-staging":
+            return finalizeStaging(params: params)
         case "reader/online":
             return openOnlineReader(params: params)
         case "reader/local":
@@ -133,6 +140,44 @@ enum CortexURLRouter {
             total += Int64(v?.totalFileAllocatedSize ?? 0)
         }
         return total
+    }
+
+    /// `cortex://debug/disk-space` SSD 残量 + staging dir size を log に dump。
+    /// 田中要望 2026-04-27: ENOSPC 事故防止のため CUI から残量確認できるように。
+    private static func dumpDiskSpace() {
+        Task { @MainActor in
+            let dm = DownloadManager.shared
+            let free = dm.ssdFreeBytes()
+            let freeGB = Double(free) / 1_000_000_000
+            let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            let stagingBase = docs.appendingPathComponent("EhViewer/dl_staging")
+            let stagingSize = dirSize(stagingBase)
+            let stagingGB = Double(stagingSize) / 1_000_000_000
+            LogManager.shared.log("DiskSpace", "SSD free=\(String(format: "%.2f", freeGB))GB staging=\(String(format: "%.2f", stagingGB))GB safetyLimit=70%")
+            // staging 配下の各 gid を列挙
+            if let entries = try? FileManager.default.contentsOfDirectory(at: stagingBase, includingPropertiesForKeys: nil) {
+                for entry in entries {
+                    let s = dirSize(entry)
+                    let mb = Double(s) / 1_000_000
+                    LogManager.shared.log("DiskSpace", "  staging/\(entry.lastPathComponent) = \(String(format: "%.1f", mb))MB")
+                }
+            }
+        }
+    }
+
+    /// `cortex://action/finalize-staging?gid=X` 指定 gid の staging を NAS に強制 finalize。
+    /// 田中要望 2026-04-27: ENOSPC で finalize 失敗した DL を CUI から救済可能にする。
+    private static func finalizeStaging(params: [String: String]) -> Bool {
+        guard let gidStr = params["gid"], let gid = Int(gidStr) else {
+            LogManager.shared.log("CortexURL", "finalize-staging: missing/invalid gid")
+            return false
+        }
+        Task { @MainActor in
+            LogManager.shared.log("CortexURL", "finalize-staging: triggered gid=\(gid)")
+            await DownloadManager.shared.moveStagingToFinalDest(gid: gid)
+            LogManager.shared.log("CortexURL", "finalize-staging: done gid=\(gid)")
+        }
+        return true
     }
 
     private static func clearCache() {
