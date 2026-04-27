@@ -52,11 +52,9 @@ final class BackgroundDownloadManager: NSObject {
         config.httpCookieAcceptPolicy = .always
         config.httpShouldSetCookies = true
         config.waitsForConnectivity = false
-        // 田中要望 2026-04-28: 大容量 animated WebP (15-20MB+) 取得時に 30s idle で
-        // -999 cancel される問題対策 (Android EH Viewer 等では取れる page が Cort:EX
-        // iPhone で取れない事象)。idle 90s / total 600s に緩和。
-        config.timeoutIntervalForRequest = 90
-        config.timeoutIntervalForResource = 600
+        // 田中指示 2026-04-28: 30s idle で失敗扱い → 欠損ページのまま完了 → リーダーで再読み込み
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 300
         config.httpMaximumConnectionsPerHost = 4
         let s = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         _fgNhSession = s
@@ -70,9 +68,9 @@ final class BackgroundDownloadManager: NSObject {
         config.httpCookieAcceptPolicy = .always
         config.httpShouldSetCookies = true
         config.waitsForConnectivity = false
-        // 田中要望 2026-04-28: 大容量 animated WebP の idle 30s cancel 対策。同上。
-        config.timeoutIntervalForRequest = 90
-        config.timeoutIntervalForResource = 600
+        // 田中指示 2026-04-28: 30s idle で失敗扱い → 欠損ページのまま完了 → リーダーで再読み込み
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 300
         config.httpMaximumConnectionsPerHost = 4
         let s = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         _fgEhSession = s
@@ -1087,7 +1085,7 @@ final class SpeedTracker: @unchecked Sendable {
 
     /// 追跡開始 (enqueue / downloadToFile 時)
     /// isBG=true の BG session task は iOS throttling で転送間隔が空くので
-    /// stall しきい値を緩和 (20s → 120s, 平均速度閾値も無効化)
+    /// stall しきい値を緩和 (FG 90s / BG 180s, 平均速度閾値も無効化)
     func start(taskId: Int, task: URLSessionTask, isBG: Bool = false) {
         let now = CFAbsoluteTimeGetCurrent()
         lock.lock(); defer { lock.unlock() }
@@ -1144,13 +1142,14 @@ final class SpeedTracker: @unchecked Sendable {
     }
 
     /// kill 条件判定 (静的ロジック、副作用なし)
-    /// FG: 進捗停止 20秒超 or 直近 30秒の平均が 100 B/s 未満
-    /// BG: iOS throttling で転送間隔が空くため、進捗停止 120秒超のみ判定 (低速閾値は無効化)
+    /// FG: 進捗停止 30秒超 (田中指示 2026-04-28「ミラーから DL 30秒で失敗扱い」)
+    /// BG: iOS throttling で転送間隔が空くため、進捗停止 120秒超
+    /// 失敗 page は欠損のまま完了扱い → リーダー側で再読み込みボタン提供
     private static func killReason(tracker t: Tracker, now: CFAbsoluteTime) -> String? {
-        let noProgressLimit: Double = t.isBG ? 120 : 20
+        let noProgressLimit: Double = t.isBG ? 120 : 30
         let noProgress = now - t.lastProgressAt
         if noProgress > noProgressLimit {
-            return "no progress for \(Int(noProgress))s"
+            return "no progress for \(Int(noProgress))s (recv=\(t.lastBytes)B)"
         }
         // BG session は iOS 側で意図的に絞られるので低速閾値チェックはスキップ
         if !t.isBG,
