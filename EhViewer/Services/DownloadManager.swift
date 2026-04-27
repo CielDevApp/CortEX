@@ -101,6 +101,16 @@ class DownloadManager: ObservableObject {
     @Published var activeDownloadCount: Int = 0
     /// 最後にインポートされたギャラリーのgid（ハイライト表示用）
     @Published var lastImportedGid: Int?
+    /// staging → NAS 転送中の進捗 (nil = 転送なし)。SMB 大量書込中は UI が固まりがちなので
+    /// ダイアログ + プログレスバー表示用に MainActor で公開 (2026-04-27 田中)。
+    @Published var currentTransfer: TransferProgress?
+
+    struct TransferProgress: Equatable {
+        let gid: Int
+        let title: String
+        let totalBytes: UInt64
+        var doneBytes: UInt64
+    }
 
     struct DownloadProgress {
         var current: Int
@@ -405,21 +415,32 @@ class DownloadManager: ObservableObject {
             return
         }
 
-        // 2. tmp/<title>.cortex → NAS/<title>.cortex (single SMB file write)
+        // 2. tmp/<title>.cortex → NAS/<title>.cortex (chunked SMB file write、進捗通知付き)
         let destURL = baseDirectory.appendingPathComponent(exportedURL.lastPathComponent)
+        let totalSize = (try? fileManager.attributesOfItem(atPath: exportedURL.path)[.size] as? UInt64) ?? 0
+        let transferTitle = exportedURL.deletingPathExtension().lastPathComponent
+        await MainActor.run {
+            currentTransfer = TransferProgress(gid: gid, title: transferTitle, totalBytes: totalSize, doneBytes: 0)
+        }
         do {
             if fileManager.fileExists(atPath: destURL.path) {
                 try? fileManager.removeItem(at: destURL)
             }
-            try fileManager.copyItem(at: exportedURL, to: destURL)
+            try await Self.copyWithProgress(from: exportedURL, to: destURL) { [weak self] done in
+                Task { @MainActor in
+                    self?.currentTransfer?.doneBytes = done
+                }
+            }
             try? fileManager.removeItem(at: exportedURL)
             let size = (try? fileManager.attributesOfItem(atPath: destURL.path)[.size] as? UInt64) ?? 0
             LogManager.shared.log("DLStaging", "moved gid=\(gid) → NAS:\(destURL.lastPathComponent) (size=\(size))")
         } catch {
             LogManager.shared.log("DLStaging", "NAS write failed gid=\(gid): \(error)")
+            await MainActor.run { currentTransfer = nil }
             removeStaging(gid: gid)
             return
         }
+        await MainActor.run { currentTransfer = nil }
 
         // 3. staging dir 削除 (DL 中の各 page file を local SSD から完全消去)
         try? fileManager.removeItem(at: sourceDir)
@@ -442,6 +463,34 @@ class DownloadManager: ObservableObject {
 
         // 7. 外部参照 rescan で新 .cortex を Library に表示
         await ExternalFolderManager.shared.rescanAll()
+    }
+
+    /// チャンク単位でファイルを copy しつつ進捗を通知する。FileManager.copyItem は
+    /// 進捗 API を持たないので、SMB 大容量転送中の rainbow spinner 対策として
+    /// FileHandle ベースの 8MB チャンク write に置換 (2026-04-27 田中)。
+    private static func copyWithProgress(
+        from src: URL,
+        to dst: URL,
+        chunkSize: Int = 8 * 1024 * 1024,
+        progress: @escaping (UInt64) -> Void
+    ) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            let inFile = try FileHandle(forReadingFrom: src)
+            defer { try? inFile.close() }
+            FileManager.default.createFile(atPath: dst.path, contents: nil)
+            let outFile = try FileHandle(forWritingTo: dst)
+            defer { try? outFile.close() }
+
+            var copied: UInt64 = 0
+            while true {
+                try Task.checkCancellation()
+                let chunk = try inFile.read(upToCount: chunkSize) ?? Data()
+                if chunk.isEmpty { break }
+                try outFile.write(contentsOf: chunk)
+                copied += UInt64(chunk.count)
+                progress(copied)
+            }
+        }.value
     }
 
     /// 田中報告 2026-04-26 fix: 起動時 NAS folder の orphan subdir cleanup。

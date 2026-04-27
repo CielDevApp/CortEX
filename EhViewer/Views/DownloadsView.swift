@@ -357,6 +357,9 @@ struct DownloadsView: View {
                 if let m = preCacheMeta {
                     preCacheOverlay(meta: m)
                 }
+                if let t = manager.currentTransfer {
+                    transferOverlay(transfer: t)
+                }
             }
             .alert("インポート", isPresented: .constant(importMessage != nil)) {
                 Button("OK") { importMessage = nil }
@@ -802,6 +805,38 @@ struct DownloadsView: View {
     }
 
     @ViewBuilder
+    private func transferOverlay(transfer: DownloadManager.TransferProgress) -> some View {
+        let total = max(transfer.totalBytes, 1)
+        let ratio = Double(transfer.doneBytes) / Double(total)
+        return ZStack {
+            Color.black.opacity(0.4).ignoresSafeArea()
+            VStack(spacing: 14) {
+                Text("NAS に転送中…")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.white)
+                Text(transfer.title)
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.85))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 280)
+                ProgressView(value: ratio)
+                    .progressViewStyle(.linear)
+                    .tint(.white)
+                    .frame(width: 240)
+                Text("\(formatByteSize(Int64(transfer.doneBytes))) / \(formatByteSize(Int64(transfer.totalBytes))) (\(Int(ratio * 100))%)")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.85))
+                    .monospacedDigit()
+            }
+            .padding(24)
+            .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .shadow(radius: 12)
+        }
+        .transition(.opacity)
+    }
+
     private var exportProgressOverlay: some View {
         ZStack {
             Color.black.opacity(0.4).ignoresSafeArea()
