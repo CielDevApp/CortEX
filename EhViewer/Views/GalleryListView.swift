@@ -108,16 +108,11 @@ struct GalleryListView: View {
                     }
                 }
                 ToolbarItem(placement: .automatic) {
-                    #if canImport(UIKit) && !targetEnvironment(macCatalyst)
-                    let idiom = UIDevice.current.userInterfaceIdiom
-                    if idiom == .pad || idiom == .phone {
-                        Button {
-                            galleryListLayout = (galleryListLayout == "grid") ? "list" : "grid"
-                        } label: {
-                            Image(systemName: galleryListLayout == "grid" ? "list.bullet" : "square.grid.2x2")
-                        }
+                    Button {
+                        galleryListLayout = (galleryListLayout == "grid") ? "list" : "grid"
+                    } label: {
+                        Image(systemName: galleryListLayout == "grid" ? "list.bullet" : "square.grid.2x2")
                     }
-                    #endif
                 }
             }
             .searchable(text: $searchText, prompt: selectedSource == .nhentai ? "nhentai検索..." : "検索...")
@@ -320,7 +315,9 @@ struct GalleryScrollList: View {
 
     /// Phase G-A iPad-only パイロット (2026-04-26): iPad のみ Grid、Mac/iPhone は既存 List。
     private var isIPadGrid: Bool {
-        #if canImport(UIKit) && !targetEnvironment(macCatalyst)
+        #if targetEnvironment(macCatalyst)
+        return galleryListLayout == "grid"
+        #elseif canImport(UIKit)
         let idiom = UIDevice.current.userInterfaceIdiom
         return (idiom == .pad || idiom == .phone) && galleryListLayout == "grid"
         #else
@@ -328,9 +325,11 @@ struct GalleryScrollList: View {
         #endif
     }
 
-    /// idiom + size class からグリッド列数を決定。iPad regular=6 / compact=4、iPhone=3 固定。
+    /// idiom / プラットフォーム別グリッド列数: iPad=4、iPhone=3、Mac Catalyst=adaptive(180+)。
     private var gridColumns: [GridItem] {
-        #if canImport(UIKit) && !targetEnvironment(macCatalyst)
+        #if targetEnvironment(macCatalyst)
+        return GalleryGridColumns.macColumns()
+        #elseif canImport(UIKit)
         if UIDevice.current.userInterfaceIdiom == .phone {
             return GalleryGridColumns.iPhoneColumns()
         }
@@ -354,54 +353,58 @@ struct GalleryScrollList: View {
         let columns = gridColumns
         ScrollView {
             LazyVGrid(columns: columns, spacing: 8) {
-                ForEach(Array(viewModel.galleries.enumerated()), id: \.element.gid) { index, gallery in
-                    GalleryGridCellView(gallery: gallery)
-                        .contentShape(Rectangle())
-                        .onTapGesture { navPath.append(gallery) }
-                        // simultaneousGesture: 長押しが tap を抑制せず即遷移する。
-                        // .highPriorityGesture(LongPress) だと minimumDuration 経過まで tap が保留される。
-                        .simultaneousGesture(
-                            LongPressGesture(minimumDuration: 0.4, maximumDistance: 15)
-                                .onEnded { _ in
-                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                    previewGallery = gallery
+                // 田中設計 (2026-04-27): real セルとダミーを統合 ForEach に。
+                // index < galleries.count → real cell、それ以上 → ダミー (常時 +80 slot 確保)。
+                // SwiftUI の自然な diff で「ダミー → real cell」置換が動く。
+                let totalSlots = Array(0..<(viewModel.galleries.count + 80))
+                ForEach(totalSlots, id: \.self) { index in
+                    if index < viewModel.galleries.count {
+                        let gallery = viewModel.galleries[index]
+                        GalleryGridCellView(gallery: gallery)
+                            .contentShape(Rectangle())
+                            .onTapGesture { navPath.append(gallery) }
+                            .simultaneousGesture(
+                                LongPressGesture(minimumDuration: 0.4, maximumDistance: 15)
+                                    .onEnded { _ in
+                                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                        previewGallery = gallery
+                                    }
+                            )
+                            .onAppear {
+                                if index >= viewModel.galleries.count - 4 && viewModel.hasMore && !viewModel.isLoading {
+                                    Task { await viewModel.loadNextPage() }
                                 }
-                        )
-                        .id(gallery.gid)
-                        .onAppear {
-                            // LazyVGrid 末尾の ProgressView().task は安定発火しないので
-                            // 末尾近傍セルの onAppear で loadNextPage トリガ。
-                            if index >= viewModel.galleries.count - 4 && viewModel.hasMore && !viewModel.isLoading {
-                                Task { await viewModel.loadNextPage() }
-                            }
-                            let prefetchRange = (index + 1)...(index + 4)
-                            let galleries = viewModel.galleries
-                            Task.detached(priority: .userInitiated) {
-                                for i in prefetchRange {
-                                    guard i < galleries.count else { break }
-                                    if let url = galleries[i].coverURL,
-                                       ImageCache.shared.image(for: url) == nil,
-                                       !ImageCache.shared.isLoading(url) {
-                                        ImageCache.shared.setLoading(url)
-                                        do {
-                                            let data = try await EhClient.shared.fetchThumbData(url: url, host: .exhentai)
-                                            let ciCtx = SpriteCache.ciContext
-                                            if let ciImage = CIImage(data: data),
-                                               let cgImage = ciCtx.createCGImage(ciImage, from: ciImage.extent) {
-                                                let img = UIImage(cgImage: cgImage)
-                                                ImageCache.shared.setThumb(img, for: url)
-                                            } else if let img = PlatformImage(data: data) {
-                                                ImageCache.shared.setThumb(img, for: url)
-                                            }
-                                        } catch {}
-                                        ImageCache.shared.removeLoading(url)
+                                let prefetchRange = (index + 1)...(index + 4)
+                                let galleries = viewModel.galleries
+                                Task.detached(priority: .userInitiated) {
+                                    for i in prefetchRange {
+                                        guard i < galleries.count else { break }
+                                        if let url = galleries[i].coverURL,
+                                           ImageCache.shared.image(for: url) == nil,
+                                           !ImageCache.shared.isLoading(url) {
+                                            ImageCache.shared.setLoading(url)
+                                            do {
+                                                let data = try await EhClient.shared.fetchThumbData(url: url, host: .exhentai)
+                                                let ciCtx = SpriteCache.ciContext
+                                                if let ciImage = CIImage(data: data),
+                                                   let cgImage = ciCtx.createCGImage(ciImage, from: ciImage.extent) {
+                                                    let img = UIImage(cgImage: cgImage)
+                                                    ImageCache.shared.setThumb(img, for: url)
+                                                } else if let img = PlatformImage(data: data) {
+                                                    ImageCache.shared.setThumb(img, for: url)
+                                                }
+                                            } catch {}
+                                            ImageCache.shared.removeLoading(url)
+                                        }
                                     }
                                 }
                             }
-                        }
-                }
-                if viewModel.hasMore {
-                    ProgressView().padding().task { await viewModel.loadNextPage() }
+                    } else {
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.gray.opacity(0.18))
+                            .aspectRatio(2.0/3.0, contentMode: .fit)
+                            .task { await viewModel.loadNextPage() }
+                    }
                 }
             }
             .padding(8)
@@ -771,7 +774,9 @@ struct NhentaiScrollList: View {
     @AppStorage("galleryListLayout") private var galleryListLayout: String = "grid"
 
     private var isIPadGrid: Bool {
-        #if canImport(UIKit) && !targetEnvironment(macCatalyst)
+        #if targetEnvironment(macCatalyst)
+        return galleryListLayout == "grid"
+        #elseif canImport(UIKit)
         let idiom = UIDevice.current.userInterfaceIdiom
         return (idiom == .pad || idiom == .phone) && galleryListLayout == "grid"
         #else
@@ -779,9 +784,11 @@ struct NhentaiScrollList: View {
         #endif
     }
 
-    /// idiom + size class からグリッド列数を決定。iPad regular=6 / compact=4、iPhone=3 固定。
+    /// idiom / プラットフォーム別グリッド列数: iPad=4、iPhone=3、Mac Catalyst=adaptive(180+)。
     private var gridColumns: [GridItem] {
-        #if canImport(UIKit) && !targetEnvironment(macCatalyst)
+        #if targetEnvironment(macCatalyst)
+        return GalleryGridColumns.macColumns()
+        #elseif canImport(UIKit)
         if UIDevice.current.userInterfaceIdiom == .phone {
             return GalleryGridColumns.iPhoneColumns()
         }
@@ -805,26 +812,32 @@ struct NhentaiScrollList: View {
         let columns = gridColumns
         ScrollView {
             LazyVGrid(columns: columns, spacing: 8) {
-                ForEach(Array(viewModel.galleries.enumerated()), id: \.element.id) { index, nh in
-                    NhentaiGridCellView(gallery: nh)
-                        .contentShape(Rectangle())
-                        .onTapGesture { navPath.append(nh) }
-                        // simultaneousGesture: 長押しが tap を抑制せず即遷移する。
-                        // .onLongPressGesture を直接付けると minimumDuration 経過まで tap が保留される。
-                        .simultaneousGesture(
-                            LongPressGesture(minimumDuration: 0.4, maximumDistance: 15)
-                                .onEnded { _ in
-                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                    previewGallery = nh
+                // 田中設計 (2026-04-27): real セルとダミーを統合 ForEach に。
+                let totalSlots = Array(0..<(viewModel.galleries.count + 80))
+                ForEach(totalSlots, id: \.self) { index in
+                    if index < viewModel.galleries.count {
+                        let nh = viewModel.galleries[index]
+                        NhentaiGridCellView(gallery: nh)
+                            .contentShape(Rectangle())
+                            .onTapGesture { navPath.append(nh) }
+                            .simultaneousGesture(
+                                LongPressGesture(minimumDuration: 0.4, maximumDistance: 15)
+                                    .onEnded { _ in
+                                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                        previewGallery = nh
+                                    }
+                            )
+                            .onAppear {
+                                if index >= viewModel.galleries.count - 4 && viewModel.hasMore && !viewModel.isLoading {
+                                    Task { await viewModel.loadNextPage() }
                                 }
-                        )
-                        .id(nh.id)
-                        .onAppear {
-                            // 末尾近傍で次ページトリガ (LazyVGrid 内 ProgressView の .task 不安定対策)
-                            if index >= viewModel.galleries.count - 4 && viewModel.hasMore && !viewModel.isLoading {
-                                Task { await viewModel.loadNextPage() }
                             }
-                        }
+                    } else {
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.gray.opacity(0.18))
+                            .aspectRatio(2.0/3.0, contentMode: .fit)
+                            .task { await viewModel.loadNextPage() }
+                    }
                 }
             }
             .padding(.horizontal, 8)

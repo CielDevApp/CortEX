@@ -20,6 +20,12 @@ enum GalleryGridColumns {
     static func iPhoneColumns() -> [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
     }
+
+    /// Mac Catalyst: ウィンドウ幅に応じて自動で列数調整 (最小 180pt)。
+    /// .adaptive で SwiftUI がリサイズ追従、ユーザーの好みのウィンドウサイズで列数が変化。
+    static func macColumns() -> [GridItem] {
+        [GridItem(.adaptive(minimum: 180), spacing: 8)]
+    }
 }
 #endif
 
