@@ -1104,7 +1104,13 @@ class DownloadManager: ObservableObject {
         }
 
         // 田中要望 2026-04-26: 完了後 staging → NAS bulk move (background)
-        if completed && isStaging(gid: gid) {
+        // 田中要望 2026-04-27: failed page が残っていても 1 枚以上 DL 済みなら partial finalize
+        let hasAnyDownloadedNh = state.downloadedSet.count > 0
+        if hasAnyDownloadedNh && isStaging(gid: gid) {
+            if !completed {
+                let missing = (0..<totalPages).filter { !state.downloadedSet.contains($0) }.map { $0 + 1 }
+                LogManager.shared.log("Download", "nhentai gid=\(gid) partial finalize: \(state.downloadedSet.count)/\(totalPages) (missing=\(missing.prefix(20))\(missing.count > 20 ? "..." : ""))")
+            }
             Task.detached(priority: .userInitiated) { [weak self] in
                 await self?.moveStagingToFinalDest(gid: gid)
             }
@@ -1911,13 +1917,25 @@ class DownloadManager: ObservableObject {
         }
 
         // セカンドパス: 失敗ページを再試行 (BAN 中は skip、BAN 期間延長を防ぐ)
+        // 田中要望 2026-04-27: 失敗してもやり直して .cortex 化 → 2nd→3rd→4thpass まで自動 retry
         if BackgroundDownloadManager.shared.isRateLimited(gid: gid) {
             LogManager.shared.log("Download", "gid=\(gid) 2ndpass SKIP: rate limited (BAN 中は再試行しない)")
         }
-        let allFailed = state.failedPages.filter { !state.downloadedSet.contains($0.index) }
-        if !allFailed.isEmpty && !BackgroundDownloadManager.shared.isRateLimited(gid: gid) {
+        let maxRetryPasses = 4  // 2nd / 3rd / 4thpass まで
+        for passNum in 2...maxRetryPasses {
+            // 直前 pass で残った失敗 + reconcile で取りこぼした未 DL を再構築
+            for idx in 0..<totalPages where !state.downloadedSet.contains(idx) {
+                if !state.failedPages.contains(where: { $0.index == idx }) {
+                    state.failedPages.append((index: idx, pageURL: allPageURLs[idx]))
+                }
+            }
+            let allFailed = state.failedPages.filter { !state.downloadedSet.contains($0.index) }
+            if allFailed.isEmpty { break }
+            if BackgroundDownloadManager.shared.isRateLimited(gid: gid) { break }
+            if activeDownloads[gid]?.isCancelled == true { break }
+
             let failedPageNums = allFailed.map { $0.index + 1 }
-            LogManager.shared.log("Download", "gid=\(gid) 2ndpass START retry=\(failedPageNums) (5s wait)")
+            LogManager.shared.log("Download", "gid=\(gid) \(passNum)thpass START retry=\(failedPageNums) (5s wait)")
             // UI: 「別ミラーから再試行中」に切替 (info マーク表示用)
             updatePhase(gid: gid, phase: .retrying)
             // 5s 待機中に cancelDownload されたら即脱出（小刻みに分割してチェック）
@@ -1926,7 +1944,7 @@ class DownloadManager: ObservableObject {
                 await SafetyMode.shared.delay(nanoseconds: 500_000_000)
             }
 
-            // 並列度 5 で 2ndpass を回す (TaskGroup、常時 5 枚分の download を並走)
+            // 並列度 5 で retry pass を回す (TaskGroup、常時 5 枚分の download を並走)
             // - 各 task 内で isCancelled check、SafetyMode.delay は維持
             // - state.downloadedSet / progress の write は主 task 側 (await group.next() 受信点) で集約 → race 回避
             // - 動画 WebP 用途: mirror DL 数が多く、並列化の効果大
@@ -1945,10 +1963,10 @@ class DownloadManager: ObservableObject {
                             state.downloadedSet.insert(index)
                             addDownloadedBytes(gid: gid, page: index)
                             updateProgress(gid: gid, current: state.downloadedSet.count, total: totalPages)
-                            LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) already on disk, skip 2ndpass")
+                            LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) already on disk, skip pass \(passNum)")
                             continue
                         }
-                        LogManager.shared.log("Download", "gid=\(gid) 2ndpass page \(index + 1) start url=\(pageURL.absoluteString.suffix(60))")
+                        LogManager.shared.log("Download", "gid=\(gid) \(passNum)thpass page \(index + 1) start url=\(pageURL.absoluteString.suffix(60))")
                         group.addTask { [self] in
                             let ok = await downloadSinglePage(
                                 gid: gid, index: index, pageURL: pageURL,
@@ -1963,7 +1981,7 @@ class DownloadManager: ObservableObject {
                     return false
                 }
 
-                // 初期スロット埋め (最大 3)
+                // 初期スロット埋め (最大 5)
                 for _ in 0..<maxConcurrent {
                     if activeDownloads[gid]?.isCancelled == true { break }
                     _ = enqueueNext()
@@ -1975,7 +1993,7 @@ class DownloadManager: ObservableObject {
                         if ok {
                             state.downloadedSet.insert(index)
                             addDownloadedBytes(gid: gid, page: index)
-                            // 速度表示用: 2ndpass は delegate 経由で bytes が届かないため
+                            // 速度表示用: retry pass は delegate 経由で bytes が届かないため
                             // ファイルサイズを直接累積へ加算する
                             let filePath = imageFilePath(gid: gid, page: index)
                             if let attrs = try? fileManager.attributesOfItem(atPath: filePath.path),
@@ -1983,16 +2001,20 @@ class DownloadManager: ObservableObject {
                                 BackgroundDownloadManager.shared.addCumulativeBytes(gid: gid, bytes: size)
                             }
                             updateProgress(gid: gid, current: state.downloadedSet.count, total: totalPages)
-                            LogManager.shared.log("Download", "gid=\(gid) 2ndpass page \(index + 1) OK")
+                            LogManager.shared.log("Download", "gid=\(gid) \(passNum)thpass page \(index + 1) OK")
                         } else {
-                            LogManager.shared.log("Download", "gid=\(gid) page \(index + 1)/\(totalPages) PERMANENTLY FAILED")
+                            LogManager.shared.log("Download", "gid=\(gid) \(passNum)thpass page \(index + 1)/\(totalPages) failed")
                         }
                     }
                     if activeDownloads[gid]?.isCancelled == true { continue }
                     _ = enqueueNext()
                 }
             }
-            LogManager.shared.log("Download", "gid=\(gid) 2ndpass END: done=\(state.downloadedSet.count)/\(totalPages)")
+            LogManager.shared.log("Download", "gid=\(gid) \(passNum)thpass END: done=\(state.downloadedSet.count)/\(totalPages)")
+
+            // この pass で 1 枚も進捗が無ければ次の pass を回しても無駄なので break
+            let stillMissing = (0..<totalPages).filter { !state.downloadedSet.contains($0) }
+            if stillMissing.isEmpty { break }
         }
 
         // BG session DROPPED completion 救済: meta 保存前にディスク上の実ファイルを scan して
@@ -2040,7 +2062,14 @@ class DownloadManager: ObservableObject {
         LogManager.shared.log("Download", "gid=\(gid) finished: \(state.downloadedSet.count)/\(totalPages) isComplete=\(completed)")
 
         // 田中要望 2026-04-26: 完了後 staging → NAS bulk move (background)
-        if completed && isStaging(gid: gid) {
+        // 田中要望 2026-04-27: retry を尽くしても failed page が残っても、
+        //   1 枚以上 DL 済みなら partial finalize で .cortex 化する (途中状態でも救済)。
+        let hasAnyDownloaded = state.downloadedSet.count > 0
+        if hasAnyDownloaded && isStaging(gid: gid) {
+            if !completed {
+                let missing = (0..<totalPages).filter { !state.downloadedSet.contains($0) }.map { $0 + 1 }
+                LogManager.shared.log("Download", "gid=\(gid) partial finalize: \(state.downloadedSet.count)/\(totalPages) (missing=\(missing.prefix(20))\(missing.count > 20 ? "..." : ""))")
+            }
             Task.detached(priority: .userInitiated) { [weak self] in
                 await self?.moveStagingToFinalDest(gid: gid)
             }
