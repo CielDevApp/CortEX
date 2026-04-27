@@ -2344,8 +2344,16 @@ class DownloadManager: ObservableObject {
     /// ページファイルの拡張子は保存時に .jpg 固定だが中身は WebP / JPEG 混在しうるので
     /// 先頭 32 バイトのマジックで判定。
     nonisolated func scanHasAnimatedWebp(gid: Int) -> Bool {
-        let dir = baseDirectory.appendingPathComponent("\(gid)", isDirectory: true)
-        return WebPAnimationDetector.directoryContainsAnimated(dir)
+        // 田中要望 2026-04-27: scan が baseDirectory のみで staging 中の作品を見逃す bug 修正。
+        //   post-DL finalize は staging dir に居る間に走るので、staging path にも fallback。
+        //   staging で見つかったら true、無ければ baseDirectory も走査する。
+        let stagingDir = dlStagingBase.appendingPathComponent("\(gid)", isDirectory: true)
+        if FileManager.default.fileExists(atPath: stagingDir.path),
+           WebPAnimationDetector.directoryContainsAnimated(stagingDir) {
+            return true
+        }
+        let baseDir = baseDirectory.appendingPathComponent("\(gid)", isDirectory: true)
+        return WebPAnimationDetector.directoryContainsAnimated(baseDir)
     }
 
     /// 初回 Reader 起動時の migration。hasAnimatedWebp が nil の場合に走査 + 保存。
