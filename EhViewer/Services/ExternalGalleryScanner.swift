@@ -91,9 +91,18 @@ enum ExternalGalleryScanner {
                 return nil
             }
             let gid = gidFromPath(zipURL.path)
+            // 田中要望 2026-04-27: metadata.json 無しの .cortex ZIP は ZIP file の
+            // creationDate (なければ mtime) を downloadDate に使う。Date() を入れると
+            // scan のたびに「今」になり追加日順が崩れる (Unrealbeauty Yaoguang 等が常に最上位化)。
+            let zipDate: Date = {
+                let attrs = try? FileManager.default.attributesOfItem(atPath: zipURL.path)
+                return (attrs?[.creationDate] as? Date)
+                    ?? (attrs?[.modificationDate] as? Date)
+                    ?? Date()
+            }()
             meta = DownloadedGallery(
                 gid: gid, token: "external_zip", title: title, coverFileName: nil,
-                pageCount: imageEntries.count, downloadDate: Date(), isComplete: true,
+                pageCount: imageEntries.count, downloadDate: zipDate, isComplete: true,
                 downloadedPages: Array(0..<imageEntries.count), source: "external_zip",
                 isCancelled: nil, hasAnimatedWebp: nil, readerModeOverride: nil, tags: nil
             )
