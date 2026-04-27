@@ -52,8 +52,11 @@ final class BackgroundDownloadManager: NSObject {
         config.httpCookieAcceptPolicy = .always
         config.httpShouldSetCookies = true
         config.waitsForConnectivity = false
-        config.timeoutIntervalForRequest = 30
-        config.timeoutIntervalForResource = 120
+        // 田中要望 2026-04-28: 大容量 animated WebP (15-20MB+) 取得時に 30s idle で
+        // -999 cancel される問題対策 (Android EH Viewer 等では取れる page が Cort:EX
+        // iPhone で取れない事象)。idle 90s / total 600s に緩和。
+        config.timeoutIntervalForRequest = 90
+        config.timeoutIntervalForResource = 600
         config.httpMaximumConnectionsPerHost = 4
         let s = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         _fgNhSession = s
@@ -67,8 +70,9 @@ final class BackgroundDownloadManager: NSObject {
         config.httpCookieAcceptPolicy = .always
         config.httpShouldSetCookies = true
         config.waitsForConnectivity = false
-        config.timeoutIntervalForRequest = 30
-        config.timeoutIntervalForResource = 120
+        // 田中要望 2026-04-28: 大容量 animated WebP の idle 30s cancel 対策。同上。
+        config.timeoutIntervalForRequest = 90
+        config.timeoutIntervalForResource = 600
         config.httpMaximumConnectionsPerHost = 4
         let s = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         _fgEhSession = s
