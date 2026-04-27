@@ -38,6 +38,13 @@ struct DownloadsView: View {
     /// エクスポートエラーメッセージ（nil = 成功 or idle）。Alert 表示用。
     @State private var exportError: String?
 
+    /// 田中要望 2026-04-27: 「保存済み」section のソート方式 (全プラットフォーム共通)。
+    /// 外部参照側 (Mac Catalyst のみ) は ExternalFolderManager 側で独立管理、enum は共有。
+    @AppStorage("downloadsCompletedSortOrderRaw") private var completedSortOrderRaw: String = ExternalFolderManager.ExternalSortOrder.dateAdded.rawValue
+    private var completedSortOrder: ExternalFolderManager.ExternalSortOrder {
+        get { ExternalFolderManager.ExternalSortOrder(rawValue: completedSortOrderRaw) ?? .dateAdded }
+    }
+
     private var activeList: [(gid: Int, progress: DownloadManager.DownloadProgress)] {
         manager.activeDownloads.sorted(by: { $0.key < $1.key }).map { (gid: $0.key, progress: $0.value) }
     }
@@ -65,9 +72,15 @@ struct DownloadsView: View {
             return []
         }
         #endif
-        return manager.downloads.values
-            .filter { $0.isComplete }
-            .sorted(by: { $0.downloadDate > $1.downloadDate })
+        let filtered = manager.downloads.values.filter { $0.isComplete }
+        switch completedSortOrder {
+        case .dateAdded:
+            return filtered.sorted { $0.downloadDate > $1.downloadDate }
+        case .nameAsc:
+            return filtered.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        case .nameDesc:
+            return filtered.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedDescending }
+        }
     }
 
     private var incompleteList: [DownloadedGallery] {
@@ -109,7 +122,7 @@ struct DownloadsView: View {
 
                 // ダウンロード済み
                 if !completedList.isEmpty {
-                    Section("保存済み (\(completedList.count))") {
+                    Section {
                         ForEach(completedList) { meta in
                             completedRow(meta: meta)
                                 .contextMenu {
@@ -142,6 +155,25 @@ struct DownloadsView: View {
                                         Label("削除", systemImage: "trash")
                                     }
                                 }
+                        }
+                    } header: {
+                        // 田中要望 2026-04-27: 「保存済み」section にソート Menu (全プラットフォーム)
+                        HStack {
+                            Text("保存済み (\(completedList.count))")
+                            Spacer()
+                            Menu {
+                                Picker("ソート", selection: Binding(
+                                    get: { completedSortOrder },
+                                    set: { completedSortOrderRaw = $0.rawValue }
+                                )) {
+                                    Text("追加日順").tag(ExternalFolderManager.ExternalSortOrder.dateAdded)
+                                    Text("名前昇順").tag(ExternalFolderManager.ExternalSortOrder.nameAsc)
+                                    Text("名前降順").tag(ExternalFolderManager.ExternalSortOrder.nameDesc)
+                                }
+                            } label: {
+                                Label("ソート", systemImage: "arrow.up.arrow.down.circle")
+                                    .labelStyle(.iconOnly)
+                            }
                         }
                     }
                 }
