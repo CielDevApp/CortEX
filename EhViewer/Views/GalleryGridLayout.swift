@@ -11,10 +11,9 @@ import UIKit
 
 #if canImport(UIKit)
 enum GalleryGridColumns {
-    /// iPad: 横 6 列 (regular)、縦 4 列 (compact)。田中確定 2026-04-26。
+    /// iPad: 4 列固定 (横向きでも縦向きでも 4)。田中確定 2026-04-27 (当初 regular=6/compact=4 から変更)。
     static func iPadColumns(horizontalSizeClass: UserInterfaceSizeClass?) -> [GridItem] {
-        let cols = (horizontalSizeClass == .regular) ? 6 : 4
-        return Array(repeating: GridItem(.flexible(), spacing: 8), count: cols)
+        Array(repeating: GridItem(.flexible(), spacing: 8), count: 4)
     }
 
     /// iPhone: 固定 3 列 (Amazon Prime Video iOS と同じ感覚)。田中確定 2026-04-27。
