@@ -81,7 +81,15 @@ class GalleryListViewModel: ObservableObject {
                     Self.saveListCache(result.galleries, key: key)
                 }
             } else {
-                galleries.append(contentsOf: result.galleries)
+                // 田中報告 2026-04-27: 言ったり戻ったりで galleries に同 gid が入ると
+                // LazyVGrid + .id(gid) で SwiftUI が同一 view と見なし row 抜け / 空白化。
+                // append 時に重複除外。
+                let existingGids = Set(galleries.map { $0.gid })
+                let deduped = result.galleries.filter { !existingGids.contains($0.gid) }
+                if deduped.count != result.galleries.count {
+                    LogManager.shared.log("GalleryList", "dedupe append: \(result.galleries.count) → \(deduped.count) (skipped \(result.galleries.count - deduped.count) dup)")
+                }
+                galleries.append(contentsOf: deduped)
             }
             nextPageURL = result.pageNumber.nextURL
             hasMore = result.pageNumber.hasNext
