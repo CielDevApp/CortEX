@@ -1,4 +1,4 @@
-# Cort:EX ver.02a f5
+# Cort:EX ver.02a f10
 
 > ## ⚠️ Security Fix — Immediate Update Required
 >
@@ -166,10 +166,28 @@ iPhone / iPad / Mac ユニバーサル対応の単一コードベース。Apple 
 
 ## 開発
 - Swift / SwiftUI
-- 76 Swiftファイル / 約20,000行
+- 92 Swift ファイル / 約 20,000 行
 - Metal / CoreML / Vision / WebKit / ActivityKit / TipKit
 
 ## 更新履歴
+
+### ver.02a f10 (2026-04-28)
+- **WKWebView E-Hentai / EXhentai ブラウザログイン** — 既存ログイン画面に「ブラウザでログイン」ボタンを追加 (全プラットフォーム共通)。Safari 風 toolbar + WKWebView モーダルで 3 つの cookie (`ipb_member_id` / `ipb_pass_hash` / `igneous`) を自動抽出して認証情報フィールドに自動入力。E-Hentai セッション伝播タイムラグ対策として、forums.e-hentai.org 到達時にモーダル全体を dismiss → 0.5 秒待機 → sheet 再 present で「閉じて再起動」を物理シミュレート、2 回目に確実に igneous を発行させる。`…` メニューに「e-hentai/exhentai cookie をクリア」debug 機能 (nhentai 側は無傷)。Cort:EX 黒/橙カラースキーム + SF Symbols 統一。
+
+### ver.02a f9 (2026-04-27)
+- **ライブラリソート Menu (全プラットフォーム)** — 「保存済み」section に追加日 / 名前昇降のソート Menu を追加。@AppStorage で永続化、外部参照 (Mac Catalyst) とは独立操作。
+- **`.cortex` 追加日修正** — metadata.json を含まない `.cortex` ZIP が scan のたびに `Date()` で「今」スタンプされ、UnrealBeauty Yaoguang / UnityNay 等が常に追加日順の最上位に出る問題を修正。ZIP file の `creationDate` (fallback `mtime`) を使う方式に変更、サブフォルダ形式と挙動統一。
+
+### ver.02a f8 (2026-04-27)
+- **画廊一覧グリッド表示** (iPad / iPhone / Mac Catalyst) + List/Grid 切替 — iPhone 3 列固定、iPad 4 列固定、Mac Catalyst adaptive(180+)。EH/EXH 全タブ + nhentai 全ソートに適用。
+- **画廊検索 race fix** — Enter 連打 / 連続検索の cancellation 処理修正。
+- **nhentai 人気順復活** — v2 search endpoint に切替。
+- **グリッド fullscreen 空白対策** — 統合 dummy slot 機構。
+- **DL 後 SSD → NAS 転送ダイアログ + 進捗バー**。
+- **ガチャ 10 連演出**のサムネ重複削減。
+- **ライブラリ詳細 sheet → タグ検索結果 → 作品タップ**の遷移修正。
+- **静画ジャンプ freeze 解消**、sandbox-off path-override、ImageCache race 修正。
+- **Removed:** iPhone 共有ボタン → Mac Cort:EX へ DL 依頼 (cortex://download/queue) を撤去 (実装未達 + 必要性消失)。保存済みエクスポート (.cortex zip 共有) は変更なし。
 
 ### ver.02a f6 (2026-04-23)
 - **Mac Catalyst 完全対応** — macOS 14+ Apple Silicon / Intel 両対応のユニバーサルビルド。Developer ID 署名 + Apple 公証済み `.app` を GitHub Releases で配布、`/Applications` にドロップしてダブルクリックで起動可能。上部タブバーは TabView の overflow menu 回避のため独自 HStack で再実装、全 7 タブを常時横並び + セル全域ヒット判定 + 矢印キーでのページ送り対応
