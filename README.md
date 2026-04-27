@@ -1,4 +1,4 @@
-# Cort:EX ver.02a f5
+# Cort:EX ver.02a f10
 
 > ## ⚠️ Security Fix — Immediate Update Required
 >
@@ -171,10 +171,28 @@ Single codebase running on iPhone / iPad / Mac. Built entirely on 20 native Appl
 
 ## Built With
 - Swift / SwiftUI
-- 76 Swift files / ~20,000 lines
+- 92 Swift files / ~20,000 lines
 - Metal / CoreML / Vision / WebKit / ActivityKit / TipKit
 
 ## Changelog
+
+### ver.02a f10 (2026-04-28)
+- **WKWebView E-Hentai / EXhentai Browser Login** — New "Login via browser" button in the existing login screen (all platforms). Safari-style toolbar + WKWebView modal automatically extracts the 3 cookies (`ipb_member_id` / `ipb_pass_hash` / `igneous`) and auto-fills the credential fields. To overcome E-Hentai session propagation lag, the modal is automatically dismissed and re-presented after forums.e-hentai.org is reached, physically simulating the "close and reopen" workflow that reliably triggers `igneous` issuance on the second attempt. Includes a `…` menu with "Clear e-hentai/exhentai cookies" debug option (nhentai cookies are untouched). Cort:EX black/orange color scheme + SF Symbols throughout.
+
+### ver.02a f9 (2026-04-27)
+- **Library Sort Menu (all platforms)** — Added a sort menu (Date added / Name asc / Name desc) to the "Saved" section header, persisted via @AppStorage. Independent from the External Reference (Mac Catalyst) sort.
+- **`.cortex` Date-Added Fix** — `.cortex` ZIPs without `metadata.json` were stamped with `Date()` on every scan, causing them (e.g. UnrealBeauty Yaoguang / UnityNay) to always rank at the top of the date-sorted list. Now uses the ZIP file's `creationDate` (fallback `mtime`), aligning behavior with the subfolder format.
+
+### ver.02a f8 (2026-04-27)
+- **Gallery List Grid View** (iPad / iPhone / Mac Catalyst) + List/Grid toggle — iPhone fixed 3 columns, iPad fixed 4 columns, Mac Catalyst adaptive(180+). Applies to all EH/EXH tabs and nhentai sort orders.
+- **Gallery Search Race Fix** — Properly handles cancellation when Enter is pressed repeatedly or searches run consecutively.
+- **nhentai Popular Sort Restored** — Switched to the v2 search endpoint.
+- **Grid Fullscreen Blank Mitigation** — Unified dummy slot mechanism.
+- **Post-DL SSD → NAS Transfer Dialog + Progress Bar**.
+- **Gacha 10-roll Animation** — Reduced thumbnail duplication.
+- **Library Detail Sheet → Tag Search → Tap Navigation Fix**.
+- **Static Image Jump Freeze Resolved**, sandbox-off path-override, ImageCache race fix.
+- **Removed:** iPhone share button → Mac Cort:EX delegate download (cortex://download/queue) was removed (implementation incomplete + need disappeared). Saved-gallery export (.cortex zip share) is unchanged.
 
 ### ver.02a f6 (2026-04-23)
 - **Mac Catalyst Universal Build** — Full macOS 14+ support on Apple Silicon and Intel. Developer ID signed + Apple-notarized `.app` distributed via GitHub Releases; drop into `/Applications` and double-click to launch. The top tab bar was reimplemented as a custom HStack (replacing SwiftUI TabView to avoid the Catalyst overflow menu) so all 7 tabs stay horizontal with full-cell hit targets and arrow-key paging
