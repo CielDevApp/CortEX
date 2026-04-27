@@ -284,7 +284,10 @@ struct GalleryListView: View {
 
     private func setupVM(_ vm: GalleryListViewModel, tab: GalleryTab) {
         guard vm.baseQuery == nil else { return }
-        let exclude = "-language:korean -language:translated"
+        // 田中報告 (2026-04-27): ログイン中でも英語/中国語版が混ざる。
+        // 旧 exclude は korean + translated のみで english/chinese を除外していなかった。
+        // nhentai 側 languageFilter と揃えて 4 言語除外で日本語版に寄せる。
+        let exclude = "-language:english -language:chinese -language:korean -language:translated"
         switch tab {
         case .all:
             vm.categoryFilter = nil
