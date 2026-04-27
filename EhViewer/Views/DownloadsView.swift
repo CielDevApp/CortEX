@@ -455,6 +455,9 @@ struct DownloadsView: View {
     @ViewBuilder
     private func downloadingRow(gid: Int, progress: DownloadManager.DownloadProgress) -> some View {
         let title = manager.downloads[gid]?.title ?? String(localized: "ダウンロード中...")
+        // 田中要望 2026-04-28: 同 gid の NAS 転送が走っている間は DL 進捗ではなく
+        // 「NAS 転送中…」表記に丸ごと切り替える (DL 完了→転送の境界が紛らわしいため)。
+        let activeTransfer: DownloadManager.TransferProgress? = (manager.currentTransfer?.gid == gid) ? manager.currentTransfer : nil
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 coverThumbnail(gid: gid)
@@ -466,43 +469,62 @@ struct DownloadsView: View {
                         ProgressView()
                             .scaleEffect(0.7)
                     }
-                    // phase 別表示切替
-                    switch progress.phase {
-                    case .preparing:
-                        // URL 解決中: got/expected が入ってれば具体値表示、未開始ならスピナーのみ
-                        if progress.total > 0 {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("URL解決中 \(progress.current)/\(progress.total)")
+                    if let t = activeTransfer {
+                        // NAS 転送中表記 (DL は完了済み、staging → NAS へ ZIP stream 中)
+                        let total = max(t.totalBytes, 1)
+                        let ratio = Double(t.doneBytes) / Double(total)
+                        Text("NAS に転送中…")
+                            .font(.caption.bold())
+                            .foregroundStyle(.orange)
+                        Text("\(formatByteSize(Int64(t.doneBytes))) / \(formatByteSize(Int64(t.totalBytes))) (\(Int(ratio * 100))%)")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    } else {
+                        // phase 別表示切替
+                        switch progress.phase {
+                        case .preparing:
+                            // URL 解決中: got/expected が入ってれば具体値表示、未開始ならスピナーのみ
+                            if progress.total > 0 {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("URL解決中 \(progress.current)/\(progress.total)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Text("アプリをアクティブのままにしてください")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                            } else {
+                                Text("DL準備中…")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
-                                Text("アプリをアクティブのままにしてください")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
                             }
-                        } else {
-                            Text("DL準備中…")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        case .cooling:
+                            coolingInfo(progress: progress)
+                        case .active:
+                            activeProgressDetails(gid: gid, progress: progress)
+                        case .retrying:
+                            retryingInfo(gid: gid, progress: progress)
                         }
-                    case .cooling:
-                        coolingInfo(progress: progress)
-                    case .active:
-                        activeProgressDetails(gid: gid, progress: progress)
-                    case .retrying:
-                        retryingInfo(gid: gid, progress: progress)
                     }
                 }
                 Spacer()
-                Button {
-                    manager.cancelDownload(gid: gid)
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.red)
+                // 転送中は cancel 不可 (DL は完了済、転送 task は別レーンで走ってる)
+                if activeTransfer == nil {
+                    Button {
+                        manager.cancelDownload(gid: gid)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.red)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
-            // preparing 中でも URL 解決進捗が入ってれば bar 出す（0% 張り付き対策）
-            if progress.phase != .preparing || progress.total > 0 {
+            // 進捗 bar: 転送中は転送 ratio + 橙、それ以外は phase 別
+            if let t = activeTransfer {
+                let total = max(t.totalBytes, 1)
+                ProgressView(value: Double(t.doneBytes) / Double(total))
+                    .tint(.orange)
+            } else if progress.phase != .preparing || progress.total > 0 {
                 ProgressView(value: progress.fraction)
                     .tint({
                         switch progress.phase {
