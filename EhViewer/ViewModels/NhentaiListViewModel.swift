@@ -45,7 +45,10 @@ class NhentaiListViewModel: ObservableObject {
             let query = buildQuery()
             let sort = sortMode == .popular ? "popular" : nil
             let result = try await NhentaiClient.search(query: query, page: currentPage, sort: sort)
-            galleries.append(contentsOf: result.result)
+            // 田中報告 2026-04-27: append 時に同 id 重複除外 (LazyVGrid 空白化対策)
+            let existingIDs = Set(galleries.map { $0.id })
+            let deduped = result.result.filter { !existingIDs.contains($0.id) }
+            galleries.append(contentsOf: deduped)
             hasMore = currentPage < result.num_pages
         } catch {
             LogManager.shared.log("nhentai", "nextPage failed: \(error.localizedDescription)")
