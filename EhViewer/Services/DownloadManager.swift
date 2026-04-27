@@ -1798,23 +1798,43 @@ class DownloadManager: ObservableObject {
                         defer { urlResolveSem.signal() }
                         // wait で待機している間に trip した可能性あるので再チェック
                         if BackgroundDownloadManager.shared.isRateLimited(gid: gid) { return }
-                        do {
-                            let imageURL = try await resolveClient.fetchImageURL(pageURL: pageURL)
+                        // 田中提案 (2026-04-27): 1st pass にインライン retry を導入。
+                        // 一時的な Cloudflare challenge / mirror URL stale で 1 回コケただけでも
+                        // 即 2ndpass に push されると 2ndpass の URL 再 resolve コストが大きいので、
+                        // BAN 以外のエラーは 1st pass 内で計 3 回まで再試行 (短い backoff 付き)。
+                        var resolved: URL?
+                        var lastError: Error?
+                        let maxAttempts = 3
+                        for attempt in 1...maxAttempts {
+                            if BackgroundDownloadManager.shared.isRateLimited(gid: gid) { return }
+                            do {
+                                resolved = try await resolveClient.fetchImageURL(pageURL: pageURL)
+                                break
+                            } catch {
+                                lastError = error
+                                // BAN 検知時は即 trip: 他の並列 task も次回 check で halt + 2ndpass も skip
+                                if case EhError.banned(let remaining) = error {
+                                    BackgroundDownloadManager.shared.tripRateLimit(gid: gid)
+                                    LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) BANNED (URL resolve), remaining=\(remaining ?? "unknown"), tripping rateLimit")
+                                    return  // ダミー enqueue せず即抜ける
+                                }
+                                if attempt < maxAttempts {
+                                    LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) URL解決 transient fail attempt=\(attempt)/\(maxAttempts): \(error.localizedDescription)")
+                                    // 短い backoff: 0.5s, 1.0s
+                                    try? await Task.sleep(nanoseconds: UInt64(attempt) * 500_000_000)
+                                }
+                            }
+                        }
+                        if let imageURL = resolved {
                             if BackgroundDownloadManager.shared.isRateLimited(gid: gid) { return }
                             BackgroundDownloadManager.shared.enqueue(
                                 url: imageURL, gid: gid, pageIndex: index, finalPath: filePath,
                                 session: session, headers: ehHeaders
                             )
                             await enqueueStats.bump(gid: gid, page: index, urlTail: imageURL.absoluteString.suffix(60))
-                        } catch {
-                            // BAN 検知時は即 trip: 他の並列 task も次回 check で halt + 2ndpass も skip
-                            if case EhError.banned(let remaining) = error {
-                                BackgroundDownloadManager.shared.tripRateLimit(gid: gid)
-                                LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) BANNED (URL resolve), remaining=\(remaining ?? "unknown"), tripping rateLimit")
-                                return  // ダミー enqueue せず即抜ける
-                            }
-                            LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) URL解決失敗: \(error.localizedDescription)")
-                            // 失敗もstream経由で通知（mirror再試行はsecondpassで）
+                        } else {
+                            LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) URL解決失敗 (after \(maxAttempts) attempts): \(lastError?.localizedDescription ?? "?")")
+                            // 全 retry 尽きたら 2ndpass に委譲 (ダミー enqueue で 1st pass stream に記録)
                             BackgroundDownloadManager.shared.enqueue(
                                 url: pageURL,  // ダミー（HTMLを画像扱いで失敗する）
                                 gid: gid, pageIndex: index, finalPath: filePath,
