@@ -417,9 +417,10 @@ struct GachaView: View {
         buttonsOpacity = 0
         fadeOverlayOpacity = 0
 
-        // サムネプリロード
+        // サムネプリロード (田中要望 2026-04-27: 演出 tile の被りを最大限減らすため
+        // pool 全体から cache 済画像を集める。.prefix(80) cap を撤去)
         var cachedImages: [PlatformImage] = []
-        for g in pool.shuffled().prefix(80) {
+        for g in pool.shuffled() {
             if let url = g.coverURL, let img = ImageCache.shared.image(for: url) {
                 cachedImages.append(img)
             }
@@ -506,9 +507,18 @@ struct GachaView: View {
         let rows = Int(ceil(h / (tileH * 0.85))) + 1
         let totalNeeded = cols * rows
 
+        // 田中要望 (2026-04-27): % images.count による単純 cycle だと同じ画像が
+        // 規則的に被るため、shuffled round を totalNeeded まで連結して隣接被りを散らす。
+        // images.count >= totalNeeded なら完全 unique (1 round で足りる)。
+        var tileImages: [PlatformImage] = []
+        tileImages.reserveCapacity(totalNeeded)
+        while tileImages.count < totalNeeded {
+            tileImages.append(contentsOf: images.shuffled())
+        }
+
         for row in 0..<rows {
             for col in 0..<cols {
-                let img = images[(row * cols + col) % images.count]
+                let img = tileImages[row * cols + col]
                 let size = CGFloat.random(in: 55...75)
                 // グリッド位置にランダムなジッター追加
                 let jitterX = CGFloat.random(in: -8...8)
