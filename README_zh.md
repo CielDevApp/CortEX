@@ -1,4 +1,4 @@
-# Cort:EX ver.02a f5
+# Cort:EX ver.02a f9
 
 > ## ⚠️ Security Fix — Immediate Update Required
 >
@@ -94,6 +94,39 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 
 ---
 
+## 架构
+
+iPhone / iPad / Mac 通用单代码库。基于 Apple 原生 20 个框架构建，零外部依赖。
+
+**9 层架构:**
+
+| # | 层 | 主要构成 |
+|---|---|---|
+| 01 | PRESENTATION | 4 模式阅读器（垂直滚动 / 水平翻页 / iPad 双页展开 / 捏合缩放） |
+| 02 | MODES | SAFETY (default) / EXTREME / ECO / SPARE 四种运行模式 |
+| 03 | INGESTION | E-Hentai / EXhentai 动态切换、nhentai v2 API + Cloudflare Turnstile 突破 |
+| 04 | TRANSPORT | BackgroundDownloadManager、URLSession 后台下载、BAN 封堵 6 路径、2ndpass 并行 5 |
+| 05 | COMPUTE | 图像处理引擎 3 基（CIFilter / Metal Compute / CoreML Real-ESRGAN） |
+| 06 | MEDIA | 动画 WebP / HEVC 转换、HDR 校正、VideoToolbox 硬件编码 |
+| 07 | SILICON | CPU / GPU (Metal) / NPU (CoreML) / Media Engine 全活用，iPhone A17 Pro / iPad A17 Pro / Mac M1–M4 支持 |
+| 08 | TRUST | Face ID / Touch ID / PIN / Keychain / App Switcher 模糊 |
+| 09 | PLATFORM | iOS 18+ / iPadOS 18+ / macOS 14+ Mac Catalyst、8 语言本地化 |
+
+**SAFETY MODE 主要特性:**
+- BAN 检测 6 路径完全封堵
+- 50 页 / 60 秒 自动 cooldown
+- 2ndpass 并行 5 自动救回失败页面
+- 维持并行度，速度无牺牲
+- disk prefix skip · reconcileGallery
+
+**构成事实:**
+- 91 个 Swift 文件 / 约 20,000 行
+- 外部依赖库: 0
+- Apple 原生框架: 20
+- 支持: iOS 18+ / iPadOS 18+ / macOS 14+
+
+---
+
 ## 系统要求
 - iOS 18.0+ / iPadOS 18.0+（iOS 26 / iPadOS 26 已测试）
 - macOS 14.0+（Mac Catalyst，Apple Silicon / Intel 均可）
@@ -132,10 +165,25 @@ https://github.com/CielDevApp/CortEX/raw/main/assets/demo.mp4
 
 ## 技术栈
 - Swift / SwiftUI
-- 76个Swift文件 / 约20,000行代码
+- 91 个 Swift 文件 / 约 20,000 行代码
 - Metal / CoreML / Vision / WebKit / ActivityKit / TipKit
 
 ## 更新日志
+
+### ver.02a f9 (2026-04-27)
+- **库排序菜单**（全平台）— 「已保存」分区添加追加日 / 名称升降序排序菜单。@AppStorage 持久化，与外部参考分区独立操作
+- **`.cortex` 追加日修复** — 不含 metadata.json 的 `.cortex` ZIP 在每次扫描时被 `Date()` 填充为「现在」，导致 Unrealbeauty Yaoguang / UnityNay 等永远位于最上方。改为使用 ZIP 文件的 creationDate（fallback mtime），与子文件夹形式行为统一
+
+### ver.02a f8 (2026-04-27)
+- **画廊网格视图**（iPad / iPhone / Mac Catalyst 全平台）+ List/Grid 切换 — iPhone 3 列固定、iPad 4 列固定、Mac Catalyst adaptive(180+)。EH/EXH 全标签 + nhentai 全排序适用
+- **画廊搜索 race fix** — Enter 连击 / 连续搜索的 cancellation 处理修复
+- **nhentai 人气排序复活** — 切换到 v2 search endpoint
+- **网格全屏空白对策** — 统合 dummy slot 机构
+- **DL 后 SSD → NAS 转送对话框 + 进度条**
+- **抽卡 10 连演出**的缩略图重叠减少
+- **库详情 sheet → 标签搜索 → 作品点击**的导航修复
+- **静画跳页 freeze 解消**、sandbox-off path-override、ImageCache race 修复
+- **Removed:** iPhone 共享按钮 → Mac Cort:EX 委托下载 (cortex://download/queue) 已移除（实装未达 + 必要性消失）。已保存导出 (.cortex zip 共享) 不变
 
 ### ver.02a f6 (2026-04-23)
 - **Mac Catalyst 完全支持** — 支持 macOS 14+（Apple Silicon / Intel）的通用构建。Developer ID 签名 + Apple 公证的 `.app` 通过 GitHub Releases 分发，拖入 `/Applications` 双击即可启动。顶部标签栏用自定义 HStack 重写（绕开 Catalyst TabView 的 overflow menu），全 7 标签始终横排 + 整格命中区 + 方向键翻页
