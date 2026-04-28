@@ -1978,10 +1978,18 @@ class DownloadManager: ObservableObject {
         let lastProgressBox = StallBox()
         lastProgressBox.update()
 
+        // 田中指示 2026-04-28: bytes 進捗ベース watchdog (page completion 待ちでなく、
+        // 誰かが byte 受信中なら stall 扱いしない → enqueue 中の large image でも誤 kill 防止)
         let watchdog = Task {
+            var lastCumulativeBytes: Int64 = BackgroundDownloadManager.shared.totalBytesReceivedThisSession(for: gid)
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)  // 1秒毎チェック
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
                 if Task.isCancelled { break }
+                let nowBytes = BackgroundDownloadManager.shared.totalBytesReceivedThisSession(for: gid)
+                if nowBytes > lastCumulativeBytes {
+                    lastCumulativeBytes = nowBytes
+                    lastProgressBox.update()
+                }
                 let elapsed = CFAbsoluteTimeGetCurrent() - lastProgressBox.value
                 let threshold = BackgroundDownloadManager.shared.isPreferringBGSession ? bgStallThreshold : fgStallThreshold
                 if elapsed > threshold {
