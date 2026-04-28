@@ -205,12 +205,24 @@ class ReaderViewModel: ObservableObject {
         completedPages.removeAll()
         processedPages.removeAll()
         placeholderPages.removeAll()
+        urlResolvingPages.removeAll()
         for (_, holder) in pageHolders {
             holder.image = nil
             holder.isPlaceholder = false
             holder.isFailed = false
             holder.failReason = nil
         }
+    }
+
+    /// 田中要望 2026-04-28 (3度目指摘): リーダー閉じる時の memory 完全解放。
+    /// resetAllState は qualityModeChanged/filterSettingsChanged からも呼ばれるため holder 構造は維持。
+    /// このメソッドは onDisappear 専用で pageHolders/imagePageURLs/thumbnails も全 drop。
+    func releaseAllForClose() {
+        resetAllState()
+        pageHolders.removeAll()
+        imagePageURLs.removeAll()
+        resolvedImageURLs.removeAll()
+        thumbnails.removeAll()
     }
 
     func reloadAround(range: Int = 3) {
