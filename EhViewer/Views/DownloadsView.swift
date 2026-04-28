@@ -623,19 +623,19 @@ struct DownloadsView: View {
                         .foregroundStyle(.orange)
                 }
             }
-            // 2ndpass (mirror DL) 中も 1stpass と同じ速度 / ETA 表示
+            // 2ndpass (mirror DL) 中: 田中指示 2026-04-28 残り時間/残り容量を表示
+            // 既存 1stpass の est-live 方式は残 page が large animated WebP の場合 live > est で
+            // 表示されないため、retrying では「残 page 数 × 平均 page サイズ」ベースで計算する。
             TimelineView(.periodic(from: .now, by: 0.5)) { _ in
-                let live = manager.liveDownloadedBytes(gid: gid)
-                let estimated = manager.estimatedTotalBytes(gid: gid, totalPages: progress.total, currentPages: progress.current)
                 let bps = BackgroundDownloadManager.shared.sampleBytesPerSecond(for: gid)
+                let remainingBytes = manager.estimatedRemainingBytes(gid: gid, totalPages: progress.total, currentPages: progress.current) ?? 0
                 HStack(spacing: 6) {
-                    if let est = estimated, est > live {
-                        let remaining = est - live
-                        Text("残り ~\(formatByteSize(remaining))")
+                    if remainingBytes > 0 {
+                        Text("残り ~\(formatByteSize(remainingBytes))")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.primary)
                         if bps > 0 {
-                            let etaSec = Int(Double(remaining) / Double(bps))
+                            let etaSec = Int(Double(remainingBytes) / Double(bps))
                             Text(formatETA(etaSec))
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(.green)

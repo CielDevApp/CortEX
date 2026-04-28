@@ -192,10 +192,12 @@ struct GalleryReaderView: View {
             // displayLink + rolling prefetch が reader 外で回り続け CPU 100% になる。
             // 加えて複数 animated source を開いた後 memory パンパンで戻る問題の回避も兼ねる。
             AnimatedPlaybackCoordinator.shared.closeReader("cell-\(gallery.gid)")
-            // 静画系メモリも全解放: rawImages / pageHolders.image / processedPages 等を
-            // 強制 nil 化しないと、リーダー閉じてもギャラリーリストに戻った時にメモリが
-            // 数百 MB 居座る (田中報告 2026-04-25 二度目)。
-            viewModel.resetAllState()
+            // 田中要望 2026-04-28 (3度目指摘): 静画系メモリも完全解放。
+            // 旧 resetAllState は dict removeAll するが pageHolders 構造を維持していた → 解放不足。
+            // releaseAllForClose で pageHolders/imagePageURLs/thumbnails も含めて全 drop。
+            viewModel.releaseAllForClose()
+            // ehentai online reader でも ImageCache memory を flush (cover cache は維持)
+            ImageCache.shared.purgeMemoryCache()
         }
         .focusable()
         .focusEffectDisabled()
