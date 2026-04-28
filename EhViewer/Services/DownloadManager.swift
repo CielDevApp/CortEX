@@ -1973,14 +1973,14 @@ class DownloadManager: ObservableObject {
         //   FG 中: 20s (「突っかかり」を短時間で切って 2ndpass へ)
         //   BG 中 (preferBGSession=true): 300s (iOS throttling 下でも stream を保持)
         var pendingCount = pendingIndices.count
-        let fgStallThreshold: Double = 20.0
+        let fgStallThreshold: Double = 5.0  // 田中指示 2026-04-28: 5秒で 2thpass mirror 切替
         let bgStallThreshold: Double = 300.0
         let lastProgressBox = StallBox()
         lastProgressBox.update()
 
         let watchdog = Task {
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 5_000_000_000)  // 5秒毎チェック
+                try? await Task.sleep(nanoseconds: 1_000_000_000)  // 1秒毎チェック
                 if Task.isCancelled { break }
                 let elapsed = CFAbsoluteTimeGetCurrent() - lastProgressBox.value
                 let threshold = BackgroundDownloadManager.shared.isPreferringBGSession ? bgStallThreshold : fgStallThreshold
@@ -2051,14 +2051,10 @@ class DownloadManager: ObservableObject {
             if activeDownloads[gid]?.isCancelled == true { break }
 
             let failedPageNums = allFailed.map { $0.index + 1 }
-            LogManager.shared.log("Download", "gid=\(gid) \(passNum)thpass START retry=\(failedPageNums) (5s wait)")
+            LogManager.shared.log("Download", "gid=\(gid) \(passNum)thpass START retry=\(failedPageNums) (immediate)")
             // UI: 「別ミラーから再試行中」に切替 (info マーク表示用)
             updatePhase(gid: gid, phase: .retrying)
-            // 5s 待機中に cancelDownload されたら即脱出（小刻みに分割してチェック）
-            for _ in 0..<10 {
-                if activeDownloads[gid]?.isCancelled == true { break }
-                await SafetyMode.shared.delay(nanoseconds: 500_000_000)
-            }
+            // 田中指示 2026-04-28: ミラー切替待ち時間を完全削除、即 2thpass DL 開始
 
             // 並列度 5 で retry pass を回す (TaskGroup、常時 5 枚分の download を並走)
             // - 各 task 内で isCancelled check、SafetyMode.delay は維持
@@ -2110,13 +2106,8 @@ class DownloadManager: ObservableObject {
                         if ok {
                             state.downloadedSet.insert(index)
                             addDownloadedBytes(gid: gid, page: index)
-                            // 速度表示用: retry pass は delegate 経由で bytes が届かないため
-                            // ファイルサイズを直接累積へ加算する
-                            let filePath = imageFilePath(gid: gid, page: index)
-                            if let attrs = try? fileManager.attributesOfItem(atPath: filePath.path),
-                               let size = attrs[.size] as? Int64 {
-                                BackgroundDownloadManager.shared.addCumulativeBytes(gid: gid, bytes: size)
-                            }
+                            // 田中指示 2026-04-28: 2thpass も didWriteData delegate 経由で
+                            // bytes 累積されるようになったため、ファイルサイズの追加加算は不要
                             updateProgress(gid: gid, current: state.downloadedSet.count, total: totalPages)
                             LogManager.shared.log("Download", "gid=\(gid) \(passNum)thpass page \(index + 1) OK")
                         } else {
@@ -2311,7 +2302,8 @@ class DownloadManager: ObservableObject {
                     url: imageURL,
                     session: BackgroundDownloadManager.shared.ehSession,
                     finalPath: filePath,
-                    headers: headers
+                    headers: headers,
+                    gid: gid
                 )
                 LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) attempt \(attempt): downloadTask done ok=\(ok)")
                 if activeDownloads[gid]?.isCancelled == true { return false }
