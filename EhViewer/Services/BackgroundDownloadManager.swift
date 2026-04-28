@@ -52,9 +52,9 @@ final class BackgroundDownloadManager: NSObject {
         config.httpCookieAcceptPolicy = .always
         config.httpShouldSetCookies = true
         config.waitsForConnectivity = false
-        // 田中指示 2026-04-28: 30s idle で失敗扱い → 欠損ページのまま完了 → リーダーで再読み込み
+        // 田中指示 2026-04-28: 失敗判断は SpeedTracker (FG 2s) で行う → URLSession config は緩めに
         config.timeoutIntervalForRequest = 30
-        config.timeoutIntervalForResource = 300
+        config.timeoutIntervalForResource = 120
         config.httpMaximumConnectionsPerHost = 4
         let s = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         _fgNhSession = s
@@ -68,9 +68,9 @@ final class BackgroundDownloadManager: NSObject {
         config.httpCookieAcceptPolicy = .always
         config.httpShouldSetCookies = true
         config.waitsForConnectivity = false
-        // 田中指示 2026-04-28: 30s idle で失敗扱い → 欠損ページのまま完了 → リーダーで再読み込み
+        // 田中指示 2026-04-28: 失敗判断は SpeedTracker (FG 2s) で行う → URLSession config は緩めに
         config.timeoutIntervalForRequest = 30
-        config.timeoutIntervalForResource = 300
+        config.timeoutIntervalForResource = 120
         config.httpMaximumConnectionsPerHost = 4
         let s = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         _fgEhSession = s
@@ -183,6 +183,9 @@ final class BackgroundDownloadManager: NSObject {
     private var registry: [TaskKey: TaskEntry] = [:]
     /// 単発DL（非batch）用: TaskKey → continuation
     private var singleTaskContinuations: [TaskKey: (URL, CheckedContinuation<Bool, Never>)] = [:]
+    /// 田中指示 2026-04-28: 単発DL（2thpass downloadToFile）の gid 紐付け。
+    /// didWriteData で speed 表示用に bytes を累積するために必要。
+    private var singleTaskGids: [TaskKey: Int] = [:]
     /// gid → AsyncStream（batch DL用）
     private var gidStreams: [Int: AsyncStream<PageCompletion>.Continuation] = [:]
     private let stateQueue = DispatchQueue(label: "bgdl.state", qos: .userInitiated)
@@ -261,9 +264,9 @@ final class BackgroundDownloadManager: NSObject {
         Task.detached(priority: .utility) { [weak self] in
             await self?.cleanupStaleTasks()
         }
-        // 5秒ごとに SpeedTracker を評価 (低速 task を早期 kill → 2ndpass で mirror 切替)
+        // 500ms ごとに SpeedTracker を評価 (2秒閾値に追従、kill 反応速度向上)
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
-        timer.schedule(deadline: .now() + 5, repeating: 5)
+        timer.schedule(deadline: .now() + 0.5, repeating: 0.5)
         timer.setEventHandler { [weak self] in
             self?.evaluateSpeedStalls()
         }
@@ -453,7 +456,7 @@ final class BackgroundDownloadManager: NSObject {
     }
 
     /// 単発DL: URL1つをfinalPathに保存（従来互換API）
-    func downloadToFile(url: URL, session: URLSession, finalPath: URL, headers: [String: String] = [:]) async -> Bool {
+    func downloadToFile(url: URL, session: URLSession, finalPath: URL, headers: [String: String] = [:], gid: Int? = nil) async -> Bool {
         await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             var request = URLRequest(url: url)
             for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
@@ -471,6 +474,9 @@ final class BackgroundDownloadManager: NSObject {
             let key = TaskKey(sessionTag: tag, taskId: task.taskIdentifier)
             stateQueue.sync {
                 singleTaskContinuations[key] = (finalPath, continuation)
+                if let gid = gid {
+                    singleTaskGids[key] = gid
+                }
             }
             speedTracker.start(taskId: task.taskIdentifier, task: task, isBG: tag.isBG)
             task.resume()
@@ -653,7 +659,11 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
         speedTracker.update(taskId: taskId, totalBytes: totalBytesWritten)
         guard let tag = sessionTag(for: session) else { return }
         let key = TaskKey(sessionTag: tag, taskId: taskId)
-        let gidOpt: Int? = stateQueue.sync { registry[key]?.gid }
+        // 田中指示 2026-04-28: 2thpass (downloadToFile) でも速度表示が出るように
+        // singleTaskGids も参照して bytes を累積する
+        let gidOpt: Int? = stateQueue.sync {
+            registry[key]?.gid ?? singleTaskGids[key]
+        }
         guard let gid = gidOpt else { return }
         bytesLock.lock()
         bytesAccumulator[gid, default: 0] += bytesWritten
@@ -712,6 +722,7 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
 
         // Single task path（互換）
         let single: (URL, CheckedContinuation<Bool, Never>)? = stateQueue.sync {
+            singleTaskGids.removeValue(forKey: key)
             let e = singleTaskContinuations.removeValue(forKey: key)
             return e
         }
@@ -1020,6 +1031,7 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
 
         // Single task path
         let single: (URL, CheckedContinuation<Bool, Never>)? = stateQueue.sync {
+            singleTaskGids.removeValue(forKey: key)
             return singleTaskContinuations.removeValue(forKey: key)
         }
         if let single {
@@ -1142,11 +1154,11 @@ final class SpeedTracker: @unchecked Sendable {
     }
 
     /// kill 条件判定 (静的ロジック、副作用なし)
-    /// FG: 進捗停止 30秒超 (田中指示 2026-04-28「ミラーから DL 30秒で失敗扱い」)
-    /// BG: iOS throttling で転送間隔が空くため、進捗停止 120秒超
+    /// FG: 進捗停止 5秒超 (田中指示 2026-04-28「ミラー切替判断を素早く」)
+    /// BG: iOS throttling で転送間隔が空くため、進捗停止 90秒超
     /// 失敗 page は欠損のまま完了扱い → リーダー側で再読み込みボタン提供
     private static func killReason(tracker t: Tracker, now: CFAbsoluteTime) -> String? {
-        let noProgressLimit: Double = t.isBG ? 120 : 30
+        let noProgressLimit: Double = t.isBG ? 90 : 5
         let noProgress = now - t.lastProgressAt
         if noProgress > noProgressLimit {
             return "no progress for \(Int(noProgress))s (recv=\(t.lastBytes)B)"
