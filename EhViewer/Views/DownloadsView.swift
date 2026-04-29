@@ -54,17 +54,36 @@ struct DownloadsView: View {
     }
 
     /// 田中要望 2026-04-26: 外部参照を「一覧から削除した gid」と「ソート順」でフィルタ + sort。
+    /// 田中要望 2026-04-30: 同名作品が大量に並ぶ問題 (rescan で別 gid 重複登録) に対し
+    ///   title (大小無視) ベースで dedup。表示は downloadDate が新しい方を残す。
     private var visibleSortedExternal: [DownloadedGallery] {
         let visible = externalFolders.externalGalleries
             .filter { !externalFolders.hiddenExternalGids.contains($0.gid) }
+        let deduped = Self.dedupeByTitle(visible)
         switch externalFolders.externalSortOrder {
         case .dateAdded:
-            return visible.sorted { $0.downloadDate > $1.downloadDate }
+            return deduped.sorted { $0.downloadDate > $1.downloadDate }
         case .nameAsc:
-            return visible.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+            return deduped.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
         case .nameDesc:
-            return visible.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedDescending }
+            return deduped.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedDescending }
         }
+    }
+
+    /// title (大小無視 + 前後空白除去) で同一視。downloadDate 最新を代表として残す。
+    private static func dedupeByTitle(_ items: [DownloadedGallery]) -> [DownloadedGallery] {
+        var byKey: [String: DownloadedGallery] = [:]
+        for item in items {
+            let key = item.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if let existing = byKey[key] {
+                if item.downloadDate > existing.downloadDate {
+                    byKey[key] = item
+                }
+            } else {
+                byKey[key] = item
+            }
+        }
+        return Array(byKey.values)
     }
 
     private var completedList: [DownloadedGallery] {
@@ -76,7 +95,8 @@ struct DownloadsView: View {
             return []
         }
         #endif
-        let filtered = manager.downloads.values.filter { $0.isComplete }
+        // 田中要望 2026-04-30: 同名作品が大量に並ぶ問題に対し title ベース dedup (downloadDate 最新を残す)。
+        let filtered = Self.dedupeByTitle(manager.downloads.values.filter { $0.isComplete })
         switch completedSortOrder {
         case .dateAdded:
             return filtered.sorted { $0.downloadDate > $1.downloadDate }
