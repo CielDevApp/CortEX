@@ -217,6 +217,10 @@ struct LocalReaderView: View {
             // 静画フィルタ済みキャッシュも全解放: 400 ページ gallery で enhancedImages が
             // 数百 MB 居座る (田中報告 2026-04-25 二度目)。
             enhancedImages.removeAll()
+            // 田中要望 2026-04-30 (4 度目指摘): リーダー閉じてもメモリ残存。
+            // 残 State も全 drop で解放を確実にする (zoomImage は frame 全展開済 UIImage で大容量)。
+            zoomImage = nil
+            availablePages.removeAll()
             // 田中要望 2026-04-26: reader close 時のメモリパンパン対策、page image cache 強制 flush
             // cover cache は flush しない (Library 戻り時に NAS sync 再読込 → 5s freeze の原因)
             ImageCache.shared.purgeMemoryCache()
@@ -338,7 +342,8 @@ struct LocalReaderView: View {
             onDismiss: { dismiss() },
             onZoomImage: { img in zoomImage = img }
         )
-        .id(reprocessTrigger)
+        // 田中報告 2026-04-30: `.id(reprocessTrigger)` は ScrollView ごと再生成 → 暗転原因。
+        //   reprocess は enhancedImages の上書きだけで実現するように移行 (reprocessVisiblePages 参照)。
         .ignoresSafeArea()
         .onChange(of: horizontalPage) { _, newPage in
             currentIndex = newPage
@@ -535,12 +540,17 @@ struct LocalReaderView: View {
     // MARK: - 画質再処理
 
     /// 設定変更時に表示中ページを再処理
+    /// 田中報告 2026-04-30: HDR/ノイズ除去 toggle で瞬間暗転 →
+    ///   `enhancedImages.removeAll()` で全 cell が nil 化 + `.id(reprocessTrigger)` で
+    ///   ScrollView 再生成 → 全 cell が placeholder (Color.clear) に。
+    ///   修正: 古い画像を保持したまま processPage が同 index に上書き → atomic 置換で暗転なし。
+    ///   visible 範囲外だけ破棄して後の onAppear で再処理。
     private func reprocessVisiblePages() {
-        enhancedImages.removeAll()
-        reprocessTrigger += 1
         let center = currentIndex
         let lo = max(0, center - 2)
         let hi = min(meta.pageCount - 1, center + 2)
+        let visibleSet = Set(lo...hi)
+        enhancedImages = enhancedImages.filter { visibleSet.contains($0.key) }
         for i in lo...hi {
             processPage(i)
         }
