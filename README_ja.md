@@ -171,6 +171,9 @@ iPhone / iPad / Mac ユニバーサル対応の単一コードベース。Apple 
 
 ## 更新履歴
 
+### ver.02a f11 (2026-05-01)
+- **検索しやすくなった (iOS)** — 上部の `.searchable` バー (デフォルトで日本語有利な除外クエリが入っていた) を廃止し、ナビバー右上の虫眼鏡ボタンから専用検索画面へ。カテゴリと言語を任意に選択でき、All / Doujinshi / Tankoubon のセグメントタブも撤廃して完全にユーザー指定主導の絞り込みに変更。検索画面下部にはホスト (E-Hentai / ExHentai / nhentai) ごとの過去検索履歴を表示し、ワンタップで再検索可能。nhentai モードでは実在するカテゴリのみ表示、言語は namespace クエリで適切に組み立て。Mac Catalyst の UI は従来通り。
+
 ### ver.02a f10 (2026-04-28)
 - **WKWebView E-Hentai / EXhentai ブラウザログイン** — 既存ログイン画面に「ブラウザでログイン」ボタンを追加 (全プラットフォーム共通)。Safari 風 toolbar + WKWebView モーダルで 3 つの cookie (`ipb_member_id` / `ipb_pass_hash` / `igneous`) を自動抽出して認証情報フィールドに自動入力。E-Hentai セッション伝播タイムラグ対策として、forums.e-hentai.org 到達時にモーダル全体を dismiss → 0.5 秒待機 → sheet 再 present で「閉じて再起動」を物理シミュレート、2 回目に確実に igneous を発行させる。`…` メニューに「e-hentai/exhentai cookie をクリア」debug 機能 (nhentai 側は無傷)。Cort:EX 黒/橙カラースキーム + SF Symbols 統一。
 

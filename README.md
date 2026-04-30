@@ -176,6 +176,9 @@ Single codebase running on iPhone / iPad / Mac. Built entirely on 20 native Appl
 
 ## Changelog
 
+### ver.02a f11 (2026-05-01)
+- **Search Made Easier (iOS)** — Replaced the top `.searchable` bar (which biased results toward Japanese by default) with a dedicated search screen accessed via the magnifyingglass toolbar button. Pick any combination of categories and languages; the All/Doujinshi/Tankoubon segmented tabs are removed in favor of fully user-driven filtering. The new screen also lists your past searches per host (E-Hentai / ExHentai / nhentai) so you can re-run them with a single tap. nhentai mode shows only the categories that actually exist on nhentai, and language tags use proper namespace queries. Mac Catalyst UI is unchanged.
+
 ### ver.02a f10 (2026-04-28)
 - **WKWebView E-Hentai / EXhentai Browser Login** — New "Login via browser" button in the existing login screen (all platforms). Safari-style toolbar + WKWebView modal automatically extracts the 3 cookies (`ipb_member_id` / `ipb_pass_hash` / `igneous`) and auto-fills the credential fields. To overcome E-Hentai session propagation lag, the modal is automatically dismissed and re-presented after forums.e-hentai.org is reached, physically simulating the "close and reopen" workflow that reliably triggers `igneous` issuance on the second attempt. Includes a `…` menu with "Clear e-hentai/exhentai cookies" debug option (nhentai cookies are untouched). Cort:EX black/orange color scheme + SF Symbols throughout.
 
