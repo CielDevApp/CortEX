@@ -45,6 +45,9 @@ struct DownloadsView: View {
     /// 田中要望 2026-04-27: 「保存済み」section のソート方式 (全プラットフォーム共通)。
     /// 外部参照側 (Mac Catalyst のみ) は ExternalFolderManager 側で独立管理、enum は共有。
     @AppStorage("downloadsCompletedSortOrderRaw") private var completedSortOrderRaw: String = ExternalFolderManager.ExternalSortOrder.dateAdded.rawValue
+    /// 田中要望 2026-05-01: ライブラリのグリッド/リスト切替 (ギャラリーリストと同じ仕様)。
+    @AppStorage("libraryListLayout") private var libraryListLayout: String = "list"
+    private var isLibraryGrid: Bool { libraryListLayout == "grid" }
     private var completedSortOrder: ExternalFolderManager.ExternalSortOrder {
         get { ExternalFolderManager.ExternalSortOrder(rawValue: completedSortOrderRaw) ?? .dateAdded }
     }
@@ -301,6 +304,14 @@ struct DownloadsView: View {
             #if os(iOS)
             .listStyle(.insetGrouped)
             #endif
+            .overlay {
+                // 田中要望 2026-05-01: グリッド表示。List の上に overlay で覆う方式
+                // (既存セル/swipeActions/refreshable をそのまま温存するため)。
+                if isLibraryGrid {
+                    libraryGridContent
+                        .background(Color(uiColor: .systemGroupedBackground))
+                }
+            }
             // 田中要望 2026-04-26: ライブラリ pull-to-refresh で外部参照フォルダ rescan。
             // staging → NAS bulk move 完了後、新しい gallery を即取得可能。
             .refreshable {
@@ -326,6 +337,13 @@ struct DownloadsView: View {
                 if let t = manager.currentTransfer, t.gid == hiddenTransferGid {
                     ToolbarItem(placement: .automatic) {
                         transferMiniIndicator(transfer: t)
+                    }
+                }
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        libraryListLayout = isLibraryGrid ? "list" : "grid"
+                    } label: {
+                        Image(systemName: isLibraryGrid ? "list.bullet" : "square.grid.2x2")
                     }
                 }
                 ToolbarItem(placement: .automatic) {
@@ -961,6 +979,146 @@ struct DownloadsView: View {
         .buttonStyle(.plain)
     }
 
+    // MARK: - グリッド表示 (田中要望 2026-05-01)
+
+    /// idiom 別グリッド列数 (ギャラリーリストと同じ仕様: iPad=4, iPhone=3, Mac Catalyst=adaptive(180+))
+    private var libraryGridColumns: [GridItem] {
+        #if targetEnvironment(macCatalyst)
+        return GalleryGridColumns.macColumns()
+        #elseif canImport(UIKit)
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            return GalleryGridColumns.iPhoneColumns()
+        }
+        return GalleryGridColumns.iPadColumns(horizontalSizeClass: nil)
+        #else
+        return [GridItem(.adaptive(minimum: 160), spacing: 8)]
+        #endif
+    }
+
+    @ViewBuilder
+    private var libraryGridContent: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                if !completedList.isEmpty {
+                    libraryGridSection(
+                        title: String(localized: "保存済み (\(completedList.count))"),
+                        items: completedList
+                    )
+                }
+                if !visibleSortedExternal.isEmpty {
+                    libraryGridSection(
+                        title: String(localized: "外部参照 (\(visibleSortedExternal.count))"),
+                        items: visibleSortedExternal
+                    )
+                }
+                if !incompleteList.isEmpty {
+                    libraryGridSection(
+                        title: String(localized: "未完了 (\(incompleteList.count))"),
+                        items: incompleteList
+                    )
+                }
+                if completedList.isEmpty && visibleSortedExternal.isEmpty && incompleteList.isEmpty {
+                    ContentUnavailableView {
+                        Label("保存済みギャラリーがありません", systemImage: "arrow.down.circle")
+                    } description: {
+                        Text("ギャラリー詳細画面からダウンロードできます")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 60)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 12)
+        }
+    }
+
+    @ViewBuilder
+    private func libraryGridSection(title: String, items: [DownloadedGallery]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
+            LazyVGrid(columns: libraryGridColumns, spacing: 10) {
+                ForEach(items) { meta in
+                    libraryGridCell(meta: meta)
+                        .contextMenu {
+                            Button {
+                                previewMeta = meta
+                            } label: {
+                                Label("プレビュー表示", systemImage: "rectangle.grid.3x2")
+                            }
+                            Button {
+                                detailMeta = meta
+                            } label: {
+                                Label("この作品のページ詳細を見る", systemImage: "doc.text.magnifyingglass")
+                            }
+                            Button {
+                                performExport(meta: meta)
+                            } label: {
+                                Label("エクスポート", systemImage: "square.and.arrow.up")
+                            }
+                            .disabled(exportPhase != nil)
+                            Button(role: .destructive) {
+                                manager.deleteDownload(gid: meta.gid)
+                            } label: {
+                                Label("削除", systemImage: "trash")
+                            }
+                        }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func libraryGridCell(meta: DownloadedGallery) -> some View {
+        Button {
+            startPreCacheAndOpenReader(meta: meta, count: meta.source == "external_zip" ? 3 : 0)
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                Color.gray.opacity(0.15)
+                    .aspectRatio(2.0/3.0, contentMode: .fit)
+                    .overlay {
+                        AsyncCoverThumbnailFlexible(gid: meta.gid)
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(alignment: .bottomTrailing) {
+                        if meta.isAnimatedGallery {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.white)
+                                .padding(4)
+                                .background(.black.opacity(0.65))
+                                .clipShape(Circle())
+                                .padding(2)
+                        }
+                    }
+                Text(meta.title)
+                    .font(.caption2)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 4) {
+                    Text("\(meta.pageCount)P")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                    if meta.isNhentai {
+                        Text("NH")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(.orange)
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+                    Spacer()
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     private var exportProgressOverlay: some View {
         ZStack {
             Color.black.opacity(0.4).ignoresSafeArea()
@@ -1223,6 +1381,35 @@ private struct AsyncCoverThumbnail: View {
             await MainActor.run {
                 self.image = img
             }
+        }
+    }
+}
+
+/// Grid セル用 (frame 制約なし)。親の aspectRatio に従って fill 表示。
+private struct AsyncCoverThumbnailFlexible: View {
+    let gid: Int
+    @State private var image: PlatformImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(platformImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                Image(systemName: "photo")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .onAppear { loadIfNeeded() }
+    }
+
+    private func loadIfNeeded() {
+        guard image == nil else { return }
+        let gid = gid
+        Task.detached(priority: .userInitiated) {
+            let img = DownloadManager.shared.loadCoverImage(gid: gid)
+            await MainActor.run { self.image = img }
         }
     }
 }

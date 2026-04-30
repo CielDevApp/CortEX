@@ -47,7 +47,6 @@ struct GalleryListView: View {
     /// 検索ボタン → AdvancedSearchView sheet で全カテゴリ + 言語を任意指定する新 UX。
     /// 直近入力を sheet 再表示で復元するため state を保持。
     @State private var showAdvancedSearch = false
-    @State private var advSearchCategories: Set<GalleryCategory> = []
     @State private var advSearchLanguages: Set<String> = []
 
     private var currentVM: GalleryListViewModel {
@@ -150,42 +149,69 @@ struct GalleryListView: View {
                 searchText = ""
             }
             #if !targetEnvironment(macCatalyst)
-            .sheet(isPresented: $showAdvancedSearch) {
-                AdvancedSearchView(
-                    mode: selectedSource == .nhentai
-                        ? .nhentai
-                        : .ehentai(currentHost),
-                    initialText: selectedSource == .nhentai
-                        ? (nhVM.searchText.isEmpty ? searchText : nhVM.searchText)
-                        : (currentVM.searchText.isEmpty ? searchText : currentVM.searchText),
-                    initialCategories: advSearchCategories,
-                    initialLanguages: advSearchLanguages
-                ) { text, categoryFilter, baseQuery, categories, languages in
-                    // 次回開いた際に前回入力を保持 (sheet 再生成では @State init が再度走るため親で持つ)。
-                    advSearchCategories = categories
-                    advSearchLanguages = languages
-                    // 結果反映 (E-Hentai のみ。nhentai は別 VM、別 UI が今後)
-                    if selectedSource == .ehentai {
-                        searchText = text
-                        currentVM.searchText = text
-                        currentVM.categoryFilter = categoryFilter
-                        currentVM.baseQuery = baseQuery
-                        isSearchActive = !text.isEmpty || categoryFilter != nil || baseQuery != nil
-                        Task { await currentVM.refresh() }
-                    } else {
-                        // nhentai: AdvancedSearchView の .nhentai モードが既に
-                        // タグ namespace 入りの 1 本クエリを text に組み立てて返している。
-                        searchText = text
-                        nhVM.searchText = text
-                        nhVM.isSearchActive = !text.isEmpty
-                        Task { await nhVM.search() }
-                    }
+            // 田中要望 2026-05-01: ギャラリーをブラー透過 + 一回り小さい角丸ウィンドウで表示。
+            // キャンセルボタン or 外周タップで閉じる。
+            .overlay {
+                if showAdvancedSearch {
+                    advancedSearchOverlay
+                        .transition(.scale(scale: 0.94).combined(with: .opacity))
+                        .zIndex(100)
                 }
             }
+            .animation(.spring(response: 0.32, dampingFraction: 0.85), value: showAdvancedSearch)
             #endif
         }
         .environment(\.navPathBox, navPathBox)
     }
+
+    #if !targetEnvironment(macCatalyst)
+    // MARK: - 検索 overlay (ブラー透過 + 角丸ウィンドウ + iOS 26 Liquid Glass)
+
+    private func dismissSearch() {
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
+            showAdvancedSearch = false
+        }
+    }
+
+    private var advancedSearchOverlay: some View {
+        ZStack {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .ignoresSafeArea()
+                .onTapGesture { dismissSearch() }
+
+            AdvancedSearchView(
+                mode: selectedSource == .nhentai ? .nhentai : .ehentai(currentHost),
+                initialText: "",
+                initialCategories: [],
+                initialLanguages: advSearchLanguages,
+                onClose: { dismissSearch() }
+            ) { text, categoryFilter, baseQuery, _, languages in
+                advSearchLanguages = languages
+                if selectedSource == .ehentai {
+                    searchText = text
+                    currentVM.searchText = text
+                    currentVM.categoryFilter = categoryFilter
+                    currentVM.baseQuery = baseQuery
+                    isSearchActive = !text.isEmpty || categoryFilter != nil || baseQuery != nil
+                    Task { await currentVM.refresh() }
+                } else {
+                    searchText = text
+                    nhVM.searchText = text
+                    nhVM.isSearchActive = !text.isEmpty
+                    Task { await nhVM.search() }
+                }
+            }
+            .frame(maxWidth: 720)
+            .modifier(LiquidGlassWindow(cornerRadius: 28))
+            .shadow(color: .black.opacity(0.32), radius: 26, x: 0, y: 10)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 50)
+            .contentShape(Rectangle())
+            .onTapGesture { /* 内側タップは閉じない (ヒット吸収) */ }
+        }
+    }
+    #endif
 
     // MARK: - E-Hentai
 
@@ -1291,6 +1317,19 @@ struct NhentaiCoverView: View {
                 ImageCache.shared.setThumb(img, for: capturedURL)
                 coverImage = img
             }
+        }
+    }
+}
+
+/// iOS 26+ Liquid Glass を使ったすりガラス窓モディファイア。
+/// 旧 OS は単純な角丸クリップへフォールバック (Form の不透明背景がそのまま見える)。
+private struct LiquidGlassWindow: ViewModifier {
+    let cornerRadius: CGFloat
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
+        } else {
+            content.clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         }
     }
 }

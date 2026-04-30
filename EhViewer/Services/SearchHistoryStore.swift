@@ -16,7 +16,7 @@ struct SearchHistoryEntry: Codable, Identifiable, Hashable {
         if !text.isEmpty { parts.append("\"\(text)\"") }
         if !categories.isEmpty { parts.append(categories.joined(separator: "/")) }
         if !languages.isEmpty { parts.append(languages.joined(separator: "/")) }
-        if parts.isEmpty { return "(空検索)" }
+        if parts.isEmpty { return String(localized: "(空検索)") }
         return parts.joined(separator: " · ")
     }
 }
