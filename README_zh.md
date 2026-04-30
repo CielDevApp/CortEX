@@ -170,6 +170,9 @@ iPhone / iPad / Mac 通用单代码库。基于 Apple 原生 20 个框架构建�
 
 ## 更新日志
 
+### ver.02a f11 (2026-05-01)
+- **搜索更易用 (iOS)** — 移除顶部的 `.searchable` 搜索栏 (默认带有偏向日语的排除查询)，改为通过导航栏右上角放大镜按钮打开专用搜索画面。可任意选择分类与语言组合，All / Doujinshi / Tankoubon 分段标签也一并撤除，改为完全由用户驱动的筛选。搜索画面下方按主机 (E-Hentai / ExHentai / nhentai) 分别显示历史搜索记录，一键即可重新执行。nhentai 模式仅显示实际存在的分类，语言通过 namespace 查询正确组装。Mac Catalyst 界面保持不变。
+
 ### ver.02a f10 (2026-04-28)
 - **WKWebView E-Hentai / EXhentai 浏览器登录** — 在现有登录画面添加「通过浏览器登录」按钮 (全平台)。Safari 风格 toolbar + WKWebView 模态自动提取 3 个 cookie (`ipb_member_id` / `ipb_pass_hash` / `igneous`) 并自动填入认证信息字段。针对 E-Hentai 会话传播延迟的对策: 到达 forums.e-hentai.org 时整个模态 dismiss → 0.5 秒等待 → sheet 重新 present，物理模拟「关闭后重开」操作，第 2 次确实触发 `igneous` 发行。包含 `…` 菜单的「清除 e-hentai/exhentai cookie」debug 功能 (nhentai cookie 不受影响)。Cort:EX 黑/橙配色 + SF Symbols 统一。
 

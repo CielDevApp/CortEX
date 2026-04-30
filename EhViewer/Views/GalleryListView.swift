@@ -43,6 +43,12 @@ struct GalleryListView: View {
     @State private var tabBarHidden = false
     @StateObject private var navPathBox = NavigationPathBox()
     @AppStorage("galleryListLayout") private var galleryListLayout: String = "grid"
+    /// 田中要望 2026-04-30: iOS の `.searchable` (日本語有利 baseQuery 込み) を撤回し、
+    /// 検索ボタン → AdvancedSearchView sheet で全カテゴリ + 言語を任意指定する新 UX。
+    /// 直近入力を sheet 再表示で復元するため state を保持。
+    @State private var showAdvancedSearch = false
+    @State private var advSearchCategories: Set<GalleryCategory> = []
+    @State private var advSearchLanguages: Set<String> = []
 
     private var currentVM: GalleryListViewModel {
         switch selectedTab {
@@ -114,7 +120,18 @@ struct GalleryListView: View {
                         Image(systemName: galleryListLayout == "grid" ? "list.bullet" : "square.grid.2x2")
                     }
                 }
+                #if !targetEnvironment(macCatalyst)
+                // 田中要望 2026-04-30: iOS は `.searchable` を撤回 → 検索ボタン経由 AdvancedSearchView。
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        showAdvancedSearch = true
+                    } label: {
+                        Image(systemName: "magnifyingglass")
+                    }
+                }
+                #endif
             }
+            #if targetEnvironment(macCatalyst)
             .searchable(text: $searchText, prompt: selectedSource == .nhentai ? "nhentai検索..." : "検索...")
             .onSubmit(of: .search) {
                 guard !searchText.isEmpty else { return }
@@ -128,9 +145,44 @@ struct GalleryListView: View {
                     Task { await nhVM.search() }
                 }
             }
+            #endif
             .onChange(of: selectedSource) { _, _ in
                 searchText = ""
             }
+            #if !targetEnvironment(macCatalyst)
+            .sheet(isPresented: $showAdvancedSearch) {
+                AdvancedSearchView(
+                    mode: selectedSource == .nhentai
+                        ? .nhentai
+                        : .ehentai(currentHost),
+                    initialText: selectedSource == .nhentai
+                        ? (nhVM.searchText.isEmpty ? searchText : nhVM.searchText)
+                        : (currentVM.searchText.isEmpty ? searchText : currentVM.searchText),
+                    initialCategories: advSearchCategories,
+                    initialLanguages: advSearchLanguages
+                ) { text, categoryFilter, baseQuery, categories, languages in
+                    // 次回開いた際に前回入力を保持 (sheet 再生成では @State init が再度走るため親で持つ)。
+                    advSearchCategories = categories
+                    advSearchLanguages = languages
+                    // 結果反映 (E-Hentai のみ。nhentai は別 VM、別 UI が今後)
+                    if selectedSource == .ehentai {
+                        searchText = text
+                        currentVM.searchText = text
+                        currentVM.categoryFilter = categoryFilter
+                        currentVM.baseQuery = baseQuery
+                        isSearchActive = !text.isEmpty || categoryFilter != nil || baseQuery != nil
+                        Task { await currentVM.refresh() }
+                    } else {
+                        // nhentai: AdvancedSearchView の .nhentai モードが既に
+                        // タグ namespace 入りの 1 本クエリを text に組み立てて返している。
+                        searchText = text
+                        nhVM.searchText = text
+                        nhVM.isSearchActive = !text.isEmpty
+                        Task { await nhVM.search() }
+                    }
+                }
+            }
+            #endif
         }
         .environment(\.navPathBox, navPathBox)
     }
@@ -158,6 +210,9 @@ struct GalleryListView: View {
                 .background(Color.blue.opacity(0.08))
             }
 
+            #if targetEnvironment(macCatalyst)
+            // 田中要望 2026-04-30: iOS は All/Doujinshi/Tankoubon タブを廃止 (検索画面でカテゴリ任意指定)。
+            // Mac Catalyst は従来 UI 維持。
             if !isSearchActive {
                 Picker("カテゴリ", selection: $selectedTab) {
                     ForEach(GalleryTab.allCases, id: \.self) { tab in
@@ -168,6 +223,7 @@ struct GalleryListView: View {
                 .padding(.horizontal)
                 .padding(.vertical, 6)
             }
+            #endif
 
             switch selectedTab {
             case .all:
@@ -283,10 +339,10 @@ struct GalleryListView: View {
     }
 
     private func setupVM(_ vm: GalleryListViewModel, tab: GalleryTab) {
+        // 田中要望 2026-04-30: 日本語有利 default は撤回。検索ボタン経由 AdvancedSearchView で
+        // user が言語を任意指定する。tab は category 絞り込みのみ。Mac Catalyst は従来通り.
+        #if targetEnvironment(macCatalyst)
         guard vm.baseQuery == nil else { return }
-        // 田中報告 (2026-04-27): ログイン中でも英語/中国語版が混ざる。
-        // 旧 exclude は korean + translated のみで english/chinese を除外していなかった。
-        // nhentai 側 languageFilter と揃えて 4 言語除外で日本語版に寄せる。
         let exclude = "-language:english -language:chinese -language:korean -language:translated"
         switch tab {
         case .all:
@@ -299,6 +355,20 @@ struct GalleryListView: View {
             vm.categoryFilter = nil
             vm.baseQuery = "tag:tankoubon \(exclude)"
         }
+        #else
+        // iOS: tab に応じた category のみ設定、baseQuery は触らない (AdvancedSearchView が後で書き換える)。
+        switch tab {
+        case .all:
+            if vm.categoryFilter == nil { /* keep nil */ }
+        case .doujinshi:
+            if vm.categoryFilter == nil {
+                vm.categoryFilter = GalleryCategory.excludeAllExcept([.doujinshi])
+            }
+        case .manga:
+            // 単行本タグ条件は keep (search が無効でも tankoubon 絞り込みは有効に)
+            if vm.baseQuery == nil { vm.baseQuery = "tag:tankoubon" }
+        }
+        #endif
     }
 }
 
