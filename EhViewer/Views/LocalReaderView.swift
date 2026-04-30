@@ -659,15 +659,15 @@ struct LocalReaderView: View {
         // 未 scan のみ legacy isAnimatedFile fallback。
         let isAnimated: Bool = {
             // external_zip は gallery-level scan flag が不正確なので per-page で実ファイル判定。
-            // 静画なのに mp4 モードで GalleryAnimatedWebPView (▶ 付き) にルーティングされる
-            // 問題を防ぐ。fileURL は materialize 後にしか存在しないので、未存在ページは
-            // どのみち下の fileExists ガードで else 経路に流れる。
             if meta.source == "external_zip" {
                 return AnimatedImageDecoder.isAnimatedFile(url: fileURL)
             }
-            if let scanned = meta.hasAnimatedWebp {
-                return scanned
-            }
+            // 田中要望 2026-05-01: 混在作品 (動画 + 静画) で静画ページにも ▶ 付く問題対応。
+            // gallery-level `hasAnimatedWebp` は「1 ページでも動画があれば true」のフラグなので
+            // internal DL の混在作品では静画ページにも ▶ が出てしまう (再発)。
+            // hasAnimatedWebp == false (全ページ静画) ならショートサーキット可、
+            // それ以外 (混在 or 全動画 or 未 scan) は per-page で実ファイル判定。
+            if meta.hasAnimatedWebp == false { return false }
             return AnimatedImageDecoder.isAnimatedFile(url: fileURL)
         }()
         if FileManager.default.fileExists(atPath: fileURL.path), isAnimated {
