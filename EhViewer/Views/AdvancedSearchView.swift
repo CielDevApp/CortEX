@@ -15,9 +15,11 @@ struct AdvancedSearchView: View {
         var prompt: String {
             switch self {
             case .ehentai(let host):
-                return host == .exhentai ? "ExHentai を検索" : "E-Hentai を検索"
+                return host == .exhentai
+                    ? String(localized: "ExHentai を検索")
+                    : String(localized: "E-Hentai を検索")
             case .nhentai:
-                return "nhentai を検索"
+                return String(localized: "nhentai を検索")
             }
         }
     }
@@ -25,6 +27,9 @@ struct AdvancedSearchView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var historyStore = SearchHistoryStore.shared
     let mode: Mode
+    /// overlay 表示の場合 dismiss() が効かないので外部から閉じる手段を渡す。
+    /// nil の場合は @Environment(\.dismiss) を使う (sheet/fullScreenCover 用)。
+    let onClose: (() -> Void)?
     let onApply: (_ searchText: String,
                   _ categoryFilter: Int?,
                   _ baseQuery: String?,
@@ -48,6 +53,7 @@ struct AdvancedSearchView: View {
         initialText: String = "",
         initialCategories: Set<GalleryCategory> = [],
         initialLanguages: Set<String> = [],
+        onClose: (() -> Void)? = nil,
         onApply: @escaping (_ searchText: String,
                             _ categoryFilter: Int?,
                             _ baseQuery: String?,
@@ -55,10 +61,15 @@ struct AdvancedSearchView: View {
                             _ languages: Set<String>) -> Void
     ) {
         self.mode = mode
+        self.onClose = onClose
         self.onApply = onApply
         self._searchText = State(initialValue: initialText)
         self._selectedCategories = State(initialValue: initialCategories)
         self._selectedLanguages = State(initialValue: initialLanguages)
+    }
+
+    private func close() {
+        if let onClose { onClose() } else { dismiss() }
     }
 
     /// 言語コードと表示名のリスト (E-Hentai のタグ namespace `language:`)
@@ -84,9 +95,10 @@ struct AdvancedSearchView: View {
         ("chinese", "中国語"),
     ]
 
-    /// nhentai で実際に運用されているカテゴリのみ (田中要望 2026-04-30: ArtistCG/Cosplay 等は実体ほぼ無し)
+    /// nhentai 実在カテゴリ 6 種 (NClientV2/V3 の DatabaseHelper::insertCategoryTags を根拠)。
+    /// imageset/gamecg/cosplay/asianporn は nhentai 公式に存在しないため除外。
     static let nhentaiSupportedCategories: [GalleryCategory] = [
-        .doujinshi, .manga, .western, .nonH, .imageSet
+        .doujinshi, .manga, .artistCG, .western, .nonH, .misc
     ]
 
     private var languageList: [(code: String, label: String)] {
@@ -151,7 +163,8 @@ struct AdvancedSearchView: View {
 
                 Section {
                     ForEach(languageList, id: \.code) { entry in
-                        Toggle(entry.label, isOn: Binding(
+                        // entry.label は "日本語" 等の動的 String なので LocalizedStringKey 経由で localize。
+                        Toggle(LocalizedStringKey(entry.label), isOn: Binding(
                             get: { selectedLanguages.contains(entry.code) },
                             set: { on in
                                 if on { selectedLanguages.insert(entry.code) }
@@ -176,19 +189,18 @@ struct AdvancedSearchView: View {
                 if !history.isEmpty {
                     Section {
                         ForEach(history) { entry in
-                            Button {
-                                applyHistory(entry)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(entry.displayLabel)
-                                        .font(.body)
-                                        .foregroundStyle(Color.primary)
-                                        .lineLimit(2)
-                                    Text(entry.savedAt, style: .relative)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(entry.displayLabel)
+                                    .font(.body)
+                                    .foregroundStyle(Color.primary)
+                                    .lineLimit(2)
+                                Text(entry.savedAt, style: .relative)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                            .onTapGesture { applyHistory(entry) }
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button(role: .destructive) {
                                     historyStore.remove(entry)
@@ -208,11 +220,12 @@ struct AdvancedSearchView: View {
                     }
                 }
             }
+            .modifier(LiquidGlassFormBackground())
             .navigationTitle("検索")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("キャンセル") { dismiss() }
+                    Button("キャンセル") { close() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("検索") { applyAndDismiss() }
@@ -224,17 +237,17 @@ struct AdvancedSearchView: View {
 
     private var categoryHeader: String {
         switch mode {
-        case .ehentai: return "カテゴリ (空 = 全部)"
-        case .nhentai: return "カテゴリ (空 = 全部、単一選択推奨)"
+        case .ehentai: return String(localized: "カテゴリ (空 = 全部)")
+        case .nhentai: return String(localized: "カテゴリ (空 = 全部、単一選択推奨)")
         }
     }
 
     private var languageFooter: String {
         switch mode {
         case .ehentai:
-            return "単一選択 (日本語以外) は `language:X$` で厳密一致。日本語単独や複数選択は他言語を除外する仕様 (E-Hentai は OR 不可)。"
+            return String(localized: "単一選択 (日本語以外) は `language:X$` で厳密一致。日本語単独や複数選択は他言語を除外する仕様 (E-Hentai は OR 不可)。")
         case .nhentai:
-            return "nhentai は OR 検索不可。複数選択は AND 扱いとなり結果ゼロになりがち。単一選択を推奨。"
+            return String(localized: "nhentai は OR 検索不可。複数選択は AND 扱いとなり結果ゼロになりがち。単一選択を推奨。")
         }
     }
 
@@ -328,7 +341,22 @@ struct AdvancedSearchView: View {
             let nhQuery = parts.joined(separator: " ")
             onApply(nhQuery, nil, nil, selectedCategories, selectedLanguages)
         }
-        dismiss()
+        close()
+    }
+}
+
+/// iOS 26+ の Liquid Glass エフェクト (実機で対応している場合のみ Form の標準背景を消す)。
+/// 旧 OS は Form のデフォルト不透明背景のまま (chip 色が問題なく出る既存挙動を維持)。
+private struct LiquidGlassFormBackground: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                .scrollContentBackground(.hidden)
+                .background(Color.clear)
+                .toolbarBackground(.hidden, for: .navigationBar)
+        } else {
+            content
+        }
     }
 }
 

@@ -758,7 +758,7 @@ struct CatalystTabBar: View {
                 HStack(spacing: 6) {
                     Image(systemName: tab.icon)
                         .font(.system(size: 12))
-                    Text(tab.title)
+                    Text(LocalizedStringKey(tab.title))
                         .font(.system(size: 13))
                         .lineLimit(1)
                     if tab.tag == 3 && activeDownloadCount > 0 {
