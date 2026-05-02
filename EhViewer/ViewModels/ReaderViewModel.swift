@@ -80,7 +80,19 @@ class ReaderViewModel: ObservableObject {
         currentIndex = index
         requestLoad(index)
         if !isScrolling && !EcoMode.shared.isEnabled {
-            let prefetchRange = SafetyMode.shared.isEnabled ? 1 : 5
+            // 田中要望 2026-05-02: iPad 見開きモードは 1 画面 = 2 ページなので
+            // ±5 (= 2.5 画面分) では足りず、左右綴じ両対応のため均等に +10 して ±15 に拡張。
+            #if canImport(UIKit)
+            let isSpread = PagedReaderView.isSpreadMode
+            #else
+            let isSpread = false
+            #endif
+            let prefetchRange: Int
+            if SafetyMode.shared.isEnabled {
+                prefetchRange = 1
+            } else {
+                prefetchRange = isSpread ? 15 : 5
+            }
             for offset in 1...prefetchRange {
                 requestLoad(index + offset)
                 requestLoad(index - offset)

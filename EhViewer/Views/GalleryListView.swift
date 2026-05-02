@@ -461,7 +461,13 @@ struct GalleryScrollList: View {
                         let gallery = viewModel.galleries[index]
                         GalleryGridCellView(gallery: gallery)
                             .contentShape(Rectangle())
-                            .onTapGesture { navPath.append(gallery) }
+                            .onTapGesture {
+                                // 田中報告 2026-05-02: 別作品を開いて戻ると前の作品の詳細が出る問題対応。
+                                // SwiftUI NavigationPath の pop 残留 (既知挙動) を回避するため、
+                                // 一覧からの直接 push 時は path をリセットして [gallery] のみにする。
+                                navPath = NavigationPath()
+                                navPath.append(gallery)
+                            }
                             .simultaneousGesture(
                                 LongPressGesture(minimumDuration: 0.4, maximumDistance: 15)
                                     .onEnded { _ in
@@ -570,6 +576,8 @@ struct GalleryScrollList: View {
                         .padding(.vertical, 4)
                         .contentShape(Rectangle())
                         .onTapGesture {
+                            // 田中報告 2026-05-02: 別作品を開いて戻ると前の作品の詳細が出る問題対応 (path 残留対策)
+                            navPath = NavigationPath()
                             navPath.append(gallery)
                         }
                         // iPadでGalleryCardView内NavigationLinkが長押しを奪うのでhighPriority
@@ -919,7 +927,10 @@ struct NhentaiScrollList: View {
                         let nh = viewModel.galleries[index]
                         NhentaiGridCellView(gallery: nh)
                             .contentShape(Rectangle())
-                            .onTapGesture { navPath.append(nh) }
+                            .onTapGesture {
+                                navPath = NavigationPath()
+                                navPath.append(nh)
+                            }
                             .simultaneousGesture(
                                 LongPressGesture(minimumDuration: 0.4, maximumDistance: 15)
                                     .onEnded { _ in
@@ -990,6 +1001,7 @@ struct NhentaiScrollList: View {
                         .padding(.vertical, 4)
                         .contentShape(Rectangle())
                         .onTapGesture {
+                            navPath = NavigationPath()
                             navPath.append(nh)
                         }
                         .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 15) {

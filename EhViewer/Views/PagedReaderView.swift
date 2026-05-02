@@ -208,12 +208,15 @@ struct PagedReaderView: UIViewControllerRepresentable {
         }
 
         /// 前の見開きグループの代表ページ
+        /// 田中要望 2026-05-02: 進む=2 / 戻る=1 の非対称を解消。
+        /// 現在が見開きペア (right あり) なら 2 ページ戻る、単独 (wide / 表紙隣接) は 1 ページ戻る。
         func prevSpreadIndex(from index: Int) -> Int? {
             let norm = normalizeIndex(index)
             if norm <= 0 { return nil }
-            let prev = norm - 1
-            let prevNorm = normalizeIndex(prev)
-            return prevNorm >= 0 ? prevNorm : nil
+            let pair = spreadPages(for: norm)
+            let step = (pair.right != nil) ? 2 : 1
+            let candidate = max(0, norm - step)
+            return normalizeIndex(candidate)
         }
 
         func makePageVC(for index: Int) -> ReaderPageVC {
