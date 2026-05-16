@@ -173,7 +173,7 @@ iPhone / iPad / Mac ユニバーサル対応の単一コードベース。Apple 
 
 ### ver.02a f12 (2026-05-16)
 - **ガチャの作品詳細 → タグ検索結果 → 作品タップ無反応 fix** — GachaView の NavigationStack に `NavigationPathBox` バインドと `.environment(\.navPathBox)` 注入が欠けていたため、TagSearchResultView 内の作品タップが no-op となっていた。DownloadsView / FavoritesView / GalleryListView は既に同パターンで修正済 (commit 91760d5 他)、ガチャだけ漏れていたので同じく適用
-- **検索履歴タップ無反応の真犯人候補 fix (要観察)** — GalleryListView の `advancedSearchOverlay` で AdvancedSearchView の外側に付いていた `.contentShape(Rectangle()) + .onTapGesture { /* 内側タップは閉じない */ }` が、SwiftUI iOS 18.7 で内側 Form 内 Button (過去の検索 row) の tap を全て吸収していた疑い。撤去で実測動作確認、日常使用で再発有無を長期検証中
+- **検索履歴タップが反応しない問題 fix** — GalleryListView の `advancedSearchOverlay` で AdvancedSearchView の外側に付いていた `.contentShape(Rectangle()) + .onTapGesture { /* 内側タップは閉じない */ }` が、SwiftUI iOS 18.7 で内側 Form 内 Button (過去の検索 row) の tap を全て吸収していた。撤去で解消
 
 ### ver.02a f11.1 (2026-05-02)
 - **NavigationPath 残留 fix** — 作品 A を開いて閉じ、別作品 B を開いて戻ると **A の詳細が出る**問題を修正 (iPhone / iPad)。一覧からの直接 push 時に `navPath = NavigationPath()` でリセットしてから append する形に変更。タグ検索からの連鎖遷移は履歴を保持

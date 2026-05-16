@@ -172,7 +172,7 @@ iPhone / iPad / Mac 通用单代码库。基于 Apple 原生 20 个框架构建�
 
 ### ver.02a f12 (2026-05-16)
 - **抽卡的作品详情 → 标签搜索结果 → 作品点击无反应 修复** — GachaView 的 NavigationStack 缺少 `NavigationPathBox` 绑定与 `.environment(\.navPathBox)` 注入，导致 TagSearchResultView 内的作品点击为 no-op。DownloadsView / FavoritesView / GalleryListView 已采用相同模式修复 (commit 91760d5 等)，抽卡是漏修，现按同模式补齐
-- **搜索历史点击无反应 候选修复 (观察中)** — GalleryListView 的 `advancedSearchOverlay` 在 AdvancedSearchView 外侧的 `.contentShape(Rectangle()) + .onTapGesture { /* 内侧点击不关闭 */ }` 在 SwiftUI iOS 18.7 上吸收了内部 Form 内 Button (过去检索 row) 的所有 tap。撤掉后实测全部恢复，日常使用是否再发长期观察中
+- **搜索历史点击无反应 修复** — GalleryListView 的 `advancedSearchOverlay` 在 AdvancedSearchView 外侧的 `.contentShape(Rectangle()) + .onTapGesture { /* 内侧点击不关闭 */ }` 在 SwiftUI iOS 18.7 上吸收了内部 Form 内 Button (过去检索 row) 的所有 tap。撤掉后解决
 
 ### ver.02a f11.1 (2026-05-02)
 - **NavigationPath 残留修复** — 打开作品 A 关闭后、再打开作品 B 并返回时显示 **A 的详情** (iPhone / iPad)。列表直接 push 时改为先用 `navPath = NavigationPath()` 重置再 append。标签搜索的链式导航仍保留历史
