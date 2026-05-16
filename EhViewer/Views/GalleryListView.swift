@@ -207,8 +207,11 @@ struct GalleryListView: View {
             .shadow(color: .black.opacity(0.32), radius: 26, x: 0, y: 10)
             .padding(.horizontal, 18)
             .padding(.vertical, 50)
-            .contentShape(Rectangle())
-            .onTapGesture { /* 内側タップは閉じない (ヒット吸収) */ }
+            // 診断 D (2026-05-16): 親 overlay の hit 吸収を撤去。
+            // iOS 18 で内側 Button (履歴行) の tap が ここで吸収されている疑い。
+            // NG なら revert (背景 dismiss と内側 tap が干渉して overlay が閉じてしまう副作用あり)
+            // .contentShape(Rectangle())
+            // .onTapGesture { /* 内側タップは閉じない (ヒット吸収) */ }
         }
     }
     #endif

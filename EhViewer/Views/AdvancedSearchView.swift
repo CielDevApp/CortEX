@@ -188,26 +188,43 @@ struct AdvancedSearchView: View {
                 let history = historyStore.entries(forHostKey: hostKey)
                 if !history.isEmpty {
                     Section {
+                        // 田中報告 2026-05-16: 「履歴タップが反応しない場合が多い」(再発)。
+                        // 実測 (21:04 ビルドA): row appeared 10 vs tap 0 vs 反応 0 → .swipeActions 否定
+                        // 実測 (21:08 ビルドB): 反応 0 → .buttonStyle(.plain) 否定
+                        // 診断ビルド C: .contentShape(Rectangle()) を Button 外側に移動。
+                        // .frame(maxWidth: .infinity) は label 内維持。
+                        // 他 (.swipeActions 撤去 / onAppear ログ / .buttonStyle なし) も維持。
+                        // 変数1つずつ原則: 今回動かすのは .contentShape の位置だけ。
                         ForEach(history) { entry in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(entry.displayLabel)
-                                    .font(.body)
-                                    .foregroundStyle(Color.primary)
-                                    .lineLimit(2)
-                                Text(entry.savedAt, style: .relative)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                            .onTapGesture { applyHistory(entry) }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button(role: .destructive) {
-                                    historyStore.remove(entry)
-                                } label: {
-                                    Label("削除", systemImage: "trash")
+                            Button {
+                                applyHistory(entry)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(entry.displayLabel)
+                                        .font(.body)
+                                        .foregroundStyle(Color.primary)
+                                        .lineLimit(2)
+                                    Text(entry.savedAt, style: .relative)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                // 診断 C: .contentShape(Rectangle()) を label 内から Button 外側に移動
+                                .onAppear {
+                                    LogManager.shared.log("AdvSearch", "row appeared: '\(entry.displayLabel)' id=\(entry.id.uuidString.prefix(8))")
                                 }
                             }
+                            .contentShape(Rectangle())
+                            // 診断 B 継続: .buttonStyle(.plain) 撤去のまま
+                            // .buttonStyle(.plain)
+                            // 診断 A 継続: .swipeActions 撤去のまま
+                            // .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            //     Button(role: .destructive) {
+                            //         historyStore.remove(entry)
+                            //     } label: {
+                            //         Label("削除", systemImage: "trash")
+                            //     }
+                            // }
                         }
                         Button(role: .destructive) {
                             historyStore.clear(hostKey: hostKey)
@@ -277,6 +294,8 @@ struct AdvancedSearchView: View {
 
     /// 履歴 entry をタップしたら state を復元 → 即検索実行。
     private func applyHistory(_ entry: SearchHistoryEntry) {
+        // 田中報告 2026-05-16: 一部 entry がタップ無反応の切り分け診断ログ。
+        LogManager.shared.log("AdvSearch", "applyHistory tap: '\(entry.displayLabel)' id=\(entry.id.uuidString.prefix(8)) host=\(entry.hostKey)")
         searchText = entry.text
         let categoryRawValues = Set(entry.categories)
         selectedCategories = Set(categoryList.filter { categoryRawValues.contains($0.rawValue) })
