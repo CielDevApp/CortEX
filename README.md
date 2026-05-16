@@ -1,4 +1,4 @@
-# Cort:EX ver.02a f10
+# Cort:EX ver.02a f12
 
 > ## ⚠️ Security Fix — Immediate Update Required
 >
@@ -175,6 +175,18 @@ Single codebase running on iPhone / iPad / Mac. Built entirely on 20 native Appl
 - Metal / CoreML / Vision / WebKit / ActivityKit / TipKit
 
 ## Changelog
+
+### ver.02a f12 (2026-05-16)
+- **Gacha → tag search results → gallery tap unresponsive fix** — GachaView's NavigationStack was missing `NavigationPathBox` binding and `.environment(\.navPathBox)` injection, causing tag search result taps to be no-op. Same pattern as DownloadsView / FavoritesView / GalleryListView (commit 91760d5 et al.); Gacha had been left out and is now patched accordingly
+- **Search history tap unresponsive — candidate fix (under observation)** — The `.contentShape(Rectangle()) + .onTapGesture { /* absorb inner taps */ }` modifier wrapping AdvancedSearchView in GalleryListView's `advancedSearchOverlay` was apparently absorbing **all** Button taps inside the inner Form (past-search rows) on SwiftUI iOS 18.7. Removing the hit absorber restored taps in measured testing; long-term real-world observation in progress
+
+### ver.02a f11.1 (2026-05-02)
+- **NavigationPath leftover fix** — Opening gallery A, closing it, then opening gallery B and going back would show **A's detail** (iPhone / iPad). Fixed by resetting `navPath = NavigationPath()` before append on direct push from list. Tag-search chained navigation still preserves history
+- **Static page with ▶ icon in mixed works (regression) fix** — Switched the reader's internal DL path from gallery-level scan flag to per-page actual file check (unified with the external_zip behavior)
+- **iPad spread view prefetch ±5 → ±15** — Since spread = 2 pages per screen, the previous ±5 only prefetched 2.5 screens ahead, causing frequent load waits. +10 on both sides for left/right binding parity
+- **Spread-view back tap asymmetry fix** — Forward = 2 pages but back = 1 page; fixed `prevSpreadIndex` so back also advances 2 pages
+- **Library grid/list toggle** — Same column spec as the gallery list (iPad=4 / iPhone=3 / Mac Catalyst=adaptive)
+- **Search screen 23 UI strings localized into 7 languages** — en/de/es/fr/ko/zh-Hans/zh-Hant
 
 ### ver.02a f11 (2026-05-01)
 - **Search Made Easier (iOS)** — Replaced the top `.searchable` bar (which biased results toward Japanese by default) with a dedicated search screen accessed via the magnifyingglass toolbar button. Pick any combination of categories and languages; the All/Doujinshi/Tankoubon segmented tabs are removed in favor of fully user-driven filtering. The new screen also lists your past searches per host (E-Hentai / ExHentai / nhentai) so you can re-run them with a single tap. nhentai mode shows only the categories that actually exist on nhentai, and language tags use proper namespace queries. Mac Catalyst UI is unchanged.
