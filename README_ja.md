@@ -1,16 +1,5 @@
 # Cort:EX ver.02a f12
 
-> ## ⚠️ Security Fix — Immediate Update Required
->
-> v0.2a〜v0.2a-f6 にはハードコードされた DEBUG credentials が含まれていました。
-> 該当 credentials は既に revoke 済みです。直ちに v0.2a-f7 以降へアップデートしてください。
->
-> **v0.2a〜v0.2a-f6 を Mac / iOS にインストール済みの方へ:**
-> アップデート後も旧 credentials が Keychain に残る可能性があります。v0.2a-f7 以降は起動時に自動検出して削除します (SHA256 hash 照合、平文保存なし)。手動で実行する場合は **設定 → キャッシュ管理 → 全データリセット（工場出荷状態）**。
->
-> **新 Mac への移行 / 他人に譲渡する前に:**
-> リポジトリから `./scripts/cleanup-cortex-data.sh` を実行、またはアプリ内リセットボタンを使用してください。
-
 **E-Hentai / EXhentai / nhentai 統合ビューア for iOS / iPadOS**
 
 [English](README.md) | [中文](README_zh.md) | [日本語](README_ja.md)
