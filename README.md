@@ -178,7 +178,7 @@ Single codebase running on iPhone / iPad / Mac. Built entirely on 20 native Appl
 
 ### ver.02a f12 (2026-05-16)
 - **Gacha → tag search results → gallery tap unresponsive fix** — GachaView's NavigationStack was missing `NavigationPathBox` binding and `.environment(\.navPathBox)` injection, causing tag search result taps to be no-op. Same pattern as DownloadsView / FavoritesView / GalleryListView (commit 91760d5 et al.); Gacha had been left out and is now patched accordingly
-- **Search history tap unresponsive — candidate fix (under observation)** — The `.contentShape(Rectangle()) + .onTapGesture { /* absorb inner taps */ }` modifier wrapping AdvancedSearchView in GalleryListView's `advancedSearchOverlay` was apparently absorbing **all** Button taps inside the inner Form (past-search rows) on SwiftUI iOS 18.7. Removing the hit absorber restored taps in measured testing; long-term real-world observation in progress
+- **Search history tap unresponsive fix** — The `.contentShape(Rectangle()) + .onTapGesture { /* absorb inner taps */ }` modifier wrapping AdvancedSearchView in GalleryListView's `advancedSearchOverlay` was absorbing **all** Button taps inside the inner Form (past-search rows) on SwiftUI iOS 18.7. Removing the hit absorber resolved the issue
 
 ### ver.02a f11.1 (2026-05-02)
 - **NavigationPath leftover fix** — Opening gallery A, closing it, then opening gallery B and going back would show **A's detail** (iPhone / iPad). Fixed by resetting `navPath = NavigationPath()` before append on direct push from list. Tag-search chained navigation still preserves history
