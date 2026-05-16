@@ -1,17 +1,5 @@
 # Cort:EX ver.02a f12
 
-> ## ⚠️ Security Fix — Immediate Update Required
->
-> v0.2a to v0.2a-f6 contained hardcoded debug credentials.
-> The affected credentials have been revoked.
-> Please update to this version immediately.
->
-> **For users who installed v0.2a to v0.2a-f6 on Mac or iOS:**
-> The old credentials may remain in the Keychain even after updating. v0.2a-f7+ automatically detects and purges them on launch (SHA256 hash match, no plaintext stored in code). You can also manually trigger this via **Settings → Cache → 全データリセット（工場出荷状態）**.
->
-> **For new Mac / before transferring to another user:**
-> Run `./scripts/cleanup-cortex-data.sh` from the repo, or use the in-app reset button, before handing over the device.
-
 <img src="assets/banner_v3.png" alt="CortEX Banner">
 
 **Unified E-Hentai / EXhentai / nhentai Viewer for iOS / iPadOS**
