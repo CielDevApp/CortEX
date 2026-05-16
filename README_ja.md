@@ -1,4 +1,4 @@
-# Cort:EX ver.02a f10
+# Cort:EX ver.02a f12
 
 > ## ⚠️ Security Fix — Immediate Update Required
 >
@@ -170,6 +170,18 @@ iPhone / iPad / Mac ユニバーサル対応の単一コードベース。Apple 
 - Metal / CoreML / Vision / WebKit / ActivityKit / TipKit
 
 ## 更新履歴
+
+### ver.02a f12 (2026-05-16)
+- **ガチャの作品詳細 → タグ検索結果 → 作品タップ無反応 fix** — GachaView の NavigationStack に `NavigationPathBox` バインドと `.environment(\.navPathBox)` 注入が欠けていたため、TagSearchResultView 内の作品タップが no-op となっていた。DownloadsView / FavoritesView / GalleryListView は既に同パターンで修正済 (commit 91760d5 他)、ガチャだけ漏れていたので同じく適用
+- **検索履歴タップ無反応の真犯人候補 fix (要観察)** — GalleryListView の `advancedSearchOverlay` で AdvancedSearchView の外側に付いていた `.contentShape(Rectangle()) + .onTapGesture { /* 内側タップは閉じない */ }` が、SwiftUI iOS 18.7 で内側 Form 内 Button (過去の検索 row) の tap を全て吸収していた疑い。撤去で実測動作確認、日常使用で再発有無を長期検証中
+
+### ver.02a f11.1 (2026-05-02)
+- **NavigationPath 残留 fix** — 作品 A を開いて閉じ、別作品 B を開いて戻ると **A の詳細が出る**問題を修正 (iPhone / iPad)。一覧からの直接 push 時に `navPath = NavigationPath()` でリセットしてから append する形に変更。タグ検索からの連鎖遷移は履歴を保持
+- **混在作品の静画ページに ▶ が付く問題 (再発) fix** — リーダー内部 DL 経路を gallery-level scan flag → per-page 実ファイル判定に変更 (external_zip と同仕様に統一)
+- **iPad 見開きの先読み ±5 → ±15** — 1 画面 = 2 ページなので従来 ±5 では 2.5 画面分しか先読みされず読み込み待ちが頻発していた。左右綴じ両対応で均等に +10
+- **見開き戻りタップが 1 ページしか戻らない非対称解消** — 進む = 2 ページ進むのに対し戻る = 1 ページだったのを `prevSpreadIndex` 修正で 2 ページに揃えた
+- **ライブラリ画面に grid/list トグル追加** — ギャラリーリストと同列数仕様 (iPad=4 / iPhone=3 / Mac Catalyst=adaptive)
+- **検索画面 23 個の UI 文字列を 7 言語ローカライズ** — en/de/es/fr/ko/zh-Hans/zh-Hant
 
 ### ver.02a f11 (2026-05-01)
 - **検索しやすくなった (iOS)** — 上部の `.searchable` バー (デフォルトで日本語有利な除外クエリが入っていた) を廃止し、ナビバー右上の虫眼鏡ボタンから専用検索画面へ。カテゴリと言語を任意に選択でき、All / Doujinshi / Tankoubon のセグメントタブも撤廃して完全にユーザー指定主導の絞り込みに変更。検索画面下部にはホスト (E-Hentai / ExHentai / nhentai) ごとの過去検索履歴を表示し、ワンタップで再検索可能。nhentai モードでは実在するカテゴリのみ表示、言語は namespace クエリで適切に組み立て。Mac Catalyst の UI は従来通り。

@@ -1,4 +1,4 @@
-# Cort:EX ver.02a f10
+# Cort:EX ver.02a f12
 
 > ## ⚠️ Security Fix — Immediate Update Required
 >
@@ -169,6 +169,18 @@ iPhone / iPad / Mac 通用单代码库。基于 Apple 原生 20 个框架构建�
 - Metal / CoreML / Vision / WebKit / ActivityKit / TipKit
 
 ## 更新日志
+
+### ver.02a f12 (2026-05-16)
+- **抽卡的作品详情 → 标签搜索结果 → 作品点击无反应 修复** — GachaView 的 NavigationStack 缺少 `NavigationPathBox` 绑定与 `.environment(\.navPathBox)` 注入，导致 TagSearchResultView 内的作品点击为 no-op。DownloadsView / FavoritesView / GalleryListView 已采用相同模式修复 (commit 91760d5 等)，抽卡是漏修，现按同模式补齐
+- **搜索历史点击无反应 候选修复 (观察中)** — GalleryListView 的 `advancedSearchOverlay` 在 AdvancedSearchView 外侧的 `.contentShape(Rectangle()) + .onTapGesture { /* 内侧点击不关闭 */ }` 在 SwiftUI iOS 18.7 上吸收了内部 Form 内 Button (过去检索 row) 的所有 tap。撤掉后实测全部恢复，日常使用是否再发长期观察中
+
+### ver.02a f11.1 (2026-05-02)
+- **NavigationPath 残留修复** — 打开作品 A 关闭后、再打开作品 B 并返回时显示 **A 的详情** (iPhone / iPad)。列表直接 push 时改为先用 `navPath = NavigationPath()` 重置再 append。标签搜索的链式导航仍保留历史
+- **混合作品的静态页显示 ▶ 图标 (复发) 修复** — Reader 内部 DL 路径从 gallery-level scan flag 改为 per-page 实际文件判定 (与 external_zip 行为统一)
+- **iPad 见开页预读 ±5 → ±15** — 1 屏 = 2 页，之前 ±5 只能预读 2.5 屏，常出现等待。左右翻向均匀 +10
+- **见开页返回点击不对称修复** — 前进 = 2 页但后退 = 1 页，通过修正 `prevSpreadIndex` 后退也对齐为 2 页
+- **库界面新增 grid/list 切换** — 与画廊列表同列数 (iPad=4 / iPhone=3 / Mac Catalyst=adaptive)
+- **搜索画面 23 个 UI 字符串本地化为 7 种语言** — en/de/es/fr/ko/zh-Hans/zh-Hant
 
 ### ver.02a f11 (2026-05-01)
 - **搜索更易用 (iOS)** — 移除顶部的 `.searchable` 搜索栏 (默认带有偏向日语的排除查询)，改为通过导航栏右上角放大镜按钮打开专用搜索画面。可任意选择分类与语言组合，All / Doujinshi / Tankoubon 分段标签也一并撤除，改为完全由用户驱动的筛选。搜索画面下方按主机 (E-Hentai / ExHentai / nhentai) 分别显示历史搜索记录，一键即可重新执行。nhentai 模式仅显示实际存在的分类，语言通过 namespace 查询正确组装。Mac Catalyst 界面保持不变。
