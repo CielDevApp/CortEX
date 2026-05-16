@@ -12,7 +12,7 @@
 > **For new Mac / before transferring to another user:**
 > Run `./scripts/cleanup-cortex-data.sh` from the repo, or use the in-app reset button, before handing over the device.
 
-<img src="assets/preview.png" alt="CortEX Preview">
+<img src="assets/banner_v3.png" alt="CortEX Banner">
 
 **Unified E-Hentai / EXhentai / nhentai Viewer for iOS / iPadOS**
 
