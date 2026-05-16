@@ -71,13 +71,17 @@ struct GachaView: View {
     @State private var resultDragOffset: CGFloat = 0
     // 画面サイズ
     @State private var screenSize: CGSize = .zero
+    // 田中報告 2026-05-16: ガチャ結果詳細→タグ→検索結果→作品タップが無反応だった。
+    // 他経路 (DownloadsView/FavoritesView/GalleryListView) は path bind + navPathBox 注入で
+    // 既に修正済 (commit 91760d5 他)。ガチャだけ漏れていたので同パターンを適用。
+    @StateObject private var navPathBox = NavigationPathBox()
 
     private enum GachaPhase {
         case idle, filling, darkening, result
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navPathBox.path) {
             GeometryReader { geo in
                 let _ = updateScreenSize(geo.size)
 
@@ -168,6 +172,7 @@ struct GachaView: View {
                 GalleryDetailView(gallery: gallery, host: .exhentai)
             }
         }
+        .environment(\.navPathBox, navPathBox)
     }
 
     private func updateScreenSize(_ size: CGSize) {
