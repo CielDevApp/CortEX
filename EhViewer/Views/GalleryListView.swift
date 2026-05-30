@@ -537,6 +537,15 @@ struct GalleryScrollList: View {
             if abs(delta) > 100 { return }
             if delta > 8 { onScrollDown?() } else if delta < -5 { onScrollUp?() }
         }
+        // Mac Catalyst は従来挙動を一切変えない (憲法: Mac は触らない)。iPhone/iPad のみ適用。
+        #if !targetEnvironment(macCatalyst)
+        .scrollPosition(id: $scrollPosition, anchor: .top)
+        .onChange(of: viewModel.scrollResetToken) {
+            // 田中報告 2026-05-30: iPad グリッドでもプルダウン更新で新着が画面外(上)に隠れ、検索位置も残る。
+            // データ総入れ替え時は新しい先頭 gid へスクロールを固定し一番上を表示する。
+            scrollPosition = viewModel.galleries.first?.gid
+        }
+        #endif
         .refreshable { await viewModel.refresh() }
         .overlay {
             if let gallery = previewGallery {
@@ -673,6 +682,15 @@ struct GalleryScrollList: View {
             else if delta < -5 { onScrollUp?() }
         }
         .scrollPosition(id: $scrollPosition, anchor: .top)
+        // Mac Catalyst は従来挙動を一切変えない (憲法: Mac は触らない)。iPhone/iPad のみ適用。
+        #if !targetEnvironment(macCatalyst)
+        .onChange(of: viewModel.scrollResetToken) {
+            // 田中報告 2026-05-30: プルダウン更新で新着が先頭に差し込まれても .scrollPosition が
+            // 旧トップ作品を .top に固定し直し、新着が画面外(上)に隠れて「更新されない」ように見える。
+            // 検索時も前のスクロール位置が残る。データ総入れ替え時は新しい先頭 gid へ固定し一番上を表示。
+            scrollPosition = viewModel.galleries.first?.gid
+        }
+        #endif
         .refreshable { await viewModel.refresh() }
         .overlay {
             if let gallery = previewGallery {

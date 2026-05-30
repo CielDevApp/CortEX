@@ -8,6 +8,10 @@ class GalleryListViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var searchText: String = ""
     @Published var hasMore: Bool = false
+    /// 田中報告 2026-05-30: プルダウン更新 / 検索でデータを総入れ替えした時に List の
+    /// スクロール位置を先頭へ戻すためのトークン。reset:true の取得が成功するたびに +1。
+    /// (append ページングでは bump しない＝途中までスクロールした位置を維持する)
+    @Published var scrollResetToken: Int = 0
     var host: GalleryHost = .exhentai
 
     /// カテゴリフィルタ（f_cats値）。nilなら全カテゴリ
@@ -76,6 +80,8 @@ class GalleryListViewModel: ObservableObject {
 
             if reset {
                 galleries = result.galleries
+                // データ総入れ替え → List を先頭へ戻す (新着が上に隠れる / 検索で前の位置が残る対策)
+                scrollResetToken += 1
                 // キャッシュ保存
                 if let key = cacheKey {
                     Self.saveListCache(result.galleries, key: key)
