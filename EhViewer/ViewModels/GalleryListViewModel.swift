@@ -159,7 +159,14 @@ class GalleryListViewModel: ObservableObject {
     }
 
     func refresh() async {
-        await loadGalleries(reset: true)
+        // 田中報告 2026-05-30: プルダウン更新で新着が出ない件。.refreshable のタスクは
+        // プルダウン戻り中の再描画 (onScrollUp/Down の tabBarHidden トグル等) でキャンセルされ得る。
+        // 直呼びだと loadGalleries 内の `if Task.isCancelled { return }` で取得結果を反映する前に抜け、
+        // ハプティックだけ出て更新されない。search() と同じく独立 Task で包み生存させる。
+        let task = Task { [weak self] in
+            await self?.loadGalleries(reset: true)
+        }
+        await task.value
     }
 
     private func buildQuery() -> String? {
