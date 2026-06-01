@@ -1,5 +1,6 @@
 import SwiftUI
 import TipKit
+import ImageIO
 
 struct LocalReaderView: View {
     let meta: DownloadedGallery
@@ -20,6 +21,10 @@ struct LocalReaderView: View {
     @State private var zoomImage: PlatformImage?
     @State private var sliderValue: Double
     @State private var isSliding = false
+    // Phase R-6: シーク時サムネプレビュー用キャッシュ (page → 240px サムネ)
+    @State private var seekThumbs: [Int: PlatformImage] = [:]
+    // Phase R-6: プレビューパネルの常駐表示 (左右タップ移動/外側タップで閉じる)
+    @State private var seekPreviewVisible = false
     @State private var sliderJumpTarget: Int?
     @State private var showPageOverlay = false
     @State private var enhancedImages: [Int: PlatformImage] = [:]
@@ -65,6 +70,108 @@ struct LocalReaderView: View {
         currentIndex = target
         sliderValue = Double(target)
     }
+
+    // MARK: - Phase R-6: シーク時サムネプレビュー (ローカル作品限定)
+    private var seekThumbnailStrip: some View {
+        let v = Int(sliderValue)
+        let rtl = readingOrder == 1 && isHorizontal   // 右綴じ横読み
+        return HStack(spacing: 5) {
+            seekThumbCell(v - 2, big: false)
+            seekThumbCell(v - 1, big: false)
+            seekThumbCell(v, big: true)
+            seekThumbCell(v + 1, big: false)
+            seekThumbCell(v + 2, big: false)
+        }
+        // 右綴じは次ページ(v+1,v+2)を左側に並べる。スライダーと同じ layoutDirection 方式。
+        .environment(\.layoutDirection, rtl ? .rightToLeft : .leftToRight)
+        .padding(8)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .contentShape(Rectangle())
+        .onTapGesture { }  // 帯内余白タップは閉じない (cell tap が優先)
+        .gesture(
+            // Phase R-6: プレビューを左右スワイプでページ送り (右綴じは方向反転=右スワイプで次)
+            DragGesture(minimumDistance: 24)
+                .onEnded { value in
+                    let dx = value.translation.width
+                    if dx <= -24 { navigateSeek(to: rtl ? v - 1 : v + 1) }      // 左スワイプ
+                    else if dx >= 24 { navigateSeek(to: rtl ? v + 1 : v - 1) }  // 右スワイプ
+                }
+        )
+    }
+
+    /// Phase R-6: 常駐プレビューパネル (暗幕外タップで閉じる)
+    @ViewBuilder
+    private var seekPreviewLayer: some View {
+        ZStack {
+            Color.black.opacity(0.4).ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture { hideSeekPreview() }
+            VStack(spacing: 4) {
+                Spacer()
+                seekThumbnailStrip
+                Text("中央=決定 / 左右=移動 / 外側=閉じる")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.7))
+                Spacer().frame(height: 130)
+            }
+        }
+        .transition(.opacity)
+    }
+
+    /// Phase R-6: 指定ページへ移動しプレビューを更新 (パネルは閉じない)
+    private func navigateSeek(to p: Int) {
+        guard p >= 0 && p < meta.pageCount else { return }
+        sliderValue = Double(p)
+        if isHorizontal { horizontalPage = p } else { sliderJumpTarget = p }
+        loadSeekThumbs(around: p)
+    }
+
+    /// Phase R-6: プレビューを閉じてサムネ解放
+    private func hideSeekPreview() {
+        withAnimation(.easeOut(duration: 0.15)) { seekPreviewVisible = false }
+        seekThumbs = [:]
+        showPageOverlay = false
+    }
+
+    @ViewBuilder
+    private func seekThumbCell(_ page: Int, big: Bool) -> some View {
+        let valid = page >= 0 && page < meta.pageCount
+        ZStack {
+            RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.12))
+            if valid, let img = seekThumbs[page] {
+                Image(uiImage: img).resizable().scaledToFill()
+            }
+        }
+        .frame(width: big ? 86 : 54, height: big ? 128 : 82)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay { if big { RoundedRectangle(cornerRadius: 6).stroke(.white, lineWidth: 2) } }
+        .opacity(valid ? 1 : 0.2)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if big { hideSeekPreview() }       // 中央=決定して閉じる
+            else if valid { navigateSeek(to: page) }  // 左右=そのページへ移動
+        }
+    }
+
+    /// シーク位置前後3枚の 240px サムネを背景ロードしてキャッシュ (ディスク上のローカル画像のみ)
+    private func loadSeekThumbs(around v: Int) {
+        let gid = meta.gid
+        let total = meta.pageCount
+        for p in [v - 2, v - 1, v, v + 1, v + 2] where p >= 0 && p < total && seekThumbs[p] == nil {
+            Task.detached(priority: .userInitiated) {
+                guard let data = DownloadManager.shared.loadLocalImageData(gid: gid, page: p),
+                      let src = CGImageSourceCreateWithData(data as CFData, nil) else { return }
+                let opts: [CFString: Any] = [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 240,
+                    kCGImageSourceCreateThumbnailWithTransform: true
+                ]
+                guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return }
+                let img = PlatformImage(cgImage: cg)
+                await MainActor.run { seekThumbs[p] = img }
+            }
+        }
+    }
     /// β-1 (2026-04-26): 外部参照 ZIP background materialize 完了通知で incrément、body 再描画 trigger
     @State private var externalCortexReadyCounter: Int = 0
 
@@ -91,6 +198,13 @@ struct LocalReaderView: View {
                 } else {
                     localHorizontalReader
                 }
+            }
+
+            // Phase R-6: シークサムネプレビュー (常駐・タップ移動・外側タップで閉じる)
+            // controlsOverlay より「下層」に置く → シークバーは最前面のまま操作可能、
+            // 中央の透明領域タップは暗幕に抜けて dismiss、サムネタップはセルが拾う。
+            if seekPreviewVisible {
+                seekPreviewLayer
             }
 
             if showControls && zoomImage == nil {
@@ -951,13 +1065,16 @@ struct LocalReaderView: View {
                         if editing {
                             withAnimation(.easeIn(duration: 0.15)) {
                                 showPageOverlay = true
+                                seekPreviewVisible = true   // Phase R-6: プレビュー常駐表示
                             }
+                            loadSeekThumbs(around: Int(sliderValue))  // Phase R-6
                         } else {
                             if isHorizontal {
                                 horizontalPage = Int(sliderValue)
                             } else {
                                 sliderJumpTarget = Int(sliderValue)
                             }
+                            // Phase R-6: 離してもプレビューは残す (左右タップ移動 / 外側タップで閉じる)
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                                 withAnimation(.easeOut(duration: 0.2)) {
                                     showPageOverlay = false
@@ -968,6 +1085,9 @@ struct LocalReaderView: View {
                     .tint(.white)
                     .padding(.horizontal)
                     .environment(\.layoutDirection, readingOrder == 1 && isHorizontal ? .rightToLeft : .leftToRight)
+                    .onChange(of: sliderValue) { _, nv in
+                        if isSliding { loadSeekThumbs(around: Int(nv)) }  // Phase R-6
+                    }
                 }
 
                 HStack {
