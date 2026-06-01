@@ -11,6 +11,10 @@ struct LocalReaderView: View {
     @State private var showControls = true
     @State private var showPageJump = false
     @State private var jumpPageText = ""
+    // 自動栞 (Phase R-1): 続き/最初 選択ダイアログ用
+    @State private var pendingResumePage: Int = 0
+    @State private var showResumeDialog = false
+    @State private var didOfferResume = false
     @State private var currentIndex: Int
     @State private var dragOffset: CGFloat = 0
     @State private var zoomImage: PlatformImage?
@@ -48,6 +52,19 @@ struct LocalReaderView: View {
     @State private var jumpPreCacheTotal = 0
     /// 大幅 jump 判定閾値 (これ以上のページ移動で pre-cache overlay 起動)
     private let jumpThreshold = 10
+
+    /// 自動栞 (Phase R-1): 栞ページへジャンプ (方向別・大ジャンプは pre-cache 経由)
+    private func resumeToBookmark(_ target: Int) {
+        if effectiveDirection == 0 {
+            if target >= jumpThreshold { startJumpPreCache(target: target) { scrolledID = target } }
+            else { scrolledID = target }
+        } else {
+            if target >= jumpThreshold { startJumpPreCache(target: target) { horizontalPage = target } }
+            else { horizontalPage = target }
+        }
+        currentIndex = target
+        sliderValue = Double(target)
+    }
     /// β-1 (2026-04-26): 外部参照 ZIP background materialize 完了通知で incrément、body 再描画 trigger
     @State private var externalCortexReadyCounter: Int = 0
 
@@ -196,9 +213,22 @@ struct LocalReaderView: View {
                 scanAvailablePages()
                 startPageCheckTimer()
             }
+            // 自動栞 (Phase R-1): 明示ページ未指定 & 非ライブ & 栞あり → 続き/最初 選択ダイアログ
+            if initialPage == 0 && !isLiveDownload && !didOfferResume {
+                didOfferResume = true
+                let saved = UserDefaults.standard.integer(forKey: "localReaderBookmark_\(meta.gid)")
+                if saved > 0 && saved < meta.pageCount {
+                    pendingResumePage = saved
+                    showResumeDialog = true
+                }
+            }
         }
         .task {
             await resolveReaderMode()
+        }
+        .confirmationDialog("前回の続きから読みますか？", isPresented: $showResumeDialog, titleVisibility: .visible) {
+            Button("\(pendingResumePage + 1)ページ目から再開") { resumeToBookmark(pendingResumePage) }
+            Button("最初から見る", role: .cancel) { }
         }
         .animationModeDialog(isPresented: $showAnimationDialog) { mode, dontAskAgain in
             if dontAskAgain {
@@ -460,6 +490,8 @@ struct LocalReaderView: View {
                 LogManager.shared.log("iPadScroll", "currentIndex: \(old) → \(new) isSliding=\(isSliding)")
                 if !isSliding {
                     sliderValue = Double(new)
+                    // 自動栞 (Phase R-1): ライブラリ作品の最終閲覧ページを保存 (gid キー)
+                    UserDefaults.standard.set(new, forKey: "localReaderBookmark_\(meta.gid)")
                 }
                 // enhancedImages LRU: 400 ページスクロールで dict 無制限膨張 → メモリ圧迫。
                 // currentIndex 前後 ±30 ページ外のエントリを削除して常時 ~60 entry に抑制。
