@@ -71,5 +71,7 @@
 			</dict>
 		</dict>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>ISBN/EANバーコードを読み取って書籍をウィッシュリストに追加するために使用します。</string>
 </dict>
 </plist>
