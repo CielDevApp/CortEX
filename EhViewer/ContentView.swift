@@ -322,6 +322,9 @@ struct ContentView: View {
             SettingsView(authVM: authVM)
                 .tabItem { Label("設定", systemImage: "gearshape.fill") }
                 .tag(6)
+            WishlistView()
+                .tabItem { Label("ウィッシュリスト", systemImage: "bookmark.fill") }
+                .tag(7)
         }
         .sheet(isPresented: $authVM.showingLogin) {
             LoginView(authVM: authVM)
