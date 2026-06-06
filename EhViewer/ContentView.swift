@@ -740,7 +740,7 @@ struct CharacterManagementTab: View {
 
 #if targetEnvironment(macCatalyst)
 /// Mac Catalyst 専用の上部タブバー。SwiftUI TabView を使うと overflow menu に
-/// 畳まれる仕様回避のため独自 HStack 実装。iOS は既存 TabView のまま。
+/// 畳まれる仕様回避のため独自 HStack 実装。
 struct CatalystTabBar: View {
     @Binding var selection: Int
     let activeDownloadCount: Int

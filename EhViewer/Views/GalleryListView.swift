@@ -186,14 +186,15 @@ struct GalleryListView: View {
                 initialCategories: [],
                 initialLanguages: advSearchLanguages,
                 onClose: { dismissSearch() }
-            ) { text, categoryFilter, baseQuery, _, languages in
+            ) { text, categoryFilter, baseQuery, _, languages, minRating in
                 advSearchLanguages = languages
                 if selectedSource == .ehentai {
                     searchText = text
                     currentVM.searchText = text
                     currentVM.categoryFilter = categoryFilter
                     currentVM.baseQuery = baseQuery
-                    isSearchActive = !text.isEmpty || categoryFilter != nil || baseQuery != nil
+                    currentVM.minRating = minRating >= 2 ? minRating : nil
+                    isSearchActive = !text.isEmpty || categoryFilter != nil || baseQuery != nil || (minRating >= 2)
                     Task { await currentVM.refresh() }
                 } else {
                     searchText = text
@@ -468,8 +469,9 @@ struct GalleryScrollList: View {
                                 // 田中報告 2026-05-02: 別作品を開いて戻ると前の作品の詳細が出る問題対応。
                                 // SwiftUI NavigationPath の pop 残留 (既知挙動) を回避するため、
                                 // 一覧からの直接 push 時は path をリセットして [gallery] のみにする。
+                                // クリアと追加を別フレームに分け、同作品の再タップでも差分を発生させ確実に push。
                                 navPath = NavigationPath()
-                                navPath.append(gallery)
+                                DispatchQueue.main.async { navPath.append(gallery) }
                             }
                             .simultaneousGesture(
                                 LongPressGesture(minimumDuration: 0.4, maximumDistance: 15)
@@ -590,7 +592,7 @@ struct GalleryScrollList: View {
                         .onTapGesture {
                             // 田中報告 2026-05-02: 別作品を開いて戻ると前の作品の詳細が出る問題対応 (path 残留対策)
                             navPath = NavigationPath()
-                            navPath.append(gallery)
+                            DispatchQueue.main.async { navPath.append(gallery) }  // 同作品再タップ対策(別フレーム)
                         }
                         // iPadでGalleryCardView内NavigationLinkが長押しを奪うのでhighPriority
                         .highPriorityGesture(
@@ -950,7 +952,7 @@ struct NhentaiScrollList: View {
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 navPath = NavigationPath()
-                                navPath.append(nh)
+                                DispatchQueue.main.async { navPath.append(nh) }  // 同作品再タップ対策(別フレーム)
                             }
                             .simultaneousGesture(
                                 LongPressGesture(minimumDuration: 0.4, maximumDistance: 15)
@@ -1023,7 +1025,7 @@ struct NhentaiScrollList: View {
                         .contentShape(Rectangle())
                         .onTapGesture {
                             navPath = NavigationPath()
-                            navPath.append(nh)
+                            DispatchQueue.main.async { navPath.append(nh) }  // 同作品再タップ対策(別フレーム)
                         }
                         .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 15) {
                             #if canImport(UIKit)

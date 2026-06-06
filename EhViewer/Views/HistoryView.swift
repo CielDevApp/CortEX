@@ -3,14 +3,17 @@ import SwiftUI
 struct HistoryView: View {
     @ObservedObject private var history = HistoryManager.shared
     @State private var showClearConfirm = false
-    @State private var navPath = NavigationPath()
+    // 他タブ(Favorites/Downloads/Gacha/GalleryList)と同じ navPathBox 方式に統一。
+    // これが無いと履歴→詳細→タグ→検索結果 の TagSearchResultView で navPathBox=nil となり
+    // 作品タップが no-op になる (2026-05-16 ガチャ経路と同型の NavigationPathBox 漏れ)。
+    @StateObject private var navPathBox = NavigationPathBox()
     @State private var previewEhGallery: Gallery?
     @State private var previewNhGallery: NhentaiClient.NhGallery?
     @State private var previewEhReader: GalleryPreviewReaderRequest?
     @State private var previewNhReader: NhentaiPreviewReaderRequest?
 
     var body: some View {
-        NavigationStack(path: $navPath) {
+        NavigationStack(path: $navPathBox.path) {
             List {
                 if history.isEmpty {
                     ContentUnavailableView {
@@ -26,7 +29,7 @@ struct HistoryView: View {
                         let g = history.toGallery(entry)
                         ehHistoryRow(entry: entry)
                             .contentShape(Rectangle())
-                            .onTapGesture { navPath.append(g) }
+                            .onTapGesture { navPathBox.path.append(g) }
                             .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 15) {
                                 #if canImport(UIKit)
                                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
@@ -36,7 +39,7 @@ struct HistoryView: View {
                     case .nh(let entry):
                         nhHistoryRow(entry: entry)
                             .contentShape(Rectangle())
-                            .onTapGesture { navPath.append(entry.gallery) }
+                            .onTapGesture { navPathBox.path.append(entry.gallery) }
                             .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 15) {
                                 #if canImport(UIKit)
                                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
@@ -119,6 +122,7 @@ struct HistoryView: View {
                     }
             }
             #endif
+            .environment(\.navPathBox, navPathBox)
         }
     }
 

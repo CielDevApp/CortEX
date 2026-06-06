@@ -11,27 +11,33 @@ struct TagSearchResultView: View {
     @Environment(\.navPathBox) private var navPathBox
     @State private var previewGallery: Gallery?
     @State private var previewReaderRequest: GalleryPreviewReaderRequest?
+    // タグ飛び先の絞り込み (最低評価 + 除外言語)
+    @State private var showFilter = false
+    @State private var minRating = 0
+    @State private var selectedLanguages: Set<String> = []
 
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 ForEach(viewModel.galleries) { gallery in
-                    GalleryCardView(gallery: gallery)
-                        .padding(.horizontal)
-                        .padding(.vertical, 4)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            navPathBox?.path.append(gallery)
-                        }
-                        .highPriorityGesture(
-                            LongPressGesture(minimumDuration: 0.4, maximumDistance: 15)
-                                .onEnded { _ in
-                                    #if canImport(UIKit)
-                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                    #endif
-                                    previewGallery = gallery
-                                }
-                        )
+                    // navPathBox は GalleryDetailView 経由の push でこの View まで伝播せず nil になる
+                    // (実測 box=false)。GalleryDetailView のタグと同じ NavigationLink(value:) にして
+                    // enclosing NavigationStack の path へ直接積む (navPathBox 非依存で確実に動く)。
+                    NavigationLink(value: gallery) {
+                        GalleryCardView(gallery: gallery)
+                            .padding(.horizontal)
+                            .padding(.vertical, 4)
+                    }
+                    .buttonStyle(.plain)
+                    .highPriorityGesture(
+                        LongPressGesture(minimumDuration: 0.4, maximumDistance: 15)
+                            .onEnded { _ in
+                                #if canImport(UIKit)
+                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                #endif
+                                previewGallery = gallery
+                            }
+                    )
 
                     Divider().padding(.leading)
                 }
@@ -59,6 +65,66 @@ struct TagSearchResultView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button { showFilter = true } label: {
+                    Image(systemName: "slider.horizontal.3")
+                }
+            }
+        }
+        .sheet(isPresented: $showFilter) {
+            NavigationStack {
+                Form {
+                    Section("最低評価") {
+                        HStack(spacing: 8) {
+                            ForEach(1...5, id: \.self) { i in
+                                Image(systemName: i <= minRating ? "star.fill" : "star")
+                                    .font(.title2)
+                                    .foregroundStyle(.yellow)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { minRating = (minRating == i ? 0 : i) }
+                            }
+                            Spacer()
+                            Text(minRating >= 2 ? "★\(minRating) 以上のみ" : "指定なし")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Section {
+                        ForEach(AdvancedSearchView.allLanguages, id: \.code) { lang in
+                            Button {
+                                if selectedLanguages.contains(lang.code) { selectedLanguages.remove(lang.code) }
+                                else { selectedLanguages.insert(lang.code) }
+                            } label: {
+                                HStack {
+                                    Text(lang.label).foregroundStyle(.primary)
+                                    Spacer()
+                                    if selectedLanguages.contains(lang.code) {
+                                        Image(systemName: "checkmark").foregroundStyle(.blue)
+                                    }
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    } header: {
+                        Text("表示する言語")
+                    } footer: {
+                        Text("選択した言語のみ表示（未選択なら全言語）。E-H 仕様上「★2以上」が最小。")
+                    }
+                }
+                .navigationTitle("絞り込み")
+                #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+                #endif
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("適用") { applyFilter(); showFilter = false }
+                    }
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("閉じる") { showFilter = false }
+                    }
+                }
+            }
+        }
         .overlay {
             if viewModel.isLoading && viewModel.galleries.isEmpty {
                 ProgressView("検索中...")
@@ -89,6 +155,25 @@ struct TagSearchResultView: View {
             viewModel.searchText = searchQuery
             await viewModel.search()
         }
+    }
+
+    /// 絞り込み適用 → 最低評価フィルタ + 除外言語トークンを設定して再検索
+    private func applyFilter() {
+        viewModel.minRating = minRating >= 2 ? minRating : nil
+        // 選択した言語のみ表示 (AdvancedSearchView と同じ include ロジック)。
+        // 日本語含む or 複数選択は「選択外を除外」、単独選択は include トークン。
+        viewModel.baseQuery = {
+            guard !selectedLanguages.isEmpty else { return nil }
+            if selectedLanguages.contains("japanese") || selectedLanguages.count >= 2 {
+                let defined = Set(AdvancedSearchView.allLanguages.map { $0.code })
+                let toExclude = defined.subtracting(selectedLanguages)
+                return toExclude.map { "-language:\($0)" }.sorted().joined(separator: " ")
+            }
+            if let only = selectedLanguages.first { return "language:\(only)$" }
+            return nil
+        }()
+        viewModel.galleries = []
+        Task { await viewModel.search() }
     }
 }
 

@@ -62,6 +62,17 @@ struct GalleryGridCellView: View {
                         .foregroundStyle(.white)
                         .clipShape(RoundedRectangle(cornerRadius: 3))
                 }
+                // レーティング星 (ジャンルアイコン隣)。満/半/空で表現。未評価(0)は非表示。
+                if gallery.rating > 0 {
+                    HStack(spacing: 0.5) {
+                        ForEach(0..<5, id: \.self) { i in
+                            let r = gallery.rating - Double(i)
+                            Image(systemName: r >= 0.75 ? "star.fill" : (r >= 0.25 ? "star.leadinghalf.filled" : "star"))
+                                .font(.system(size: 7))
+                                .foregroundStyle(.yellow)
+                        }
+                    }
+                }
                 Spacer()
                 if gallery.pageCount > 0 {
                     Text("\(gallery.pageCount)P")

@@ -34,11 +34,13 @@ struct AdvancedSearchView: View {
                   _ categoryFilter: Int?,
                   _ baseQuery: String?,
                   _ categories: Set<GalleryCategory>,
-                  _ languages: Set<String>) -> Void
+                  _ languages: Set<String>,
+                  _ minRating: Int) -> Void
 
     @State private var searchText: String
     @State private var selectedCategories: Set<GalleryCategory>
     @State private var selectedLanguages: Set<String>
+    @State private var minRating = 0
 
     /// 履歴 store key (host ごとに分離)
     private var hostKey: String {
@@ -58,7 +60,8 @@ struct AdvancedSearchView: View {
                             _ categoryFilter: Int?,
                             _ baseQuery: String?,
                             _ categories: Set<GalleryCategory>,
-                            _ languages: Set<String>) -> Void
+                            _ languages: Set<String>,
+                            _ minRating: Int) -> Void
     ) {
         self.mode = mode
         self.onClose = onClose
@@ -126,6 +129,24 @@ struct AdvancedSearchView: View {
                         .onSubmit { applyAndDismiss() }
                 } header: {
                     Text("検索ワード")
+                }
+
+                if case .ehentai = mode {
+                    Section {
+                        HStack(spacing: 8) {
+                            ForEach(1...5, id: \.self) { i in
+                                Image(systemName: i <= minRating ? "star.fill" : "star")
+                                    .font(.title2).foregroundStyle(.yellow)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { minRating = (minRating == i ? 0 : i) }
+                            }
+                            Spacer()
+                            Text(minRating >= 2 ? "★\(minRating) 以上のみ" : "指定なし")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    } header: {
+                        Text("最低評価")
+                    }
                 }
 
                 Section {
@@ -339,7 +360,7 @@ struct AdvancedSearchView: View {
                 }
                 return nil
             }()
-            onApply(trimmedText, categoryFilter, baseQuery, selectedCategories, selectedLanguages)
+            onApply(trimmedText, categoryFilter, baseQuery, selectedCategories, selectedLanguages, minRating)
 
         case .nhentai:
             // nhentai は単一 query 文字列で検索。タグ namespace を直接埋め込む。
@@ -358,7 +379,7 @@ struct AdvancedSearchView: View {
                 parts.append("language:\(lang)")
             }
             let nhQuery = parts.joined(separator: " ")
-            onApply(nhQuery, nil, nil, selectedCategories, selectedLanguages)
+            onApply(nhQuery, nil, nil, selectedCategories, selectedLanguages, 0)
         }
         close()
     }
