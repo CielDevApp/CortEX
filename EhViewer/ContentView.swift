@@ -40,6 +40,7 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             mainContent
+                .modifier(UpdateCheckModifier())
                 .disabled(showLockScreen && bioAuth.isLockActive)
                 .opacity(showLockScreen && bioAuth.isLockActive ? 0 : 1)
 

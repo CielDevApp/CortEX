@@ -24,6 +24,15 @@ EXPORT_OPTIONS="$ROOT/scripts/ExportOptions-iOS.plist"
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
+# アップデート確認機能の自己バージョン (AppVersion.releaseTag) を今回のタグへ同期。
+# v* 形式のタグ指定時のみ。手動更新の腐り (例: 設定が古いまま) を防ぐ保険。
+VERSION_FILE="$ROOT/EhViewer/Services/UpdateChecker.swift"
+if [[ "$VERSION" == v* && -f "$VERSION_FILE" ]]; then
+    echo "==> Sync AppVersion.releaseTag = $VERSION"
+    /usr/bin/sed -i '' -E "s/(static let releaseTag = \")[^\"]*(\")/\1${VERSION}\2/" "$VERSION_FILE"
+    grep -n "static let releaseTag" "$VERSION_FILE" || true
+fi
+
 echo "==> [1/3] Archive (iOS Release)"
 xcodebuild archive \
     -project EhViewer.xcodeproj \
