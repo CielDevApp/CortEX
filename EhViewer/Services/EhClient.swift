@@ -30,7 +30,7 @@ final class EhClient: Sendable {
 
     // MARK: - Gallery List
 
-    nonisolated func fetchGalleryList(host: GalleryHost, page: Int = 0, searchQuery: String? = nil, categoryFilter: Int? = nil) async throws -> (galleries: [Gallery], pageNumber: PageNumber) {
+    nonisolated func fetchGalleryList(host: GalleryHost, page: Int = 0, searchQuery: String? = nil, categoryFilter: Int? = nil, minRating: Int? = nil) async throws -> (galleries: [Gallery], pageNumber: PageNumber) {
         let t0 = CFAbsoluteTimeGetCurrent()
         var urlString = host.baseURL + "/"
         var queryItems: [String] = []
@@ -40,6 +40,11 @@ final class EhClient: Sendable {
         }
         if let cats = categoryFilter {
             queryItems.append("f_cats=\(cats)")
+        }
+        // 最低評価フィルタ (N★以上のみ)。E-H 公式: f_sr=on で有効化, f_srdd=2..5。
+        if let r = minRating, (2...5).contains(r) {
+            queryItems.append("f_sr=on")
+            queryItems.append("f_srdd=\(r)")
         }
         if !queryItems.isEmpty {
             urlString += "?" + queryItems.joined(separator: "&")

@@ -255,6 +255,18 @@ class DownloadManager: ObservableObject {
 
     /// 未完了ダウンロードを自動再開（キャンセル済みはスキップ）
     private func resumeIncompleteDownloads() async {
+        // 田中要望 2026-05-04: 起動時に全未完了 DL を強制中止する救済 flag。
+        // PlistBuddy / defaults write で設定可能、launch 後 1 回だけ発火して clear。
+        // 「消したり中止押したら絶対止まったり終わる設計」確保のため。
+        if UserDefaults.standard.bool(forKey: "com.kanayayuutou.cortex.abortAllOnLaunch") {
+            let toAbort = downloads.filter { !$0.value.isComplete }.map { $0.key }
+            for gid in toAbort {
+                deleteDownload(gid: gid)
+            }
+            UserDefaults.standard.removeObject(forKey: "com.kanayayuutou.cortex.abortAllOnLaunch")
+            LogManager.shared.log("Download", "abortAllOnLaunch: deleted \(toAbort.count) incomplete downloads, skipping auto-resume")
+            return
+        }
         // 田中 emergency fix 2026-04-26: NAS に対応 .cortex がある gid は phantom resume 阻止
         let cortexBaseNames: Set<String> = {
             #if targetEnvironment(macCatalyst)
@@ -1265,10 +1277,14 @@ class DownloadManager: ObservableObject {
             meta.isCancelled = true
             saveMetadata(meta)
         }
-        // enqueue 済み URLSessionTask も即キャンセル（両 session 横断）
+        // 田中要望 2026-05-04: 中止が確実に効くよう「真の停止」を保証。
+        // recentlyDeletedGids に入れて in-flight Task の autoSavePage / 復活経路を遮断。
+        recentlyDeletedGids.insert(gid)
+        // enqueue 済み URLSessionTask も即キャンセル（両 session 横断 + htmlFetch も）
         let bg = BackgroundDownloadManager.shared
         bg.cancelAllTasks(for: gid, session: bg.nhSession)
         bg.cancelAllTasks(for: gid, session: bg.ehSession)
+        bg.cancelAllTasks(for: gid, session: bg.htmlFetchSession)
         // 田中要望 2026-04-27: cancel = staging も全消去 (partial finalize 防止 + SSD 即解放)
         // 中止 / 削除が動かない bug の root cause: cancel しても staging が残り、
         // performDownload 末端で partial finalize が走って .cortex 化されてしまう。
@@ -1385,10 +1401,11 @@ class DownloadManager: ObservableObject {
         if activeDownloads[gid] != nil {
             activeDownloads[gid]?.isCancelled = true
         }
-        // enqueue 済み URLSessionTask も即キャンセル（両 session 横断）
+        // enqueue 済み URLSessionTask も即キャンセル（両 session 横断 + htmlFetch も）
         let bg = BackgroundDownloadManager.shared
         bg.cancelAllTasks(for: gid, session: bg.nhSession)
         bg.cancelAllTasks(for: gid, session: bg.ehSession)
+        bg.cancelAllTasks(for: gid, session: bg.htmlFetchSession)
         // LiveActivity 終了（通知センター/Dynamic Islandから消す）
         endLiveActivity(gid: gid, success: false)
         // in-flight autoSavePage Task が saveMetadata で復活させないようブロック

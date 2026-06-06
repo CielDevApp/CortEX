@@ -18,6 +18,8 @@ class GalleryListViewModel: ObservableObject {
     var categoryFilter: Int?
     /// 検索クエリに追加する固定条件（例: "language:japanese"）
     var baseQuery: String?
+    /// 最低評価フィルタ (2〜5 = N★以上のみ表示。nil=なし)。E-H の f_sr/f_srdd に対応。
+    var minRating: Int?
 
     private let client = EhClient.shared
     private var nextPageURL: String?
@@ -67,7 +69,7 @@ class GalleryListViewModel: ObservableObject {
                 let query = buildQueryWithTagTranslation()
                 result = try await client.fetchGalleryList(
                     host: host, page: currentPage,
-                    searchQuery: query, categoryFilter: categoryFilter
+                    searchQuery: query, categoryFilter: categoryFilter, minRating: minRating
                 )
             }
 
