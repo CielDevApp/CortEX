@@ -62,6 +62,29 @@ struct SettingsView: View {
     @AppStorage("showAdvancedSettings") private var showAdvanced = false
     // CORTEX PROTOCOL (hidden)
     @State private var versionTapCount = 0
+    @State private var isCheckingUpdate = false
+    @State private var updateResultMessage = ""
+    @State private var showUpdateResult = false
+    @State private var updateResultURL: URL?
+
+    @MainActor private func checkForUpdate() async {
+        isCheckingUpdate = true
+        defer { isCheckingUpdate = false }
+        guard let info = await UpdateChecker.fetchLatest() else {
+            updateResultMessage = "確認に失敗しました。通信状況を確認してください。"
+            updateResultURL = nil
+            showUpdateResult = true
+            return
+        }
+        if info.isNewer {
+            updateResultMessage = "新しいバージョン \(info.tag) があります。\n現在: \(AppVersion.releaseTag)"
+            updateResultURL = info.url
+        } else {
+            updateResultMessage = "最新です (\(AppVersion.releaseTag))"
+            updateResultURL = nil
+        }
+        showUpdateResult = true
+    }
     @AppStorage("cortexProtocolUnlocked") private var cortexUnlocked = false
     @State private var showCortexActivation = false
     @State private var cortexSearchURL: URL?
@@ -117,7 +140,7 @@ struct SettingsView: View {
                 Section("情報") {
                     HStack {
                         Text("バージョン"); Spacer()
-                        Text("Cort:EX ver.02a f5")
+                        Text(AppVersion.displayName)
                             .font(.caption.monospaced())
                             .foregroundStyle(cortexUnlocked ? Color(red: 0.85, green: 0.1, blue: 0.15) : .secondary)
                     }
@@ -146,6 +169,30 @@ struct SettingsView: View {
                                 Label("CORTEX PROTOCOL 無効化", systemImage: "lock.fill")
                             }
                         }
+                    }
+
+                    Button {
+                        Task { await checkForUpdate() }
+                    } label: {
+                        HStack {
+                            Text("更新を確認").foregroundStyle(.primary)
+                            Spacer()
+                            if isCheckingUpdate {
+                                ProgressView()
+                            } else {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .disabled(isCheckingUpdate)
+                    .alert("アップデート", isPresented: $showUpdateResult) {
+                        if let url = updateResultURL {
+                            Button("リリースを開く") { UpdateChecker.open(url) }
+                        }
+                        Button("OK", role: .cancel) {}
+                    } message: {
+                        Text(updateResultMessage)
                     }
                 }
 
