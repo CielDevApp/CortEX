@@ -1601,7 +1601,7 @@ struct LocalThumbCell: View {
 /// ライブラリ → 作品詳細 sheet 用の NavigationStack ラッパー。
 /// FavoritesView と同じく navPathBox + Gallery/NhGallery destination 一式を備え、
 /// タグ検索結果からの作品タップで詳細を push できるようにする。
-private struct DetailSheetNavStack<Content: View>: View {
+struct DetailSheetNavStack<Content: View>: View {
     var dismiss: () -> Void
     @ViewBuilder var content: () -> Content
     @StateObject private var navPathBox = NavigationPathBox()

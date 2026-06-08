@@ -1368,7 +1368,9 @@ struct CharacterWorksView: View {
             }
             #if canImport(UIKit)
             .fullScreenCover(item: $selectedNhGallery) { nh in
-                NhentaiDetailView(gallery: nh)
+                DetailSheetNavStack(dismiss: { selectedNhGallery = nil }) {
+                    NhentaiDetailView(gallery: nh)
+                }
             }
             #endif
         }
