@@ -6,7 +6,7 @@ import UIKit
 /// アプリの現在リリース版。GitHub の release tag と一致させる。
 /// release-ios.sh が IPA ビルド時にこの値を当該タグへ自動同期する (手動更新不要)。
 enum AppVersion {
-    static let releaseTag = "v02a-f18"
+    static let releaseTag = "v02a-f19"
     static var displayName: String {
         "Cort:EX " + releaseTag.replacingOccurrences(of: "v02a-f", with: "ver.02a f")
     }
