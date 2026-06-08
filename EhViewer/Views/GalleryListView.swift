@@ -75,11 +75,24 @@ struct GalleryListView: View {
                 .padding(.horizontal)
                 .padding(.top, 6)
 
+                #if targetEnvironment(macCatalyst)
+                // Mac Catalyst は従来の条件分岐 (マウス操作、Picker でソース切替)。
                 if selectedSource == .ehentai {
                     ehentaiContent
                 } else {
                     nhentaiContent
                 }
+                #else
+                // 田中要望 2026-06-08: 左右スワイプで E-Hentai ⇄ nhentai を切替。
+                // ページング TabView は両ページを生存させ続けるため、各 ScrollView の
+                // スクロール位置が保持され、再フェッチも起きずシームレスに切替わる。
+                // 上部セグメント Picker と双方向バインド (Picker タップでもスワイプでも同期)。
+                TabView(selection: $selectedSource) {
+                    ehentaiContent.tag(GallerySource.ehentai)
+                    nhentaiContent.tag(GallerySource.nhentai)
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                #endif
             }
             .navigationTitle("Cort:EX")
             #if os(iOS)
