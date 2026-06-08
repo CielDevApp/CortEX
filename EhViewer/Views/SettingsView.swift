@@ -1356,6 +1356,9 @@ struct CharacterWorksView: View {
             .sheet(item: $selectedEhGallery) { gallery in
                 NavigationStack {
                     GalleryDetailView(gallery: gallery, host: KeychainService.load(key: "igneous") != nil ? .exhentai : .ehentai)
+                        .navigationDestination(for: Gallery.self) { pushed in
+                            GalleryDetailView(gallery: pushed, host: KeychainService.load(key: "igneous") != nil ? .exhentai : .ehentai)
+                        }
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
                                 Button("閉じる") { selectedEhGallery = nil }
