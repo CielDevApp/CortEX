@@ -69,6 +69,8 @@ struct GachaView: View {
     @State private var showFullscreen = false
     @StateObject private var displayLink = DisplayLinkDriver()
     @State private var resultDragOffset: CGFloat = 0
+    // 田中要望 2026-06-08: 演出スキップ。ON なら tile 演出を飛ばして即結果表示。
+    @AppStorage("gachaSkipEffect") private var gachaSkipEffect = false
     // 画面サイズ
     @State private var screenSize: CGSize = .zero
     // 田中報告 2026-05-16: ガチャ結果詳細→タグ→検索結果→作品タップが無反応だった。
@@ -223,6 +225,19 @@ struct GachaView: View {
 
             Text("\(allFavorites.count)件のお気に入りから抽選")
                 .font(.caption).foregroundStyle(.secondary)
+
+            // 演出スキップ チェックボタン (田中要望 2026-06-08)
+            Button {
+                gachaSkipEffect.toggle()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: gachaSkipEffect ? "checkmark.square.fill" : "square")
+                    Text("演出をスキップ")
+                }
+                .font(.caption)
+                .foregroundStyle(gachaSkipEffect ? .purple : .secondary)
+            }
+            .buttonStyle(.plain)
         }
         .frame(maxWidth: .infinity)
         .padding()
@@ -421,6 +436,19 @@ struct GachaView: View {
         titleOpacity = 0
         buttonsOpacity = 0
         fadeOverlayOpacity = 0
+
+        // 演出スキップ (田中要望 2026-06-08): ON なら tile 演出を飛ばして即結果表示。
+        // 既存の「キャッシュ画像なし」クイック経路と同じ即結果遷移を流用。
+        if gachaSkipEffect {
+            selectedGallery = winner
+            phase = .result
+            showFullscreen = true
+            haptic("success")
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { resultScale = 1 }
+            withAnimation(.easeOut(duration: 0.3).delay(0.2)) { titleOpacity = 1 }
+            withAnimation(.easeOut(duration: 0.3).delay(0.4)) { buttonsOpacity = 1 }
+            return
+        }
 
         // サムネプリロード (田中要望 2026-04-27: 演出 tile の被りを最大限減らすため
         // pool 全体から cache 済画像を集める。.prefix(80) cap を撤去)
