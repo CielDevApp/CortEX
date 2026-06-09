@@ -278,7 +278,27 @@ extension ReaderViewModel {
             }
 
             let fetchStart = CFAbsoluteTimeGetCurrent()
-            let imageData = try await client.fetchImageData(url: imageURL, host: host)
+            // 田中要望 2026-06-09: 現在表示中ページ (標準画質/WebP 大容量) の DL のみ進捗バー用に
+            // 報告。他ページの prefetch は onProgress=nil で従来経路 (挙動不変)。
+            // 進捗をページ (holder) 単位で持つ → 表示中ページと currentIndex のズレに影響されず、
+            // 各ページが自分のスピナー隣に自分の % を出せる (田中報告 2026-06-09「次ページの完了が
+            // 出てズレる」「クルクルの隣に」対策)。可視窓 (±2) のみ配線 (遠い prefetch は従来経路)。
+            let progressIndex = index
+            let onProgress: (@Sendable (Double) -> Void)?
+            if isVisible {
+                onProgress = { [weak self] frac in
+                    Task<Void, Never> { @MainActor in
+                        guard let self else { return }
+                        self.holder(for: progressIndex).loadProgress = frac < 1.0 ? frac : -1
+                    }
+                }
+            } else {
+                onProgress = nil
+            }
+            let imageData = try await client.fetchImageData(url: imageURL, host: host, onProgress: onProgress)
+            if onProgress != nil {
+                await MainActor.run { self.holder(for: progressIndex).loadProgress = -1 }
+            }
             let fetchMs = Int((CFAbsoluteTimeGetCurrent() - fetchStart) * 1000)
 
             // 自動保存: 設定ONの場合のみ

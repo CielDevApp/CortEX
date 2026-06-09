@@ -108,7 +108,28 @@ struct PageCellView: View {
             }
             #endif
 
-            if isPlaceholder && qualityMode >= 2 && holder.image != nil {
+            // DL進捗バー (田中要望 2026-06-09)。holder.loadProgress だけでゲート → サムネ表示
+            // (placeholder) / loadingView どちらの分岐でも出る。isPlaceholder 定数 (親から渡される
+            // viewModel.isPlaceholder) に依存していたのがバー非表示の真因だった (実機ログで確認:
+            // loadProgress は届いていたが isPlaceholder=false で弾かれていた)。
+            if holder.loadProgress > 0 && holder.loadProgress < 1 {
+                VStack {
+                    Spacer()
+                    HStack(spacing: 8) {
+                        ProgressView().scaleEffect(0.6).tint(.white)
+                        ProgressView(value: holder.loadProgress)
+                            .progressViewStyle(.linear)
+                            .frame(width: 130)
+                            .tint(.white)
+                        Text("\(Int(holder.loadProgress * 100))%")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.white)
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+                    .background(.black.opacity(0.6)).clipShape(Capsule())
+                    .padding(.bottom, 14)
+                }
+            } else if isPlaceholder && qualityMode >= 2 && holder.image != nil {
                 VStack {
                     Spacer()
                     ProgressView().scaleEffect(0.6).tint(.white)
@@ -186,7 +207,24 @@ struct PageCellView: View {
                         .aspectRatio(contentMode: .fit)
                         .frame(maxWidth: .infinity)
 
-                    if isPlaceholder && qualityMode >= 2 {
+                    // DL進捗バー (田中要望 2026-06-09): holder.loadProgress だけでゲート。
+                    // 旧実装は isPlaceholder 定数依存 + horizontalBody 側にしか入れておらず、
+                    // 縦モードで描画される verticalBody に無かったのが非表示の真因 (実機ログで確認)。
+                    if holder.loadProgress > 0 && holder.loadProgress < 1 {
+                        VStack {
+                            Spacer()
+                            HStack(spacing: 8) {
+                                ProgressView().scaleEffect(0.6).tint(.white)
+                                ProgressView(value: holder.loadProgress)
+                                    .progressViewStyle(.linear).frame(width: 130).tint(.white)
+                                Text("\(Int(holder.loadProgress * 100))%")
+                                    .font(.caption2.monospacedDigit()).foregroundStyle(.white)
+                            }
+                            .padding(.horizontal, 12).padding(.vertical, 7)
+                            .background(.black.opacity(0.6)).clipShape(Capsule())
+                            .padding(.bottom, 14)
+                        }
+                    } else if isPlaceholder && qualityMode >= 2 {
                         VStack {
                             Spacer()
                             ProgressView().scaleEffect(0.6).tint(.white)
