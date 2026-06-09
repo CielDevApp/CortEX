@@ -328,14 +328,23 @@ final class EhClient: Sendable {
     }
 
     /// 画像データをcookie付きでダウンロード（AsyncImageの代わりに使用）
-    nonisolated func fetchImageData(url: URL, host: GalleryHost) async throws -> Data {
+    /// onProgress 指定時のみ DL 進捗 (0...1) を報告 (大容量の標準画質/WebP をリーダーで
+    /// バー表示するため、田中要望 2026-06-09)。nil の通常経路 (prefetch/サムネ等) は従来の
+    /// session.data(for:) のまま = バイト単位の挙動不変。
+    nonisolated func fetchImageData(url: URL, host: GalleryHost, onProgress: (@Sendable (Double) -> Void)? = nil) async throws -> Data {
         let t0 = CFAbsoluteTimeGetCurrent()
         var request = URLRequest(url: url)
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
         // forImageFetch=true: uh=1280/iir=3 を含めない → Original 配信 (動画 WebP も原本のまま)
         request.setValue(Self.buildCookieHeader(for: host, forImageFetch: true), forHTTPHeaderField: "Cookie")
 
-        let (data, response) = try await session.data(for: request)
+        let data: Data
+        let response: URLResponse
+        if let onProgress {
+            (data, response) = try await Self.dataWithProgress(session: session, request: request, onProgress: onProgress)
+        } else {
+            (data, response) = try await session.data(for: request)
+        }
 
         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
             throw EhError.parseFailed
@@ -345,6 +354,29 @@ final class EhClient: Sendable {
         }
         LogManager.shared.log("Perf", "fetchImageData: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms \(data.count)B \(url.lastPathComponent)")
         return data
+    }
+
+    /// URLSessionTask.progress (Content-Length 既知時に fractionCompleted が進む) を KVO で
+    /// 観測してチャンク粒度の進捗を報告。バイト逐次反復より高速。Content-Length 不明なら
+    /// fractionCompleted は 0 のまま → 呼び出し側はバー非表示 (スピナー fallback) にする。
+    private static func dataWithProgress(session: URLSession, request: URLRequest, onProgress: @escaping @Sendable (Double) -> Void) async throws -> (Data, URLResponse) {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<(Data, URLResponse), Error>) in
+            var obs: NSKeyValueObservation?
+            let task = session.dataTask(with: request) { data, response, error in
+                obs?.invalidate(); obs = nil
+                if let error {
+                    cont.resume(throwing: error)
+                } else if let data, let response {
+                    cont.resume(returning: (data, response))
+                } else {
+                    cont.resume(throwing: EhError.parseFailed)
+                }
+            }
+            obs = task.progress.observe(\.fractionCompleted) { prog, _ in
+                onProgress(prog.fractionCompleted)
+            }
+            task.resume()
+        }
     }
 
     /// サムネ高速取得（並列15接続、短タイムアウト）

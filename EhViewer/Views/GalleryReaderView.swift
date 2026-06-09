@@ -113,8 +113,6 @@ struct GalleryReaderView: View {
                 }
             }
 
-
-
         }
         .offset(x: dragOffset)
         .opacity(dragOffset > 0 ? max(0, 1.0 - dragOffset / 400.0) : 1.0)

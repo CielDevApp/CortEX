@@ -10,6 +10,9 @@ final class PageImageHolder: ObservableObject {
     @Published var isPlaceholder = false
     /// 翻訳処理中フラグ
     @Published var isTranslating = false
+    /// 大容量 (標準画質/WebP) DL 進捗 (0...1)。-1 = 進捗なし/不明 (バー非表示)。田中要望 2026-06-09。
+    /// ページ単位で持つことで、表示中ページと currentIndex のズレに影響されない。
+    @Published var loadProgress: Double = -1
     /// アニメGIF/WebP用: ディスク上のファイルパス（rawDataはメモリに持たない）
     /// nilなら静止画として扱う
     @Published var animatedFileURL: URL?
@@ -33,6 +36,8 @@ final class PageImageHolder: ObservableObject {
         isFailed = false
         failReason = nil
         isPlaceholder = placeholder
+        // フル画像が来たら進捗バーを消す (placeholder=サムネ時は DL 継続中なので維持)。
+        if !placeholder { loadProgress = -1 }
 
         if !placeholder {
             originalImage = img
