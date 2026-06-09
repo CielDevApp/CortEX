@@ -531,8 +531,13 @@ struct NhThumbCell: View {
     @State private var failed = false
 
     /// prefetch と共有するキャッシュキー（安定した URL 形式）
+    /// mediaId は API 由来のため異常文字混入で force unwrap クラッシュしないよう
+    /// percent-encoding + 安全フォールバック (View body 経由で呼ばれる)
     static func thumbCacheURL(mediaId: String, page: Int) -> URL {
-        URL(string: "nhthumb://\(mediaId)/\(page)")!
+        if let url = URL(string: "nhthumb://\(mediaId)/\(page)") { return url }
+        let encoded = mediaId.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed) ?? "invalid"
+        return URL(string: "nhthumb://\(encoded)/\(page)")
+            ?? URL(string: "nhthumb://invalid/\(page)")!
     }
 
     /// task(id:) 用の安定キー
@@ -661,7 +666,6 @@ struct NhTagSearchResultView: View {
     @State private var isLoading = false
     @State private var hasMore = true
     @State private var currentPage = 1
-    @Environment(\.navPathBox) private var navPathBox
     @State private var previewGallery: NhentaiClient.NhGallery?
     @State private var previewReaderRequest: NhentaiPreviewReaderRequest?
 
@@ -669,19 +673,26 @@ struct NhTagSearchResultView: View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 ForEach(galleries) { nh in
-                    NhentaiCardView(gallery: nh)
-                        .padding(.horizontal)
-                        .padding(.vertical, 4)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            navPathBox?.path.append(nh)
-                        }
-                        .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 15) {
-                            #if canImport(UIKit)
-                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                            #endif
-                            previewGallery = nh
-                        }
+                    // navPathBox は navigationDestination 先まで伝播せず nil になり
+                    // タップ無反応化する (E-H TagSearchResultView で実測済の同型問題)。
+                    // NavigationLink(value:) で enclosing NavigationStack の path へ直接積む。
+                    // NhGallery の navigationDestination は各タブ root (GalleryListView /
+                    // FavoritesView / HistoryView / DownloadsView) に登録済み。
+                    NavigationLink(value: nh) {
+                        NhentaiCardView(gallery: nh)
+                            .padding(.horizontal)
+                            .padding(.vertical, 4)
+                    }
+                    .buttonStyle(.plain)
+                    .highPriorityGesture(
+                        LongPressGesture(minimumDuration: 0.4, maximumDistance: 15)
+                            .onEnded { _ in
+                                #if canImport(UIKit)
+                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                #endif
+                                previewGallery = nh
+                            }
+                    )
                     Divider().padding(.leading)
                 }
 
@@ -751,7 +762,9 @@ struct NhTagSearchResultView: View {
         currentPage += 1
         do {
             let result = try await NhentaiClient.search(query: search.query, page: currentPage)
-            galleries.append(contentsOf: result.result)
+            // 田中報告 2026-04-27 同型: append 時に同 id 重複除外 (LazyVGrid 空白行対策)
+            let existingIDs = Set(galleries.map { $0.id })
+            galleries.append(contentsOf: result.result.filter { !existingIDs.contains($0.id) })
             hasMore = currentPage < result.num_pages
         } catch {
             LogManager.shared.log("nhentai", "tag search next failed: \(error.localizedDescription)")

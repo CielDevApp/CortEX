@@ -21,8 +21,8 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
     func reset() {
         webView?.stopLoading()
         webView = nil
-        isReady = false
-        isInitializing = false
+        // 初期化途中なら continuation / 待機側を解放してから状態クリア
+        finishInitialization(ready: false)
         LogManager.shared.log("nhBridge", "reset")
     }
 
@@ -48,11 +48,22 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
 
     /// WebViewを初期化してCloudflareチャレンジを通過させる
     func initialize() async {
-        guard !isReady, !isInitializing else { return }
+        guard !isReady else { return }
+        // 並行初期化 race 対策: 2 本目以降は未初期化のまま即 return せず、
+        // 進行中の初期化完了 (成功/失敗問わず) を待ってから戻る
+        if isInitializing {
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                initWaiters.append(cont)
+            }
+            return
+        }
         isInitializing = true
 
         ensureWebView()
-        guard let wv = webView else { return }
+        guard let wv = webView else {
+            finishInitialization(ready: false)
+            return
+        }
 
         // Cookie: .default()ストアに既存Cookieがあればそのまま使う（サーバー設定の属性を保持）
         // 存在しないCookieだけKeychainから補完注入
@@ -96,15 +107,44 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
 
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             let url = URL(string: "https://nhentai.net/")!
-            wv.load(URLRequest(url: url))
             self._initContinuation = cont
+            wv.load(URLRequest(url: url))
+            // Cloudflare チャレンジ滞留 / didFinish 不着で continuation が永久サスペンド
+            // しないよう 30 秒タイムアウト。タイムアウト時は isReady=false のまま resume し、
+            // fetch 側がエラーを返せるようにする (次回 fetch で再初期化を試行)
+            self.initTimeoutTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                guard let self, !Task.isCancelled else { return }
+                LogManager.shared.log("nhBridge", "initialize timeout (30s), not ready")
+                self.finishInitialization(ready: false)
+            }
         }
     }
 
     private var _initContinuation: CheckedContinuation<Void, Never>?
+    /// 並行 initialize() の待機側 continuation
+    private var initWaiters: [CheckedContinuation<Void, Never>] = []
+    /// 初期化タイムアウト監視タスク
+    private var initTimeoutTask: Task<Void, Never>?
+
+    /// 初期化完了処理（成功/失敗/タイムアウト共通）。
+    /// continuation を nil 化してから resume することで二重 resume を厳密に防止。
+    private func finishInitialization(ready: Bool) {
+        initTimeoutTask?.cancel()
+        initTimeoutTask = nil
+        isReady = ready
+        isInitializing = false
+        if let cont = _initContinuation {
+            _initContinuation = nil
+            cont.resume()
+        }
+        let waiters = initWaiters
+        initWaiters = []
+        for w in waiters { w.resume() }
+    }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        if let cont = _initContinuation {
+        if _initContinuation != nil {
             webView.evaluateJavaScript("document.title") { [weak self] result, _ in
                 guard let self else { return }
                 let title = (result as? String) ?? ""
@@ -113,6 +153,7 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
                     || title.lowercased().contains("checking")
 
                 if isChallenge {
+                    // チャレンジ通過後の次の didFinish かタイムアウトを待つ
                     LogManager.shared.log("nhBridge", "Cloudflare challenge detected, waiting...")
                 } else {
                     LogManager.shared.log("nhBridge", "ready! title: \(title.prefix(50))")
@@ -122,10 +163,7 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
                         let hasAccess = cookies.contains("access_token")
                         LogManager.shared.log("nhBridge", "document.cookie: hasAccessToken=\(hasAccess) length=\(cookies.count) cookies=\(cookies.prefix(200))")
                     }
-                    self.isReady = true
-                    self.isInitializing = false
-                    self._initContinuation = nil
-                    cont.resume()
+                    self.finishInitialization(ready: true)
                 }
             }
             return
@@ -134,22 +172,18 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         LogManager.shared.log("nhBridge", "navigation failed: \(error.localizedDescription)")
-        if let cont = _initContinuation {
-            isReady = true
-            isInitializing = false
-            _initContinuation = nil
-            cont.resume()
-        }
+        // 初期化中のみ処理 (初期化外の navigation 失敗で ready 状態を壊さない)
+        guard isInitializing else { return }
+        // 失敗を ready 扱いにしない (機内モード起動で回復不能になっていた)。
+        // isInitializing も戻し、次回 fetch/initialize で再試行できる状態にする
+        finishInitialization(ready: false)
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         LogManager.shared.log("nhBridge", "provisional navigation failed: \(error.localizedDescription)")
-        if let cont = _initContinuation {
-            isReady = true
-            isInitializing = false
-            _initContinuation = nil
-            cont.resume()
-        }
+        // 同上: 失敗は ready 扱いにせず再試行可能な状態へ戻す
+        guard isInitializing else { return }
+        finishInitialization(ready: false)
     }
 
     // MARK: - API
@@ -157,7 +191,8 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
     /// GETリクエスト（JSON API用、429リトライ付き）
     func fetch(url: String, cookieOnly: Bool = false) async throws -> Data {
         if !isReady { await initialize() }
-        guard let wv = webView else { throw URLError(.cannotConnectToHost) }
+        // 初期化失敗/タイムアウト時はエラーを返す (永久ハングさせない)
+        guard isReady, let wv = webView else { throw URLError(.cannotConnectToHost) }
 
         // 最大3回リトライ（429時はバックオフ）
         for attempt in 0..<3 {
@@ -220,7 +255,8 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
     /// POSTリクエスト（お気に入りトグル等）
     func post(url: String, csrfToken: String? = nil) async throws -> Data {
         if !isReady { await initialize() }
-        guard let wv = webView else { throw URLError(.cannotConnectToHost) }
+        // 初期化失敗/タイムアウト時はエラーを返す (永久ハングさせない)
+        guard isReady, let wv = webView else { throw URLError(.cannotConnectToHost) }
 
         // WKWebViewのCookieストアからaccess_tokenを直接取得（最新のものを使う）
         let wvStore = wv.configuration.websiteDataStore.httpCookieStore
@@ -449,7 +485,8 @@ final class NhentaiWebBridge: NSObject, WKNavigationDelegate {
     /// HTMLページ取得（ステータスコードも返す）
     func fetchHTML(url: String) async throws -> (html: String, status: Int) {
         if !isReady { await initialize() }
-        guard let wv = webView else { throw URLError(.cannotConnectToHost) }
+        // 初期化失敗/タイムアウト時はエラーを返す (永久ハングさせない)
+        guard isReady, let wv = webView else { throw URLError(.cannotConnectToHost) }
 
         let js = """
         const headers = {};

@@ -59,11 +59,14 @@ class NhentaiFavoritesFetcher: NSObject, WKNavigationDelegate {
     func fetchAllFavoriteIds() async throws -> [Int] {
         LogManager.shared.log("nhFav", "[0] fetchAllFavoriteIds start")
         var allIds: [Int] = []
+        // ページ境界ズレで同 id が複数ページに混入し得るため全ページ横断で dedupe
+        // (重複が永続化されると FavoritesView の Dictionary(uniqueKeysWithValues:) が起動毎クラッシュ)
+        var seenIds = Set<Int>()
         var page = 1
 
         while true {
             let (ids, hasNext) = try await fetchFavoritePage(page: page)
-            allIds.append(contentsOf: ids)
+            allIds.append(contentsOf: ids.filter { seenIds.insert($0).inserted })
             LogManager.shared.log("nhFav", "[DONE] page \(page): \(ids.count) IDs, hasNext=\(hasNext), total=\(allIds.count)")
 
             if !hasNext || ids.isEmpty { break }
