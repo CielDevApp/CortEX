@@ -547,6 +547,14 @@ final class EhClient: Sendable {
             throw EhError.galleryRemoved
         }
 
+        // 非 2xx (404/500 等) の素通し防止: 旧実装はそのまま html を返し、
+        // パーサが silent に空配列を返して「0件」表示になっていた。
+        // 503/429 (ban) と exhentai の 302/403 (SadPanda) は上で個別処理済み。
+        if !(200...299).contains(statusCode) {
+            LogManager.shared.log("EhClient", "fetchHTML http \(statusCode) → throw parseFailed \(urlString.suffix(60))")
+            throw EhError.parseFailed
+        }
+
         return html
     }
 

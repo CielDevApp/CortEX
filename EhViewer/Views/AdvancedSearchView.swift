@@ -209,13 +209,12 @@ struct AdvancedSearchView: View {
                 let history = historyStore.entries(forHostKey: hostKey)
                 if !history.isEmpty {
                     Section {
-                        // 田中報告 2026-05-16: 「履歴タップが反応しない場合が多い」(再発)。
-                        // 実測 (21:04 ビルドA): row appeared 10 vs tap 0 vs 反応 0 → .swipeActions 否定
-                        // 実測 (21:08 ビルドB): 反応 0 → .buttonStyle(.plain) 否定
-                        // 診断ビルド C: .contentShape(Rectangle()) を Button 外側に移動。
-                        // .frame(maxWidth: .infinity) は label 内維持。
-                        // 他 (.swipeActions 撤去 / onAppear ログ / .buttonStyle なし) も維持。
-                        // 変数1つずつ原則: 今回動かすのは .contentShape の位置だけ。
+                        // fix (2026-05-16, v02a-f12): 検索履歴タップ無反応の修正。
+                        // 主因は親 overlay 側の hit 吸収 (GalleryListView 側で撤去済)。
+                        // 行側は以下の構成で安定動作することを実機確認済み:
+                        //   - .contentShape(Rectangle()) は Button の外側に配置
+                        //   - .frame(maxWidth: .infinity) は label 内に維持
+                        //   - .buttonStyle(.plain) / .swipeActions は付けない
                         ForEach(history) { entry in
                             Button {
                                 applyHistory(entry)
@@ -230,22 +229,14 @@ struct AdvancedSearchView: View {
                                         .foregroundStyle(.secondary)
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                // 診断 C: .contentShape(Rectangle()) を label 内から Button 外側に移動
                                 .onAppear {
                                     LogManager.shared.log("AdvSearch", "row appeared: '\(entry.displayLabel)' id=\(entry.id.uuidString.prefix(8))")
                                 }
                             }
+                            // tap 領域の安定化: label 内ではなく Button 外側に置く (v02a-f12 fix)
                             .contentShape(Rectangle())
-                            // 診断 B 継続: .buttonStyle(.plain) 撤去のまま
-                            // .buttonStyle(.plain)
-                            // 診断 A 継続: .swipeActions 撤去のまま
-                            // .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                            //     Button(role: .destructive) {
-                            //         historyStore.remove(entry)
-                            //     } label: {
-                            //         Label("削除", systemImage: "trash")
-                            //     }
-                            // }
+                            // 注意: .buttonStyle(.plain) と .swipeActions(削除) はタップ判定に
+                            // 干渉し得るため付けない (履歴削除は「履歴をすべて消去」で代替)
                         }
                         Button(role: .destructive) {
                             historyStore.clear(hostKey: hostKey)

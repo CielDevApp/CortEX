@@ -6,17 +6,25 @@ import AppKit
 #endif
 
 /// アプリ共通の画像キャッシュ（メモリ + ディスク、reader/thumbs分離）
-final class ImageCache {
+///
+/// 読み書き経路 (image(for:) / loadFromDisk / setThumb 等) は nonisolated:
+/// プロジェクトの Default Actor Isolation = @MainActor 設定により、無注釈のままだと
+/// Task.detached 内から呼んでも main へホップしてディスク I/O が main thread 実行になる
+/// (EhClient / HDREnhancer と同じ対策の横展開)。
+/// 内部可変状態は NSCache (スレッドセーフ) と NSLock 保護の Set のみ → @unchecked Sendable。
+final class ImageCache: @unchecked Sendable {
     static let shared = ImageCache()
 
     private let memoryCache = NSCache<NSURL, PlatformImage>()
-    private var loading: Set<URL> = []
+    // nonisolated(unsafe): loadingLock 保護下でのみアクセス
+    nonisolated(unsafe) private var loading: Set<URL> = []
     /// loading Set への並行 read/write 保護 (FavoritesViewModel.prefetchThumbnails が
     /// detached task から removeLoading 呼ぶと Set の COW で race → swift_isUniquelyReferenced
     /// で SIGSEGV、2026-04-26 観測)。
     private let loadingLock = NSLock()
     /// ディスクキャッシュのファイル名一覧（高速存在チェック用）
-    private var diskIndex: Set<String> = []
+    // nonisolated(unsafe): diskIndexLock 保護下でのみアクセス
+    nonisolated(unsafe) private var diskIndex: Set<String> = []
     private let diskIndexLock = NSLock()
 
     /// サムネ同時ダウンロード数制限（GPU化済みなので並列数を増やせる）
@@ -70,12 +78,12 @@ final class ImageCache {
     let maxDiskBytes: Int = 8_589_934_592 // 8GB
     private let maxAgeDays: Int = 30
 
-    private var baseDir: URL {
+    nonisolated private var baseDir: URL {
         let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
         return docs.appendingPathComponent("EhViewer/cache", isDirectory: true)
     }
 
-    var readerCacheDir: URL {
+    nonisolated var readerCacheDir: URL {
         let dir = baseDir.appendingPathComponent("reader", isDirectory: true)
         if !fileManager.fileExists(atPath: dir.path) {
             try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -83,7 +91,7 @@ final class ImageCache {
         return dir
     }
 
-    var thumbsCacheDir: URL {
+    nonisolated var thumbsCacheDir: URL {
         let dir = baseDir.appendingPathComponent("thumbs", isDirectory: true)
         if !fileManager.fileExists(atPath: dir.path) {
             try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -93,7 +101,7 @@ final class ImageCache {
 
     /// 動画 WebP の生バイト保存先。ImageCache が JPEG 再エンコードして保存するため
     /// アニメ情報が失われる問題への対策。loadFromDisk の前にここを参照する。
-    var animatedWebPCacheDir: URL {
+    nonisolated var animatedWebPCacheDir: URL {
         let dir = baseDir.appendingPathComponent("animated_webp", isDirectory: true)
         if !fileManager.fileExists(atPath: dir.path) {
             try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -148,13 +156,13 @@ final class ImageCache {
     }
 
     // 後方互換: 旧cache/直下のファイルも読める
-    private var legacyCacheDir: URL {
+    nonisolated private var legacyCacheDir: URL {
         baseDir
     }
 
     // MARK: - メモリキャッシュ
 
-    func image(for url: URL) -> PlatformImage? {
+    nonisolated func image(for url: URL) -> PlatformImage? {
         let key = url as NSURL
         if let img = memoryCache.object(forKey: key) { return img }
         let t0 = CFAbsoluteTimeGetCurrent()
@@ -167,42 +175,42 @@ final class ImageCache {
     }
 
     /// メモリキャッシュのみ参照（ディスクI/Oなし、壁紙リフィル等の高頻度呼び出し用）
-    func memoryImage(for url: URL) -> PlatformImage? {
+    nonisolated func memoryImage(for url: URL) -> PlatformImage? {
         memoryCache.object(forKey: url as NSURL)
     }
 
     /// リーダー用画像を保存
-    func set(_ image: PlatformImage, for url: URL) {
+    nonisolated func set(_ image: PlatformImage, for url: URL) {
         memoryCache.setObject(image, forKey: url as NSURL)
         saveToDisk(image: image, url: url, directory: readerCacheDir)
     }
 
     /// サムネイル用画像を保存
-    func setThumb(_ image: PlatformImage, for url: URL) {
+    nonisolated func setThumb(_ image: PlatformImage, for url: URL) {
         memoryCache.setObject(image, forKey: url as NSURL)
         saveToDisk(image: image, url: url, directory: thumbsCacheDir)
     }
 
-    func isLoading(_ url: URL) -> Bool {
+    nonisolated func isLoading(_ url: URL) -> Bool {
         loadingLock.lock(); defer { loadingLock.unlock() }
         return loading.contains(url)
     }
-    func setLoading(_ url: URL) {
+    nonisolated func setLoading(_ url: URL) {
         loadingLock.lock(); defer { loadingLock.unlock() }
         loading.insert(url)
     }
-    func removeLoading(_ url: URL) {
+    nonisolated func removeLoading(_ url: URL) {
         loadingLock.lock(); defer { loadingLock.unlock() }
         loading.remove(url)
     }
 
     /// サムネダウンロードスロットを取得（5並列制限）
-    func acquireThumbSlot() async {
+    nonisolated func acquireThumbSlot() async {
         await thumbDownloadSemaphore.wait()
     }
 
     /// サムネダウンロードスロットを解放
-    func releaseThumbSlot() {
+    nonisolated func releaseThumbSlot() {
         thumbDownloadSemaphore.signal()
     }
 
@@ -271,7 +279,7 @@ final class ImageCache {
         }
     }
 
-    func cleanupOnLaunch() {
+    nonisolated func cleanupOnLaunch() {
         Task.detached(priority: .utility) {
             self.buildDiskIndex()
             await self.evictIfNeeded()
@@ -279,7 +287,7 @@ final class ImageCache {
     }
 
     /// ディスクキャッシュのファイル一覧をメモリにロード（起動時）
-    private func buildDiskIndex() {
+    nonisolated private func buildDiskIndex() {
         var index = Set<String>()
         for dir in [readerCacheDir, thumbsCacheDir, legacyCacheDir] {
             if let files = try? fileManager.contentsOfDirectory(atPath: dir.path) {
@@ -293,7 +301,7 @@ final class ImageCache {
     }
 
     /// 直近のサムネをNSCacheにプリウォーム
-    func prewarmRecentThumbs() {
+    nonisolated func prewarmRecentThumbs() {
         Task.detached(priority: .utility) {
             let galleries = FavoritesCache.shared.load()
             var loaded = 0
@@ -314,14 +322,14 @@ final class ImageCache {
 
     // MARK: - ディスクキャッシュ内部
 
-    private func cacheFileHash(for url: URL) -> String {
+    nonisolated private func cacheFileHash(for url: URL) -> String {
         let hash = url.absoluteString.utf8.reduce(into: UInt64(5381)) { h, c in
             h = h &* 33 &+ UInt64(c)
         }
         return "\(hash).dat"
     }
 
-    private func loadFromDisk(url: URL) -> PlatformImage? {
+    nonisolated private func loadFromDisk(url: URL) -> PlatformImage? {
         let filename = cacheFileHash(for: url)
         // diskIndexで高速存在チェック（FileManager.fileExists不要）
         diskIndexLock.lock()
@@ -343,7 +351,7 @@ final class ImageCache {
     /// ディスク保存用の専用キュー（MainActor・cooperative pool から完全分離）
     private static let diskWriteQueue = DispatchQueue(label: "imageCache-diskWrite", qos: .utility)
 
-    private func saveToDisk(image: PlatformImage, url: URL, directory: URL) {
+    nonisolated private func saveToDisk(image: PlatformImage, url: URL, directory: URL) {
         let filename = cacheFileHash(for: url)
         diskIndexLock.lock()
         diskIndex.insert(filename)
@@ -366,9 +374,10 @@ final class ImageCache {
     }
 
     /// evict throttle 用
-    private static var lastEvictTime: TimeInterval = 0
+    // nonisolated(unsafe): evictThrottleQueue (serial) 上でのみアクセス
+    nonisolated(unsafe) private static var lastEvictTime: TimeInterval = 0
     private static let evictThrottleQueue = DispatchQueue(label: "imageCache-evictThrottle")
-    private static func scheduleEvictIfNeeded(_ cache: ImageCache) {
+    nonisolated private static func scheduleEvictIfNeeded(_ cache: ImageCache) {
         evictThrottleQueue.async {
             let now = CFAbsoluteTimeGetCurrent()
             if now - lastEvictTime < 60 { return }
@@ -379,7 +388,7 @@ final class ImageCache {
         }
     }
 
-    private func evictIfNeeded() async {
+    nonisolated private func evictIfNeeded() async {
         // reader キャッシュのみ evict 対象
         let dir = readerCacheDir
         guard let files = try? fileManager.contentsOfDirectory(

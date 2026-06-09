@@ -11,20 +11,26 @@ extension Image {
     }
 }
 
+/// nonisolated: プロジェクトの Default Actor Isolation = @MainActor 設定により、
+/// 無注釈の extension メンバーは Task.detached 内から呼んでも main へホップしてしまう。
+/// CGImage クロップ / 強制デコードは重い処理なので nonisolated 化して呼び出し元の
+/// スレッドで実行させる (EhClient / HDREnhancer と同じ対策の横展開)。
 extension PlatformImage {
     /// cgImageを取得してクロップ。iOS/macOS共通インターフェース
-    func croppedImage(rect: CGRect) -> PlatformImage? {
+    nonisolated func croppedImage(rect: CGRect) -> PlatformImage? {
         guard let cg = self.cgImage, let cropped = cg.cropping(to: rect) else { return nil }
         return PlatformImage(cgImage: cropped)
     }
 
-    var pixelWidth: Int { cgImage?.width ?? Int(size.width) }
-    var pixelHeight: Int { cgImage?.height ?? Int(size.height) }
+    nonisolated var pixelWidth: Int { cgImage?.width ?? Int(size.width) }
+    nonisolated var pixelHeight: Int { cgImage?.height ?? Int(size.height) }
 
     /// ピクセルを強制デコード（SwiftUI render時の遅延デコードを回避）
     /// maxDim指定で縮小も同時に行う
-    /// Task.detached内で呼ぶこと
-    func preDecoded(maxDim: CGFloat? = nil) -> PlatformImage {
+    /// nonisolated なので background (Task.detached 等) から呼べばそのスレッドで実行される
+    /// (旧コメント「Task.detached内で呼ぶこと」は暗黙 @MainActor 時代の誤解:
+    ///  当時は detached 内から呼んでも main へホップしていた)
+    nonisolated func preDecoded(maxDim: CGFloat? = nil) -> PlatformImage {
         guard let cg = self.cgImage else { return self }
         let origW = cg.width
         let origH = cg.height
@@ -58,23 +64,24 @@ extension PlatformImage {
 import AppKit
 typealias PlatformImage = NSImage
 
+/// nonisolated: UIKit 側 extension と同じ理由 (暗黙 @MainActor 化の回避)。
 extension NSImage {
-    convenience init?(contentsOfFile path: String) {
+    nonisolated convenience init?(contentsOfFile path: String) {
         self.init(contentsOf: URL(fileURLWithPath: path))
     }
 
-    func croppedImage(rect: CGRect) -> NSImage? {
+    nonisolated func croppedImage(rect: CGRect) -> NSImage? {
         guard let cg = cgImage(forProposedRect: nil, context: nil, hints: nil),
               let cropped = cg.cropping(to: rect) else { return nil }
         return NSImage(cgImage: cropped, size: NSSize(width: rect.width, height: rect.height))
     }
 
-    var pixelWidth: Int {
+    nonisolated var pixelWidth: Int {
         guard let cg = cgImage(forProposedRect: nil, context: nil, hints: nil) else { return Int(size.width) }
         return cg.width
     }
 
-    var pixelHeight: Int {
+    nonisolated var pixelHeight: Int {
         guard let cg = cgImage(forProposedRect: nil, context: nil, hints: nil) else { return Int(size.height) }
         return cg.height
     }

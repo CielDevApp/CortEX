@@ -221,11 +221,10 @@ struct GalleryListView: View {
             .shadow(color: .black.opacity(0.32), radius: 26, x: 0, y: 10)
             .padding(.horizontal, 18)
             .padding(.vertical, 50)
-            // 診断 D (2026-05-16): 親 overlay の hit 吸収を撤去。
-            // iOS 18 で内側 Button (履歴行) の tap が ここで吸収されている疑い。
-            // NG なら revert (背景 dismiss と内側 tap が干渉して overlay が閉じてしまう副作用あり)
-            // .contentShape(Rectangle())
-            // .onTapGesture { /* 内側タップは閉じない (ヒット吸収) */ }
+            // fix (2026-05-16): 親 overlay 側の .contentShape + .onTapGesture を撤去。
+            // iOS 18 では外側の tap 吸収が内側 Button (検索履歴行) のタップを奪うため
+            // (v02a-f12 で実機確認済み)。背景タップでの dismiss は ZStack 背面の
+            // Rectangle 側 onTapGesture が担当する。
         }
     }
     #endif
@@ -377,6 +376,15 @@ struct GalleryListView: View {
     private func clearSearch() {
         searchText = ""
         currentVM.searchText = ""
+        // 不可視フィルタの残留対策 (2026-06-10): 高度な検索で設定した
+        // categoryFilter / baseQuery / minRating もリセットしないと、
+        // 「クリア」後も絞り込みが効き続けて新着が出ない。
+        currentVM.categoryFilter = nil
+        currentVM.baseQuery = nil
+        currentVM.minRating = nil
+        // タブ既定値を復元 (iOS manga タブの "tag:tankoubon"、Mac Catalyst の
+        // タブ既定 baseQuery/カテゴリ)。setupVM は nil の時だけ既定値を入れる設計。
+        setupVM(currentVM, tab: selectedTab)
         isSearchActive = false
         Task { await currentVM.refresh() }
     }
@@ -1263,9 +1271,12 @@ struct NhentaiCardView: View {
 
     private func loadCover() {
         // v2: thumbnailPathがあればそれを使う、なければimages.cover
+        // thumbnailPath はネットワーク由来文字列なので percent-encode + URL 生成失敗時は
+        // cover 経路へフォールバック (旧実装の強制 unwrap はクラッシュ要因)
         let url: URL
-        if let thumbPath = gallery.thumbnailPath {
-            url = URL(string: "https://t.nhentai.net/\(thumbPath)")!
+        if let thumbPath = gallery.thumbnailPath,
+           let thumbURL = URL(string: "https://t.nhentai.net/" + (thumbPath.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? thumbPath)) {
+            url = thumbURL
         } else if let cover = gallery.images?.cover {
             url = NhentaiClient.coverURL(mediaId: gallery.media_id, ext: cover.ext, path: cover.path)
         } else {
@@ -1332,9 +1343,12 @@ struct NhentaiCoverView: View {
     }
 
     private func loadCover() {
+        // thumbnailPath はネットワーク由来文字列なので percent-encode + URL 生成失敗時は
+        // cover 経路へフォールバック (旧実装の強制 unwrap はクラッシュ要因)
         let url: URL
-        if let thumbPath = gallery.thumbnailPath {
-            url = URL(string: "https://t.nhentai.net/\(thumbPath)")!
+        if let thumbPath = gallery.thumbnailPath,
+           let thumbURL = URL(string: "https://t.nhentai.net/" + (thumbPath.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? thumbPath)) {
+            url = thumbURL
         } else if let cover = gallery.images?.cover {
             url = NhentaiClient.coverURL(mediaId: gallery.media_id, ext: cover.ext, path: cover.path)
         } else {
