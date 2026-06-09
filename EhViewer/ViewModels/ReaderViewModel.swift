@@ -40,6 +40,30 @@ class ReaderViewModel: ObservableObject {
     var placeholderPages: Set<Int> = []
     var hasLoadedImagePages = false
 
+    // MARK: - 閉鎖フラグ + Task 管理 (2026-06-10)
+
+    /// リーダー閉鎖済みフラグ。close 後も走り続ける unstructured Task や DL 進捗 callback が
+    /// holder(for:) 経由で pageHolders を再 populate し、releaseAllForClose の解放を無効化
+    /// していた (「リーダー閉じてもメモリ解放されない」3度目指摘の構造的真因)。
+    private(set) var isClosed = false
+    /// 生成した unstructured Task のハンドル。close 時に一括 cancel するために保持する。
+    /// 完了した Task は自己除去するので増殖しない。
+    private var activeTasks: [UUID: Task<Void, Never>] = [:]
+
+    /// unstructured Task を activeTasks に登録して生成する。
+    /// releaseAllForClose が一括 cancel できるよう、この VM 配下では生の Task {} を直接書かない。
+    /// 注意: cancel は協調的なので、呼び出し側はループ/await 後に
+    /// `Task.isCancelled || isClosed` を必ずチェックすること (SafetyMode.delay は cancel を握り潰す)。
+    func trackTask(priority: TaskPriority? = nil, _ operation: @escaping @MainActor () async -> Void) {
+        guard !isClosed else { return }
+        let id = UUID()
+        let task = Task(priority: priority) { [weak self] in
+            await operation()
+            self?.activeTasks.removeValue(forKey: id)
+        }
+        activeTasks[id] = task
+    }
+
     var qualityMode: Int {
         UserDefaults.standard.integer(forKey: "onlineQualityMode")
     }
@@ -70,14 +94,26 @@ class ReaderViewModel: ObservableObject {
     func holder(for index: Int) -> PageImageHolder {
         if let h = pageHolders[index] { return h }
         let h = PageImageHolder()
-        pageHolders[index] = h
+        // close 後は dict に登録しない: 残存 Task の進捗 callback (onProgress 等) が
+        // 解放済みの pageHolders に空 holder を再 populate して解放を無効化するのを防ぐ。
+        // 一時 holder を返すので呼び出し側はクラッシュせず、参照が切れれば即 deinit される。
+        if !isClosed {
+            pageHolders[index] = h
+        }
         return h
     }
 
     // MARK: - UI Actions
 
     func onAppear(index: Int) {
+        guard !isClosed else { return }
         currentIndex = index
+        // 横/見開きモードは LazyVStack の onDisappear 経由 eviction が存在せず、
+        // 訪問済み全ページのビットマップが pageHolders/rawImages に蓄積し続けていた。
+        // onAppear 毎に縦モードと同じ >20/>50 閾値で全ホルダーを掃引する (縦モードでも
+        // onDisappear は viewport 離脱時の distance が小さく実質発火しないため両モードで有効)。
+        // 閾値 >20 は先読み窓 (最大 ±15) と見開き合成 (±1) の外側なので表示には影響しない。
+        evictDistantHolders(center: index)
         requestLoad(index)
         if !isScrolling && !EcoMode.shared.isEnabled {
             // 田中要望 2026-05-02: iPad 見開きモードは 1 画面 = 2 ページなので
@@ -114,27 +150,30 @@ class ReaderViewModel: ObservableObject {
         guard index >= imagePageURLs.count || (index < imagePageURLs.count && imagePageURLs[index].absoluteString == "about:blank") else { return }
         guard !urlPageFetchingSet.contains(neededPage) else { return }
         urlPageFetchingSet.insert(neededPage)
-        Task(priority: .userInitiated) {
+        trackTask(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            defer { self.urlPageFetchingSet.remove(neededPage) }
             do {
-                let urls = try await client.fetchImagePageURLs(host: host, gallery: gallery, page: neededPage)
+                let urls = try await self.client.fetchImagePageURLs(host: self.host, gallery: self.gallery, page: neededPage)
+                // close 後は releaseAllForClose で空にした imagePageURLs を再構築しない
+                if Task.isCancelled || self.isClosed { return }
                 if !urls.isEmpty {
                     let offset = neededPage * urlsPerPage
-                    var current = imagePageURLs
+                    var current = self.imagePageURLs
                     while current.count < offset + urls.count {
                         current.append(URL(string: "about:blank")!)
                     }
                     for (i, url) in urls.enumerated() {
                         current[offset + i] = url
                     }
-                    imagePageURLs = current
+                    self.imagePageURLs = current
                     LogManager.shared.log("Perf", "ensureImagePageURLs: dynamic fetch p=\(neededPage) count=\(urls.count) total=\(current.count)")
                     // 取得完了 → 即座にリクエスト
-                    requestLoad(index)
-                    requestLoad(index + 1)
-                    requestLoad(index - 1)
+                    self.requestLoad(index)
+                    self.requestLoad(index + 1)
+                    self.requestLoad(index - 1)
                 }
             } catch {}
-            urlPageFetchingSet.remove(neededPage)
         }
     }
 
@@ -154,14 +193,38 @@ class ReaderViewModel: ObservableObject {
         // URL を nil にすると同じページに戻った時に「静画扱い」「▶︎ ボタン出ない」になる
         // (田中報告 2026-04-25 動画/静画混在作品で動画 page を離れて戻った時の症状)。
         // URL は軽量 String なので保持コスト無視できる、削除した。
+        evictHolder(index: index, distance: distance)
+    }
+
+    /// distance 閾値に応じた段階的解放 (縦 onDisappear / onAppear sweep 共用)。
+    ///   - >50: holder ごと破棄
+    ///   - >20: ビットマップのみ解放 (holder 構造は維持、再訪時に再ロード)
+    /// completedPages も外す: 残すと requestLoad が「完了済み」で早期 return し、
+    /// 解放したページに戻った時に画像が永遠に復活しない (解放と再ロード可否はペアで管理)。
+    private func evictHolder(index: Int, distance: Int) {
         if distance > 50 {
             pageHolders.removeValue(forKey: index)
             rawImages.removeValue(forKey: index)
             processedPages.remove(index)
+            completedPages.remove(index)
         } else if distance > 20 {
-            pageHolders[index]?.image = nil
+            // 旧実装は holder.image = nil のみで originalImage/translatedImage に
+            // 同一ビットマップが残り続け実質解放されていなかった → 一括解放に変更。
+            pageHolders[index]?.releaseBitmaps()
             rawImages.removeValue(forKey: index)
             processedPages.remove(index)
+            completedPages.remove(index)
+        }
+    }
+
+    /// 全ホルダーを distance ベースで掃引 (横/見開きモードの eviction 経路)。
+    /// pageHolders は eviction が効いていれば高々 ~70 エントリなので毎 onAppear で回しても軽い。
+    private func evictDistantHolders(center: Int) {
+        for index in Array(pageHolders.keys) {
+            let distance = abs(index - center)
+            if distance > 20 {
+                evictHolder(index: index, distance: distance)
+            }
         }
     }
 
@@ -186,13 +249,17 @@ class ReaderViewModel: ObservableObject {
         requestLoad(clamped + 1)
 
         // ジャンプ先のスプライトシートを優先 preload（サムネプレースホルダー高速化）
-        Task(priority: .userInitiated) {
+        trackTask(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
             for offset in 0...2 {
+                // close 後にネットワーク fetch を続けない (3周ループ × DL で VM を retain し続けるため)
+                if Task.isCancelled || self.isClosed { return }
                 let idx = clamped + offset
-                guard idx < thumbnails.count else { break }
-                let info = thumbnails[idx]
+                guard idx < self.thumbnails.count else { break }
+                let info = self.thumbnails[idx]
                 if SpriteCache.shared.sprite(for: info.spriteURL) == nil {
-                    if let data = try? await client.fetchImageData(url: info.spriteURL, host: host) {
+                    if let data = try? await self.client.fetchImageData(url: info.spriteURL, host: self.host) {
+                        if Task.isCancelled || self.isClosed { return }
                         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
                             SpriteCache.imageQueue.async {
                                 if let ciImage = CIImage(data: data),
@@ -222,7 +289,10 @@ class ReaderViewModel: ObservableObject {
         placeholderPages.removeAll()
         urlResolvingPages.removeAll()
         for (_, holder) in pageHolders {
-            holder.image = nil
+            // 解放漏れ対策 2026-06-10: image だけでなく originalImage/translatedImage/
+            // animatedWebPData/loadProgress も一括リセット (image=nil だけでは同一
+            // ビットマップが original/translated に残り解放されない)
+            holder.releaseBitmaps()
             holder.isPlaceholder = false
             holder.isFailed = false
             holder.failReason = nil
@@ -233,11 +303,25 @@ class ReaderViewModel: ObservableObject {
     /// resetAllState は qualityModeChanged/filterSettingsChanged からも呼ばれるため holder 構造は維持。
     /// このメソッドは onDisappear 専用で pageHolders/imagePageURLs/thumbnails も全 drop。
     func releaseAllForClose() {
+        // 順序重要: 先に閉鎖フラグ + 全 Task cancel。残存 Task の callback が
+        // holder(for:) 経由で pageHolders を再 populate するのを塞いでから dict を落とす。
+        isClosed = true
+        for (_, task) in activeTasks { task.cancel() }
+        activeTasks.removeAll()
         resetAllState()
         pageHolders.removeAll()
         imagePageURLs.removeAll()
         resolvedImageURLs.removeAll()
         thumbnails.removeAll()
+        // 同一 VM が再表示されるケース (push 先から戻る等) で loadImagePages が
+        // 「読込済み」扱いのまま空配列で固まるのを防ぐ (URL はディスクキャッシュから復元可能)
+        hasLoadedImagePages = false
+    }
+
+    /// リーダー再表示時に閉鎖フラグを解除する (GalleryReaderView の onAppear/.task から呼ぶ)。
+    /// これが無いと onDisappear → 再表示で isClosed=true のまま全ロードが止まる。
+    func reopenForDisplay() {
+        isClosed = false
     }
 
     func reloadAround(range: Int = 3) {
@@ -254,9 +338,12 @@ class ReaderViewModel: ObservableObject {
         // オフライン(0/1)↔オンライン(2+)切替時はimagePageURLsを再取得する必要がある
         // 常にリセットして確実に再ロード
         hasLoadedImagePages = false
-        Task(priority: .userInitiated) {
-            await loadImagePages()
-            await MainActor.run { self.reloadAround() }
+        trackTask(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            await self.loadImagePages()
+            // close を跨いだら reloadAround で再 populate しない
+            if Task.isCancelled || self.isClosed { return }
+            self.reloadAround()
         }
     }
 
@@ -288,9 +375,11 @@ class ReaderViewModel: ObservableObject {
         UserDefaults.standard.set(2, forKey: "onlineQualityMode")
         resetAllState()
         hasLoadedImagePages = false
-        Task(priority: .userInitiated) {
-            await loadImagePages()
-            reloadAround()
+        trackTask(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            await self.loadImagePages()
+            if Task.isCancelled || self.isClosed { return }
+            self.reloadAround()
         }
     }
 
@@ -315,7 +404,13 @@ class ReaderViewModel: ObservableObject {
                 let clampedX = min(x, sprite.pixelWidth - 1)
                 let clampedW = min(w, sprite.pixelWidth - clampedX)
                 let clampedH = min(h, sprite.pixelHeight)
-                return sprite.croppedImage(rect: CGRect(x: clampedX, y: 0, width: clampedW, height: clampedH))
+                if let cropped = sprite.croppedImage(rect: CGRect(x: clampedX, y: 0, width: clampedW, height: clampedH)) {
+                    // 書き戻し必須: これが無いとスライダースクラブ中の body 再評価のたびに
+                    // 同じスプライトを再クロップして CPU/メモリを浪費していた
+                    SpriteCache.shared.setCropped(cropped, key: croppedKey)
+                    return cropped
+                }
+                return nil
             }
         }
         return nil

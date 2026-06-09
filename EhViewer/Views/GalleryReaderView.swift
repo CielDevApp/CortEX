@@ -35,6 +35,9 @@ struct GalleryReaderView: View {
     @State private var showAnimationDialog = false
     /// 一度ランタイム検知 dialog を出したら以降抑止（複数ページの動画で再度発火させない）
     @State private var animationDetectionHandled = false
+    /// monitorAnimationDetection のハンドル。旧実装は `.task { Task { ... } }` の内側 Task に
+    /// 外側 (.task) のキャンセルが伝播せず、閉鎖後も最大 30 秒 polling が viewModel を retain していた。
+    @State private var animationMonitorTask: Task<Void, Never>?
     @ObservedObject private var downloadManager = DownloadManager.shared
     @State private var showAutoSavePrompt = false
     @State private var autoSaveInfo: (saved: Int, total: Int) = (0, 0)
@@ -184,13 +187,20 @@ struct GalleryReaderView: View {
             }
         }
         .task {
+            // 再表示時 (onDisappear → 再 onAppear) に閉鎖フラグを解除。
+            // これが無いと releaseAllForClose 後の再表示で全ロードが止まったままになる。
+            viewModel.reopenForDisplay()
+
             // TipKit パラメータ更新
             RTLSliderTip.isRTLMode = (readingOrder == 1 && effectiveDirection == 1)
             AutoSaveTip.autoSaveEnabled = autoSaveOnRead
 
             await resolveReaderMode()
-            // 純オンラインで heuristic 不発のときの保険: 最初の数ページの実バイト判定で dialog 発火
-            Task { await monitorAnimationDetection() }
+            // 純オンラインで heuristic 不発のときの保険: 最初の数ページの実バイト判定で dialog 発火。
+            // loadImagePages を 30 秒ブロックしないよう別 Task だが、ハンドルを保持して
+            // onDisappear で必ず cancel する (内側 Task には .task のキャンセルが伝播しないため)。
+            animationMonitorTask?.cancel()
+            animationMonitorTask = Task { await monitorAnimationDetection() }
             await viewModel.loadImagePages()
         }
         .animationModeDialog(isPresented: $showAnimationDialog) { mode, dontAskAgain in
@@ -200,6 +210,9 @@ struct GalleryReaderView: View {
             resolvedDirection = (mode == .horizontal) ? 1 : 0
         }
         .onDisappear {
+            // 動画検知 polling を停止 (放置すると最大 30 秒 viewModel を retain し続ける)
+            animationMonitorTask?.cancel()
+            animationMonitorTask = nil
             // reader close 時にこの reader 配下の再生を全停止 + 全 animated source cache 解放。
             // これをしないと SwiftUI が LazyVStack セルを即 unmount しない環境で
             // displayLink + rolling prefetch が reader 外で回り続け CPU 100% になる。
@@ -356,6 +369,8 @@ struct GalleryReaderView: View {
         // 最大 30 秒 (500ms x 60) 監視。最初の 5 ページのいずれかでアニメ検知すれば dialog 発火。
         for _ in 0..<60 {
             try? await Task.sleep(nanoseconds: 500_000_000)
+            // try? が CancellationError を吸収するため明示チェック (閉鎖後の polling 継続防止)
+            if Task.isCancelled { return }
             if animationDetectionHandled { return }
             if showAnimationDialog { return }
             if let m = downloadManager.downloads[gallery.gid], m.readerModeOverride != nil { return }

@@ -9,7 +9,10 @@ extension ReaderViewModel {
     func applyFilterPipeline(index: Int, raw: PlatformImage) {
         let capturedIndex = index
 
-        Task { @MainActor in
+        // close 時に一括 cancel できるよう登録 (生 Task {} だと close 後も holder に書き戻す)
+        trackTask { [weak self] in
+            guard let self else { return }
+            if Task.isCancelled || self.isClosed { return }
             if self.processedPages.contains(capturedIndex) { return }
 
             // ECOモード: フィルタ全スキップ
@@ -104,6 +107,9 @@ extension ReaderViewModel {
                 if result.cgImage == nil { result = original }
 
                 await MainActor.run {
+                    // close 後の書き戻し禁止: detached には cancel が伝播しないため、
+                    // 数秒かかる CoreML/フィルタ完了後に解放済み holder を再 populate しない
+                    guard !self.isClosed else { return }
                     self.holder(for: capturedIndex).setLoaded(result)
                     self.processedPages.insert(capturedIndex)
                 }
