@@ -206,6 +206,9 @@ struct NhentaiReaderView: View {
             rawImages.removeAll()
             pageDataCache.removeAll()
         }
+        // 閲覧ページ蓄積で @State 辞書 (生Data+元画像+フィルタ後の3重) が無制限成長
+        // しないよう、現在ページから離れたエントリを解放
+        .onChange(of: currentIndex) { _, newIndex in evictDistantPages(around: newIndex) }
         .onChange(of: noFilterMode) { _, _ in reapplyFilters() }
         .onChange(of: imageEnhanceFilter) { _, _ in reapplyFilters() }
         .onChange(of: denoiseEnabled) { _, _ in reapplyFilters() }
@@ -643,9 +646,9 @@ struct NhentaiReaderView: View {
         // いるケースもあるので !images[index] でも重複loadingだけは弾く
         guard !loadingPages.contains(index) else { return }
         if images[index] != nil && rawImages[index] != nil { return }
-        loadingPages.insert(index)
-
+        // insert は全 guard 通過後 (guard で return すると remove 漏れ → 永久スピナー)
         guard let pages = gallery.images?.pages, index < pages.count else { return }
+        loadingPages.insert(index)
         let page = pages[index]
         let isLowQuality = onlineQualityMode <= 1
 
@@ -801,6 +804,21 @@ struct NhentaiReaderView: View {
             await MainActor.run {
                 images[capturedIndex] = result
             }
+        }
+    }
+
+    /// 現在ページから離れたキャッシュを解放（@State 辞書の無制限成長対策）。
+    /// 先読み窓 (±5) とフィルタ再適用 (rawImages 参照) を壊さない保守的な距離設定:
+    /// pageDataCache (生Data) > 10、rawImages (元画像) > 20、images (フィルタ後) > 40
+    private func evictDistantPages(around center: Int) {
+        for key in pageDataCache.keys where abs(key - center) > 10 {
+            pageDataCache.removeValue(forKey: key)
+        }
+        for key in rawImages.keys where abs(key - center) > 20 {
+            rawImages.removeValue(forKey: key)
+        }
+        for key in images.keys where abs(key - center) > 40 {
+            images.removeValue(forKey: key)
         }
     }
 

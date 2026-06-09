@@ -806,7 +806,10 @@ struct SettingsView: View {
         LogManager.shared.log("Security", "Full reset initiated by user.")
 
         // 1. Keychain 全削除 (ipb_member_id / ipb_pass_hash / igneous 他 service 全体)
+        // KeychainService.deleteAll() は E-H 側 service のみなので nh 側 service も別途消す
+        // (E-H 単独ログアウト経路からも deleteAll() が呼ばれるため deleteAll 側には混ぜない)
         KeychainService.deleteAll()
+        NhentaiCookieManager.deleteAllCredentials()
 
         // 2. HTTPCookieStorage 全削除 (特に E-H / exhentai / nhentai 系)
         if let cookies = HTTPCookieStorage.shared.cookies {

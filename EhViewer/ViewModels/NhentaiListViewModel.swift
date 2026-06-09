@@ -13,12 +13,15 @@ class NhentaiListViewModel: ObservableObject {
     @Published var searchText = ""
     @Published var isSearchActive = false
     @Published var sortMode: NhSortMode = .recent
+    /// 取得失敗時の UI 通知用 (catch でログのみだと田中に何も見えない)
+    @Published var errorMessage: String?
 
     private var currentPage = 1
 
     func loadGalleries() async {
         guard !isLoading else { return }
         isLoading = true
+        errorMessage = nil
 
         do {
             let query = buildQuery()
@@ -29,6 +32,7 @@ class NhentaiListViewModel: ObservableObject {
             currentPage = 1
         } catch {
             LogManager.shared.log("nhentai", "load failed: \(error.localizedDescription)")
+            errorMessage = error.localizedDescription
         }
 
         isLoading = false
@@ -51,7 +55,10 @@ class NhentaiListViewModel: ObservableObject {
             galleries.append(contentsOf: deduped)
             hasMore = currentPage < result.num_pages
         } catch {
+            // 失敗時にページ番号を戻さないと該当ページ 25 件が恒久欠落するので rollback
+            currentPage -= 1
             LogManager.shared.log("nhentai", "nextPage failed: \(error.localizedDescription)")
+            errorMessage = error.localizedDescription
         }
 
         isLoading = false
@@ -90,8 +97,14 @@ class NhentaiListViewModel: ObservableObject {
     }
 
     func refresh() async {
-        galleries = []
-        await loadGalleries()
+        // E-H 側 GalleryListViewModel.refresh (v02a-f14) と同方式:
+        // .refreshable のタスクはプルダウン戻り中の再描画 (tabBarHidden トグル等) で
+        // キャンセルされ得るため、独立 Task で包んで生存させる。
+        // galleries を先にクリアしない (成功して差し替わるまで旧データ保持 = 空一覧残り対策)。
+        let task = Task { [weak self] in
+            await self?.loadGalleries()
+        }
+        await task.value
     }
 
     func clearSearch() {
