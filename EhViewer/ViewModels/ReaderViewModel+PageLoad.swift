@@ -7,6 +7,8 @@ extension ReaderViewModel {
 
     /// ロードをリクエスト（重複チェック+キューイング）
     func requestLoad(_ index: Int) {
+        // close 後の残存 callback (進捗/URL 解決完了) からの再ロード起動を遮断
+        guard !isClosed else { return }
         guard index >= 0, index < totalPages else { return }
         // currentIndex から遠すぎるページはロードしない（スライダージャンプ時のスパム防止）
         let maxDistance = SafetyMode.shared.isEnabled ? 5 : 10
@@ -37,9 +39,12 @@ extension ReaderViewModel {
         loadingPages.insert(index)
         let isVisible = abs(index - currentIndex) <= 2
         let priority: TaskPriority = isVisible ? .userInitiated : .utility
-        Task(priority: priority) {
-            let success = await loadSingle(index)
+        trackTask(priority: priority) { [weak self] in
+            guard let self else { return }
+            let success = await self.loadSingle(index)
             self.loadingPages.remove(index)
+            // close/cancel 後は completedPages を汚さない (再オープン時の再ロード阻害防止)
+            if Task.isCancelled || self.isClosed { return }
             if success {
                 self.completedPages.insert(index)
             }
@@ -54,24 +59,25 @@ extension ReaderViewModel {
 
     /// 周辺ページの画像 URL を先行解決（resolvedImageURLs に格納）
     func prefetchImageURLs(around center: Int, range: Int) {
+        guard !isClosed else { return }
         for offset in 1...range {
             for idx in [center + offset, center - offset] {
                 guard idx >= 0, idx < imagePageURLs.count else { continue }
                 guard resolvedImageURLs[idx] == nil else { continue }
                 guard !urlResolvingPages.contains(idx) else { continue }
                 urlResolvingPages.insert(idx)
-                Task(priority: .utility) {
+                trackTask(priority: .utility) { [weak self] in
+                    guard let self else { return }
+                    defer { self.urlResolvingPages.remove(idx) }
                     // クラッシュ修正 2026-06-09: guard は Task 外 (同期) なので、Task 実行までに
                     // imagePageURLs が別作品ロード/リセットで縮むと subscript で範囲外 → 再確認。
-                    guard idx < imagePageURLs.count else {
-                        urlResolvingPages.remove(idx)
-                        return
-                    }
+                    guard idx < self.imagePageURLs.count else { return }
                     do {
-                        let url = try await client.fetchImageURL(pageURL: imagePageURLs[idx])
-                        resolvedImageURLs[idx] = url
+                        let url = try await self.client.fetchImageURL(pageURL: self.imagePageURLs[idx])
+                        // close 後は releaseAllForClose が空にした dict を再 populate しない
+                        if Task.isCancelled || self.isClosed { return }
+                        self.resolvedImageURLs[idx] = url
                     } catch {}
-                    urlResolvingPages.remove(idx)
                 }
             }
         }
@@ -81,6 +87,8 @@ extension ReaderViewModel {
     @discardableResult
     func loadSingle(_ index: Int) async -> Bool {
         let t0 = CFAbsoluteTimeGetCurrent()
+        // close 後の起動は即終了 (画像 fetch/decode で VM とビットマップを retain しない)
+        if Task.isCancelled || isClosed { return false }
         guard index < totalPages else {
             LogManager.shared.log("Reader", "loadSingle \(index) exit: index>=totalPages (\(totalPages))")
             return false
@@ -102,6 +110,8 @@ extension ReaderViewModel {
                       let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
                 return PlatformImage(cgImage: cg)
             }.value
+            // decode を跨いで close された場合は holder に注がない
+            if Task.isCancelled || isClosed { return false }
             if let poster {
                 await MainActor.run {
                     let h = holder(for: index)
@@ -139,12 +149,16 @@ extension ReaderViewModel {
                         guard let upscaled = LanczosUpscaler.shared.upscale(thumb, scale: 4.0) else { return thumb }
                         return LanczosUpscaler.shared.enhanceLowQuality(upscaled) ?? upscaled
                     }.value
+                    // upscale を跨いで close された場合は rawImages を再 populate しない
+                    if Task.isCancelled || isClosed { return false }
                     rawImages[index] = processed
                     applyFilterPipeline(index: index, raw: processed)
                     Task.detached(priority: .utility) {
                         if let enhanced = LanczosUpscaler.shared.upscaleWithTextEnhance(thumb, scale: 4.0) {
                             let result = LanczosUpscaler.shared.enhanceLowQuality(enhanced) ?? enhanced
                             await MainActor.run {
+                                // close 後の書き戻し禁止 (detached は cancel 対象外なのでフラグで遮断)
+                                guard !self.isClosed else { return }
                                 self.rawImages[capturedIndex] = result
                                 self.applyFilterPipeline(index: capturedIndex, raw: result)
                             }
@@ -263,6 +277,8 @@ extension ReaderViewModel {
                             : LanczosUpscaler.shared.sharpenOnly(cached)
                         if let enhanced {
                             await MainActor.run {
+                                // close 後の書き戻し禁止 (detached は cancel 対象外なのでフラグで遮断)
+                                guard !self.isClosed else { return }
                                 self.rawImages[capturedIndex] = enhanced
                                 self.applyFilterPipeline(index: capturedIndex, raw: enhanced)
                             }
@@ -275,6 +291,9 @@ extension ReaderViewModel {
             let isVisible = abs(index - currentIndex) <= 2
             if !isVisible {
                 await SafetyMode.shared.delay(nanoseconds: requestDelay)
+                // SafetyMode.delay は cancel を握り潰す (try? Task.sleep) ため明示チェック必須。
+                // 先読み 2 秒待ちの間に close されたら fetch に進まない。
+                if Task.isCancelled || isClosed { return false }
             }
 
             let fetchStart = CFAbsoluteTimeGetCurrent()
@@ -294,6 +313,8 @@ extension ReaderViewModel {
             }
             let imageData = try await client.fetchImageData(url: imageURL, host: host, onProgress: onProgress)
             await MainActor.run { self.holder(for: progressIndex).loadProgress = -1 }
+            // DL (数百 ms〜数秒) を跨いで close された場合は decode/保存に進まない
+            if Task.isCancelled || isClosed { return false }
             let fetchMs = Int((CFAbsoluteTimeGetCurrent() - fetchStart) * 1000)
 
             // 自動保存: 設定ONの場合のみ
@@ -343,6 +364,9 @@ extension ReaderViewModel {
             }
 
             ImageCache.shared.set(image, for: imageURL)
+            // decode を跨いで close された場合は rawImages を再 populate しない
+            // (ImageCache への set は global cache なので close 後でも無害、上で実施済み)
+            if Task.isCancelled || isClosed { return false }
             let display = Self.downsample(image)
             rawImages[index] = display
             applyFilterPipeline(index: index, raw: display)
@@ -357,6 +381,8 @@ extension ReaderViewModel {
                         : LanczosUpscaler.shared.sharpenOnly(image)
                     if let enhanced {
                         await MainActor.run {
+                            // close 後の書き戻し禁止 (detached は cancel 対象外なのでフラグで遮断)
+                            guard !self.isClosed else { return }
                             self.rawImages[capturedIndex] = enhanced
                             self.applyFilterPipeline(index: capturedIndex, raw: enhanced)
                         }
@@ -376,7 +402,10 @@ extension ReaderViewModel {
                     Self.saveResolvedURLs(resolvedImageURLs, gid: gallery.gid)
                     let isVisible = abs(index - currentIndex) <= 2
                     if !isVisible { await SafetyMode.shared.delay(nanoseconds: requestDelay) }
+                    // SafetyMode.delay は cancel を握り潰す (try? Task.sleep) ため明示チェック必須
+                    if Task.isCancelled || isClosed { return false }
                     let imageData = try await client.fetchImageData(url: freshURL, host: host)
+                    if Task.isCancelled || isClosed { return false }
 
                     // 自動保存（リトライ時、設定ONの場合のみ）
                     if UserDefaults.standard.bool(forKey: "autoSaveOnRead") {
@@ -398,6 +427,8 @@ extension ReaderViewModel {
                     }
                     if let retryImage {
                         ImageCache.shared.set(retryImage, for: freshURL)
+                        // decode を跨いで close された場合は rawImages/holder を再 populate しない
+                        if Task.isCancelled || isClosed { return false }
                         // 動画判定 (新規 fetch path と同じロジック、retry path でも漏れなく)。
                         // disk file 経由 URL ベース判定 = ローカル / DL 経路と一致。
                         // 田中報告 2026-04-25 緊急: retry 多発時に動画 page が静画扱いになる根因。
@@ -431,6 +462,7 @@ extension ReaderViewModel {
     // MARK: - ページURL取得
 
     func loadImagePages() async {
+        guard !isClosed else { return }
         guard !hasLoadedImagePages else { return }
         hasLoadedImagePages = true
 
@@ -442,6 +474,8 @@ extension ReaderViewModel {
                         thumbnails = infos
                         let spriteURLs = Set(infos.map(\.spriteURL))
                         for url in spriteURLs {
+                            // スプライト多数 DL の途中で close されたら中断 (1枚毎に判定)
+                            if Task.isCancelled || isClosed { return }
                             if ImageCache.shared.image(for: url) == nil {
                                 if let data = try? await client.fetchImageData(url: url, host: host) {
                                     let img: PlatformImage? = await withCheckedContinuation { cont in
@@ -466,10 +500,16 @@ extension ReaderViewModel {
                 requestLoad(start)
                 if start + 1 < thumbnails.count { requestLoad(start + 1) }
                 if initialPage > 0 {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.scrollTarget = self.initialPage }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        // close 後にスクロール要求を残さない
+                        if !self.isClosed { self.scrollTarget = self.initialPage }
+                    }
                 }
                 if thumbnails.count >= 20 {
-                    Task(priority: .utility) { await self.fetchMoreThumbnails() }
+                    // 最大100ページ×2秒のループなので必ず cancel 対象に登録する
+                    trackTask(priority: .utility) { [weak self] in
+                        await self?.fetchMoreThumbnails()
+                    }
                 }
                 return
             }
@@ -514,6 +554,8 @@ extension ReaderViewModel {
                 // 穴を埋めるためにプレースホルダーを置きつつ、targetURLPage 周辺を先に取得
                 let priorityPages = [targetURLPage, targetURLPage + 1, targetURLPage - 1].filter { $0 >= 0 }
                 for p in priorityPages {
+                    // 各周回で close/cancel を確認 (close 後に URL フェッチを続けない)
+                    if Task.isCancelled || isClosed { return }
                     if fetchedPages.contains(p) { continue }
                     let urls = try await client.fetchImagePageURLs(host: host, gallery: gallery, page: p)
                     if urls.isEmpty { continue }
@@ -544,6 +586,10 @@ extension ReaderViewModel {
             // ★ Phase 2: 残り全ページを順番に取得（穴埋め + 新規）
             var page = 0
             while true {
+                // 最大 200 ページ × 2 秒ディレイのループ。close 後に最大 400 秒も
+                // VM を retain してメモリ解放を阻んでいた経路なので、各周回で必ず確認する。
+                // SafetyMode.delay (ループ末尾) は cancel を握り潰すためここでの明示チェックが唯一の出口。
+                if Task.isCancelled || isClosed { return }
                 if fetchedPages.contains(page) { page += 1; continue }
                 let urls = try await client.fetchImagePageURLs(host: host, gallery: gallery, page: page)
                 if urls.isEmpty { break }
@@ -588,14 +634,21 @@ extension ReaderViewModel {
         var seenIndices = Set(thumbnails.map(\.index))
         while page <= 100 {
             await SafetyMode.shared.delay(nanoseconds: requestDelay)
+            // 最大 100 ページ × 2 秒ディレイのループ。SafetyMode.delay は cancel を
+            // 握り潰す (try? Task.sleep) ため、close 後も最大 200 秒回り続け VM を
+            // retain していた。各周回で明示チェックして即離脱する。
+            if Task.isCancelled || isClosed { break }
             do {
                 let infos = try await client.fetchThumbnailInfos(host: host, gallery: gallery, page: page)
+                if Task.isCancelled || isClosed { break }
                 if infos.isEmpty { break }
                 let newInfos = infos.filter { !seenIndices.contains($0.index) }
                 if newInfos.isEmpty { break }
                 seenIndices.formUnion(newInfos.map(\.index))
                 let spriteURLs = Set(newInfos.map(\.spriteURL))
                 for url in spriteURLs {
+                    // スプライト DL の途中で close されたら中断 (1枚毎に判定)
+                    if Task.isCancelled || isClosed { return }
                     if ImageCache.shared.image(for: url) == nil {
                         if let data = try? await client.fetchImageData(url: url, host: host) {
                             let img: PlatformImage? = await withCheckedContinuation { cont in
@@ -610,6 +663,8 @@ extension ReaderViewModel {
                         }
                     }
                 }
+                // close 後は releaseAllForClose が空にした thumbnails を再 populate しない
+                if Task.isCancelled || isClosed { break }
                 await MainActor.run {
                     thumbnails.append(contentsOf: newInfos)
                     totalPages = thumbnails.count
@@ -635,7 +690,13 @@ extension ReaderViewModel {
             let clampedX = min(x, sprite.pixelWidth - 1)
             let clampedW = min(w, sprite.pixelWidth - clampedX)
             let clampedH = min(h, sprite.pixelHeight)
-            return sprite.croppedImage(rect: CGRect(x: clampedX, y: 0, width: clampedW, height: clampedH))
+            if let cropped = sprite.croppedImage(rect: CGRect(x: clampedX, y: 0, width: clampedW, height: clampedH)) {
+                // 書き戻し必須: これが無いと呼ばれるたびに同じスプライトを再クロップしていた
+                // (thumbnailImage(for:) と同型の修正)
+                SpriteCache.shared.setCropped(cropped, key: croppedKey)
+                return cropped
+            }
+            return nil
         }
         return nil
     }

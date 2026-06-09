@@ -29,8 +29,25 @@ struct TranslationManagerView: View {
     /// OCRでテキストなしだったページ（画像更新時に再試行）
     @State private var noTextPages: [Int: Int] = [:] // page → originalImage.pixelWidth at OCR time
     @State private var sessionReady = false
+    /// processAllPages の実行ハンドル。
+    /// 旧実装は `Task { await processAllPages() }` が unstructured でキャンセル不可、
+    /// かつ `while isActive` の isActive が struct コピー値 (生成時に凍結) で永遠に true のため、
+    /// トグル毎にループが 1 本増殖し viewModel を永久 retain していた
+    /// (リーダー閉鎖後メモリ未解放の真因の一つ)。ハンドルを保持して必ず cancel する。
+    @State private var processTask: Task<Void, Never>?
     /// フル解像度判定の最小幅
     private let minFullWidth = 400
+
+    /// 既存ループを cancel してから 1 本だけ起動する (増殖防止の単一所有)
+    private func startProcessing() {
+        processTask?.cancel()
+        processTask = Task { await processAllPages() }
+    }
+
+    private func stopProcessing() {
+        processTask?.cancel()
+        processTask = nil
+    }
 
     var body: some View {
         Color.clear.frame(width: 0, height: 0)
@@ -45,17 +62,19 @@ struct TranslationManagerView: View {
                     triggerSession()
                 } else {
                     sessionReady = true
-                    await processAllPages()
+                    startProcessing()
                 }
             }
             .translationTask(translationConfig) { receivedSession in
                 LogManager.shared.log("Translation", "session acquired")
                 session = receivedSession
                 sessionReady = true
-                await processAllPages()
+                startProcessing()
             }
             .onChange(of: isActive) {
                 if !isActive {
+                    // OFF トグルで即ループ停止 (放置すると定期スキャンが 2 秒毎に回り続ける)
+                    stopProcessing()
                     for i in 0..<viewModel.totalPages {
                         viewModel.holder(for: i).showOriginal()
                     }
@@ -67,11 +86,16 @@ struct TranslationManagerView: View {
                         viewModel.holder(for: i).translationActive = true
                     }
                     if sessionReady {
-                        Task { await processAllPages() }
+                        startProcessing()
                     } else {
                         triggerSession()
                     }
                 }
+            }
+            .onDisappear {
+                // リーダー閉鎖時に必ず cancel。これが無いとループが viewModel を retain し続け、
+                // releaseAllForClose 後も holder 再生成→翻訳焼き込みでメモリが復活する
+                stopProcessing()
             }
     }
 
@@ -171,9 +195,12 @@ struct TranslationManagerView: View {
         }
 
         // 定期スキャン
+        // 注意: isActive は struct 生成時のコピー値で変化しないため、ループの実質的な
+        // 終了条件は Task キャンセル (stopProcessing/startProcessing からの cancel) のみ。
         while isActive && !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
-            guard isActive else { break }
+            // try? が CancellationError を吸収するため、sleep 直後に明示チェックして即離脱
+            if Task.isCancelled { break }
             prefetchOCR()
             if let page = findNextPage() {
                 LogManager.shared.log("Translation", "periodic: found new page \(page)")

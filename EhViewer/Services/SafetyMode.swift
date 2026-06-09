@@ -40,6 +40,14 @@ final class SafetyMode: ObservableObject {
 
     /// BAN 対策ディレイ (safety OFF 時は 0)
     /// 旧 ExtremeMode.delay と同じ API、意味反転のみ
+    ///
+    /// ⚠️ キャンセル吸収に注意 (2026-06-10):
+    /// `try? await Task.sleep` は CancellationError をここで握り潰すため、
+    /// Task.cancel() されても呼び出し元には何も伝わらず処理が続行する。
+    /// throws に変えると全呼び出し元へ波及するためシグネチャは維持し、
+    /// **呼び出し元がループ/await 後に `Task.isCancelled` を必ずチェックする**契約とする
+    /// (リーダー閉鎖後に fetch ループが最大数百秒回り続けた真因)。
+    /// BAN 対策本体 (ディレイ値・適用条件) は変更禁止。
     func delay(nanoseconds: UInt64) async {
         guard isEnabled else { return }
         try? await Task.sleep(nanoseconds: nanoseconds)

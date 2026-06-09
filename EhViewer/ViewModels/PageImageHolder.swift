@@ -64,6 +64,19 @@ final class PageImageHolder: ObservableObject {
         failReason = reason
     }
 
+    /// ビットマップ系プロパティの一括解放。
+    /// image だけ nil にしても originalImage/translatedImage が同一ビットマップを retain し続け、
+    /// distance>20 の部分解放が実質無効だった (リーダー閉鎖後メモリ未解放・3度目指摘の真因の一つ)。
+    /// 翻訳焼き込みは TranslationService の block キャッシュから再生成できるため破棄してよい。
+    /// animatedFileURL は軽量な参照なので維持 (nil にすると再訪時に静画扱いになる既知問題があるため)。
+    func releaseBitmaps() {
+        image = nil
+        originalImage = nil
+        translatedImage = nil
+        animatedWebPData = nil
+        loadProgress = -1
+    }
+
     func setLoading() {
         if image == nil {}
     }
