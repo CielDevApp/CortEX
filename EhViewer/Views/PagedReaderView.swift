@@ -437,6 +437,9 @@ class ReaderPageVC: UIViewController {
     private var leftIndex: Int?
     private var rightIndex: Int?
     private var isSpreadLayout = false
+    // チカチカ修正 2026-06-09: 最後に合成した l/r を保持し、同一なら再合成・再セットをスキップ
+    private var lastComposedLeft: PlatformImage?
+    private var lastComposedRight: PlatformImage?
     /// ダブルタップでズーム
     var onZoomImage: ((PlatformImage) -> Void)?
     /// 表示時コールバック（onPageAppear遅延実行用）
@@ -544,16 +547,27 @@ class ReaderPageVC: UIViewController {
             let rightImg = provider(ri)
             guard let l = leftImg else { return }
             guard let r = rightImg else {
-                imageView?.image = l
+                if imageView?.image !== l { imageView?.image = l }
+                // 左単独表示にしたので合成キャッシュを無効化（同一インスタンスの r が後から
+                // 揃ったときに skip ガードが誤発動して左単独のまま固定されるのを防ぐ）
+                lastComposedRight = nil
+                return
+            }
+            // チカチカ修正 2026-06-09: 0.5秒ポーリングで l/r が変わってないのに毎回合成し直して
+            // imageView.image を貼り替えていた → タップ送り後にチカチカ点滅。同一 l/r なら何もしない。
+            if l === lastComposedLeft && r === lastComposedRight {
                 return
             }
             // 専用キューで合成（メインスレッドブロック防止）
             SpriteCache.imageQueue.async { [weak self] in
                 let composed = Self.composeTwoPages(left: l, right: r)
                 DispatchQueue.main.async {
-                    if self?.imageView?.image !== composed {
-                        self?.imageView?.image = composed
-                    }
+                    guard let self = self else { return }
+                    // 合成に使った l/r が今も現在の holder 画像のときだけ適用（stale 破棄）
+                    guard self.imageProvider?(li) === l, self.imageProvider?(ri) === r else { return }
+                    self.imageView?.image = composed
+                    self.lastComposedLeft = l
+                    self.lastComposedRight = r
                 }
             }
         } else {

@@ -394,11 +394,39 @@ enum NhentaiClient {
     }
 
     /// 単一URLで画像データ取得（CDNセッション使用）
-    private static func fetchRawImage(url: URL) async -> (data: Data, status: Int)? {
+    private static func fetchRawImage(url: URL, onProgress: (@Sendable (Double) -> Void)? = nil) async -> (data: Data, status: Int)? {
         let request = buildRequest(url: url)
-        guard let (data, response) = try? await cdnSession.data(for: request) else { return nil }
+        let result: (Data, URLResponse)?
+        if let onProgress {
+            result = try? await dataWithProgress(session: cdnSession, request: request, onProgress: onProgress)
+        } else {
+            result = try? await cdnSession.data(for: request)
+        }
+        guard let (data, response) = result else { return nil }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         return (data, status)
+    }
+
+    /// URLSessionTask.progress (Content-Length 既知時) を KVO 観測して DL 進捗を報告
+    /// (田中要望 2026-06-09: nh リーダーにも E-H と同じ進捗バーを移植)。
+    private static func dataWithProgress(session: URLSession, request: URLRequest, onProgress: @escaping @Sendable (Double) -> Void) async throws -> (Data, URLResponse) {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<(Data, URLResponse), Error>) in
+            var obs: NSKeyValueObservation?
+            let task = session.dataTask(with: request) { data, response, error in
+                obs?.invalidate(); obs = nil
+                if let error {
+                    cont.resume(throwing: error)
+                } else if let data, let response {
+                    cont.resume(returning: (data, response))
+                } else {
+                    cont.resume(throwing: URLError(.badServerResponse))
+                }
+            }
+            obs = task.progress.observe(\.fractionCompleted) { prog, _ in
+                onProgress(prog.fractionCompleted)
+            }
+            task.resume()
+        }
     }
 
     /// サムネ/カバー用の軽量取得（apiSession使用、並列制限なし）
@@ -471,12 +499,12 @@ enum NhentaiClient {
         return urls
     }
 
-    static func fetchPageImage(galleryId: Int, mediaId: String, page: Int, ext: String, path: String? = nil) async throws -> Data {
+    static func fetchPageImage(galleryId: Int, mediaId: String, page: Int, ext: String, path: String? = nil, onProgress: (@Sendable (Double) -> Void)? = nil) async throws -> Data {
         // 0. v2 path直接アクセス
         if let path {
             for cdn in fallbackImageCDNs {
                 let url = URL(string: "https://\(cdn).nhentai.net/\(path)")!
-                if let result = await fetchRawImage(url: url),
+                if let result = await fetchRawImage(url: url, onProgress: onProgress),
                    result.status == 200 && !result.data.isEmpty && !isHTMLResponse(result.data) {
                     return result.data
                 }
@@ -486,7 +514,7 @@ enum NhentaiClient {
         // 1. CDN動的解決（ギャラリーページHTMLから実際のCDN URLを取得）
         if let cdn = await discoverCDN(galleryId: galleryId) {
             let url = URL(string: "https://\(cdn.image).nhentai.net/galleries/\(mediaId)/\(page).\(ext)")!
-            if let result = await fetchRawImage(url: url),
+            if let result = await fetchRawImage(url: url, onProgress: onProgress),
                result.status == 200 && !result.data.isEmpty && !isHTMLResponse(result.data) {
                 return result.data
             }
@@ -496,7 +524,7 @@ enum NhentaiClient {
         // 2. フォールバック: 全CDNを試行
         for (i, cdn) in fallbackImageCDNs.enumerated() {
             let url = URL(string: "https://\(cdn).nhentai.net/galleries/\(mediaId)/\(page).\(ext)")!
-            if let result = await fetchRawImage(url: url) {
+            if let result = await fetchRawImage(url: url, onProgress: onProgress) {
                 if result.status == 200 && !result.data.isEmpty && !isHTMLResponse(result.data) {
                     // 成功したCDNをキャッシュ
                     cdnCache[galleryId] = (image: cdn, thumb: cdn.replacingOccurrences(of: "i", with: "t"))

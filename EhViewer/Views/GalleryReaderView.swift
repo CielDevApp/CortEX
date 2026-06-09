@@ -75,15 +75,30 @@ struct GalleryReaderView: View {
                 controlsOverlay
             }
 
-            // スライダー操作中のページ番号オーバーレイ
+            // スライダー操作中のページプレビュー + 番号オーバーレイ
+            // 横モードでスクラブ中に行き先が分かるよう、サムネ画像を表示 (田中要望 2026-06-09)。
+            // thumbnailImage はスプライトから同期取得 (ネット不要)。未ロード時は holder の本画像、
+            // それも無ければ番号のみにフォールバック。
             if showPageOverlay {
-                Text("\(Int(sliderValue) + 1)")
-                    .font(.system(size: 72, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 140, height: 140)
-                    .background(.ultraThinMaterial)
-                    .clipShape(Circle())
-                    .transition(.opacity)
+                let previewIdx = min(max(Int(sliderValue), 0), max(viewModel.totalPages - 1, 0))
+                VStack(spacing: 10) {
+                    if let thumb = viewModel.thumbnailImage(for: previewIdx) ?? viewModel.holder(for: previewIdx).image {
+                        Image(uiImage: thumb)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(maxWidth: 220, maxHeight: 300)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.4), lineWidth: 1))
+                    }
+                    Text("\(previewIdx + 1) / \(viewModel.totalPages)")
+                        .font(.system(size: 30, weight: .bold))
+                        .foregroundStyle(.white)
+                        .monospacedDigit()
+                }
+                .padding(16)
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .transition(.opacity)
             }
 
             if showFilterPanel && zoomImage == nil {
@@ -390,6 +405,16 @@ struct GalleryReaderView: View {
             onZoomImage: { img in zoomImage = img }
         )
         .ignoresSafeArea()
+        .overlay(alignment: .bottom) {
+            // 見開き/横モードの DL 進捗バー (田中要望 2026-06-09)。見開き時は左右両ページを監視
+            // (片方読込済みでもう片方DL中だとバーが出ない問題対応、実機ログで確認)。
+            let pairIdx = PagedReaderView.isSpreadMode ? min(horizontalPage + 1, max(0, viewModel.totalPages - 1)) : horizontalPage
+            ReaderHProgressBar(holder: viewModel.holder(for: horizontalPage), pairHolder: viewModel.holder(for: pairIdx))
+                .padding(.bottom, 34)
+                // overlay が画面下部中央のタップを吸収して UIKit 側のページ送りゾーンに
+                // 届かなくなるのを防ぐ (v02a-f12 検索履歴と同型の hit absorber 対策)
+                .allowsHitTesting(false)
+        }
         .onLongPressGesture(minimumDuration: 0.3) {
             withAnimation(.easeInOut(duration: 0.2)) { showControls.toggle() }
         }
@@ -834,6 +859,32 @@ struct GalleryReaderView: View {
             }
             .padding(.bottom, 8)
             .background(.ultraThinMaterial.opacity(0.8))
+        }
+    }
+}
+
+/// 横/見開きモード用の DL 進捗バー (田中要望 2026-06-09)。現在ページの holder を
+/// @ObservedObject で監視し、loadProgress があればクルクル+バー+% を表示。
+private struct ReaderHProgressBar: View {
+    @ObservedObject var holder: PageImageHolder
+    /// 見開き時の右ページ holder (単独時は holder と同一インスタンスを渡す)。
+    @ObservedObject var pairHolder: PageImageHolder
+    private var activeProgress: Double? {
+        if holder.loadProgress > 0 && holder.loadProgress < 1 { return holder.loadProgress }
+        if pairHolder.loadProgress > 0 && pairHolder.loadProgress < 1 { return pairHolder.loadProgress }
+        return nil
+    }
+    var body: some View {
+        if let p = activeProgress {
+            HStack(spacing: 8) {
+                ProgressView().scaleEffect(0.6).tint(.white)
+                ProgressView(value: p)
+                    .progressViewStyle(.linear).frame(width: 130).tint(.white)
+                Text("\(Int(p * 100))%")
+                    .font(.caption2.monospacedDigit()).foregroundStyle(.white)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .background(.black.opacity(0.6)).clipShape(Capsule())
         }
     }
 }

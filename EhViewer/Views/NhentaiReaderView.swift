@@ -3,6 +3,14 @@ import TipKit
 import CoreImage
 
 /// nhentaiギャラリーリーダー
+import Combine
+
+/// nh リーダーの大容量(標準画質)DL 進捗をページ単位で保持 (田中要望 2026-06-09)。
+/// @State 辞書を escaping コールバックから更新できないため ObservableObject に持たせる。
+final class NhPageProgressStore: ObservableObject {
+    @Published var map: [Int: Double] = [:]
+}
+
 struct NhentaiReaderView: View {
     let gallery: NhentaiClient.NhGallery
     var initialPage: Int = 0
@@ -18,6 +26,8 @@ struct NhentaiReaderView: View {
     @State private var rawImages: [Int: PlatformImage] = [:]   // フィルタ再適用用の元画像
     @State private var pageDataCache: [Int: Data] = [:]
     @State private var loadingPages: Set<Int> = []
+    /// 大容量(標準画質)DL 進捗 (ページ単位)。田中要望 2026-06-09。
+    @StateObject private var progressStore = NhPageProgressStore()
     @State private var horizontalPage: Int
     @State private var isFavorited: Bool
     @State private var showClosePrompt = false
@@ -542,6 +552,28 @@ struct NhentaiReaderView: View {
             onZoomImage: { img in zoomImage = img }
         )
         .ignoresSafeArea()
+        .overlay(alignment: .bottom) {
+            // 見開き/横モードの DL 進捗バー (田中要望 2026-06-09)。見開き時は左右両ページを見る
+            // (片方読込済みでもう片方DL中だとバーが出ない問題対応、実機ログで確認)。
+            let pairIdx = PagedReaderView.isSpreadMode ? min(horizontalPage + 1, max(0, totalPages - 1)) : horizontalPage
+            let cur = progressStore.map[horizontalPage].flatMap { ($0 > 0 && $0 < 1) ? $0 : nil }
+            let pair = progressStore.map[pairIdx].flatMap { ($0 > 0 && $0 < 1) ? $0 : nil }
+            if let p = cur ?? pair {
+                HStack(spacing: 8) {
+                    ProgressView().scaleEffect(0.6).tint(.white)
+                    ProgressView(value: p)
+                        .progressViewStyle(.linear).frame(width: 130).tint(.white)
+                    Text("\(Int(p * 100))%")
+                        .font(.caption2.monospacedDigit()).foregroundStyle(.white)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 7)
+                .background(.black.opacity(0.6)).clipShape(Capsule())
+                .padding(.bottom, 34)
+                // overlay が画面下部中央のタップを吸収して UIKit 側のページ送りゾーンに
+                // 届かなくなるのを防ぐ (v02a-f12 検索履歴と同型の hit absorber 対策)
+                .allowsHitTesting(false)
+            }
+        }
         .onChange(of: horizontalPage) { _, newPage in
             currentIndex = newPage
             if !isSliding { sliderValue = Double(newPage) }
@@ -555,21 +587,37 @@ struct NhentaiReaderView: View {
 
     @ViewBuilder
     private func pageCell(index: Int) -> some View {
-        if let image = images[index] {
-            Image(platformImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
+        ZStack(alignment: .bottom) {
+            if let image = images[index] {
+                Image(platformImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+            } else {
+                VStack(spacing: 8) {
+                    ProgressView()
+                        .tint(.white)
+                    Text("\(index + 1) / \(totalPages)")
+                        .font(.caption)
+                        .foregroundStyle(.gray)
+                }
                 .frame(maxWidth: .infinity)
-        } else {
-            VStack(spacing: 8) {
-                ProgressView()
-                    .tint(.white)
-                Text("\(index + 1) / \(totalPages)")
-                    .font(.caption)
-                    .foregroundStyle(.gray)
+                .frame(minHeight: 300)
             }
-            .frame(maxWidth: .infinity)
-            .frame(minHeight: 300)
+            // 大容量(標準画質)DL進捗バー (田中要望 2026-06-09)。サムネ表示中でも進捗を見せる
+            // (E-H リーダーと同じ UX を移植)。Content-Length 不明時は非表示。
+            if let p = progressStore.map[index], p > 0, p < 1 {
+                HStack(spacing: 8) {
+                    ProgressView().scaleEffect(0.6).tint(.white)
+                    ProgressView(value: p)
+                        .progressViewStyle(.linear).frame(width: 130).tint(.white)
+                    Text("\(Int(p * 100))%")
+                        .font(.caption2.monospacedDigit()).foregroundStyle(.white)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 7)
+                .background(.black.opacity(0.6)).clipShape(Capsule())
+                .padding(.bottom, 14)
+            }
         }
     }
 
@@ -648,10 +696,18 @@ struct NhentaiReaderView: View {
             }
 
             // 標準画質取得（ネットワーク）
+            // 田中要望 2026-06-09: DL 進捗をページ単位で報告 → pageCell にバー表示。
+            let store = progressStore
             do {
                 let data = try await NhentaiClient.fetchPageImage(
-                    galleryId: gallery.id, mediaId: gallery.media_id, page: index + 1, ext: page.ext, path: page.path
+                    galleryId: gallery.id, mediaId: gallery.media_id, page: index + 1, ext: page.ext, path: page.path,
+                    onProgress: { frac in
+                        Task<Void, Never> { @MainActor in
+                            if frac < 1.0 { store.map[index] = frac } else { store.map.removeValue(forKey: index) }
+                        }
+                    }
                 )
+                await MainActor.run { store.map.removeValue(forKey: index) }
                 pageDataCache[index] = data
 
                 if let img = await decodeImageData(data) {
@@ -661,6 +717,8 @@ struct NhentaiReaderView: View {
                 }
             } catch {
                 LogManager.shared.log("nhentai", "page \(index + 1) failed: \(error.localizedDescription)")
+                // DL 途中失敗時に中途半端な % が残らないよう進捗を掃除
+                await MainActor.run { store.map.removeValue(forKey: index) }
             }
             loadingPages.remove(index)
         }
