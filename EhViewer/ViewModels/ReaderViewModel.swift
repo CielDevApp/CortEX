@@ -89,7 +89,10 @@ class ReaderViewModel: ObservableObject {
             #endif
             let prefetchRange: Int
             if SafetyMode.shared.isEnabled {
-                prefetchRange = 1
+                // 緩和 2026-06-09 (田中要望): 旧 range=1 は見開き(1画面=2ページ)で次の見開き
+                // (現在+2,+3) に届かず、到達時DL→左右のhath速度差で片側が低画質になっていた。
+                // BAN 予防の本体 (ディレイ + maxConcurrent=5) は維持したまま、先読み窓だけ拡張。
+                prefetchRange = isSpread ? 5 : 2
             } else {
                 prefetchRange = isSpread ? 15 : 5
             }

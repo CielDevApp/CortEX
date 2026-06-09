@@ -278,27 +278,22 @@ extension ReaderViewModel {
             }
 
             let fetchStart = CFAbsoluteTimeGetCurrent()
-            // 田中要望 2026-06-09: 現在表示中ページ (標準画質/WebP 大容量) の DL のみ進捗バー用に
-            // 報告。他ページの prefetch は onProgress=nil で従来経路 (挙動不変)。
-            // 進捗をページ (holder) 単位で持つ → 表示中ページと currentIndex のズレに影響されず、
-            // 各ページが自分のスピナー隣に自分の % を出せる (田中報告 2026-06-09「次ページの完了が
-            // 出てズレる」「クルクルの隣に」対策)。可視窓 (±2) のみ配線 (遠い prefetch は従来経路)。
+            // 進捗バー (田中要望 2026-06-09): 進捗はページ (holder) 単位で持つ → 表示中ページと
+            // currentIndex のズレに影響されず、各ページが自分のスピナー隣に自分の % を出せる
+            // (田中報告 2026-06-09「次ページの完了が出てズレる」「クルクルの隣に」対策)。
             let progressIndex = index
-            let onProgress: (@Sendable (Double) -> Void)?
-            if isVisible {
-                onProgress = { [weak self] frac in
-                    Task<Void, Never> { @MainActor in
-                        guard let self else { return }
-                        self.holder(for: progressIndex).loadProgress = frac < 1.0 ? frac : -1
-                    }
+            // 進捗は holder 単位 (progressIndex) で持つので可視範囲に関わらず常に配線する。
+            // 旧実装は ±2 のみ配線していたが、先読み range 拡張 (見開き 1→5) で ±3〜5 の
+            // ページが onProgress=nil で DL 開始 → そのページに到達するとバーが動かない問題が
+            // 出たため、全 DL を holder.loadProgress に報告する (田中報告 2026-06-09)。
+            let onProgress: (@Sendable (Double) -> Void)? = { [weak self] frac in
+                Task<Void, Never> { @MainActor in
+                    guard let self else { return }
+                    self.holder(for: progressIndex).loadProgress = frac < 1.0 ? frac : -1
                 }
-            } else {
-                onProgress = nil
             }
             let imageData = try await client.fetchImageData(url: imageURL, host: host, onProgress: onProgress)
-            if onProgress != nil {
-                await MainActor.run { self.holder(for: progressIndex).loadProgress = -1 }
-            }
+            await MainActor.run { self.holder(for: progressIndex).loadProgress = -1 }
             let fetchMs = Int((CFAbsoluteTimeGetCurrent() - fetchStart) * 1000)
 
             // 自動保存: 設定ONの場合のみ
