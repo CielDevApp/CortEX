@@ -15,10 +15,20 @@ nonisolated protocol ImageProcessor: Sendable {
 final class CoreMLImageProcessor: @unchecked Sendable, ImageProcessor {
     static let shared = CoreMLImageProcessor()
 
+    /// model / modelLoaded / _modelAvailable / _isAppActive を保護するロック。
+    /// process (nonisolated) と main (scenePhase 更新) の両方から触るため必須。
+    private let stateLock = NSLock()
+
     /// モデルは遅延ロード（アプリ起動時にCoreML推論を走らせない）
-    private var model: MLModel?
-    private var modelLoaded = false
-    private(set) var modelAvailable: Bool = false
+    /// nonisolated(unsafe): stateLock 保護下でのみアクセスする
+    nonisolated(unsafe) private var model: MLModel?
+    nonisolated(unsafe) private var modelLoaded = false
+    nonisolated(unsafe) private var _modelAvailable: Bool = false
+    /// モデルファイルが利用可能か (読み取りは lock 越し)
+    nonisolated var modelAvailable: Bool {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return _modelAvailable
+    }
 
     /// タイル入力サイズ（Real-ESRGAN固定）
     private let tileSize = 128
@@ -41,8 +51,13 @@ final class CoreMLImageProcessor: @unchecked Sendable, ImageProcessor {
     private let processSemaphore = DispatchSemaphore(value: 1)
 
     /// アプリがアクティブかどうか（FaceIDロック中は処理しない）
-    /// デフォルトtrue（onChange初期値問題の回避）、background遷移時にfalseにする
-    var isAppActive: Bool = true
+    /// デフォルトtrue（onChange初期値問題の回避）、background遷移時にfalseにする。
+    /// 書き込みは main (scenePhase onChange)、読み取りは nonisolated process → lock 保護。
+    nonisolated(unsafe) private var _isAppActive: Bool = true
+    nonisolated var isAppActive: Bool {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _isAppActive }
+        set { stateLock.lock(); defer { stateLock.unlock() }; _isAppActive = newValue }
+    }
 
     nonisolated private init() {
         // モデルの存在だけチェック（ロードはしない）
@@ -58,13 +73,19 @@ final class CoreMLImageProcessor: @unchecked Sendable, ImageProcessor {
             }
             if found { break }
         }
-        self.modelAvailable = found
+        self._modelAvailable = found
         LogManager.shared.log("CoreML", "model file found: \(found) (lazy load)")
     }
 
-    /// モデルを遅延ロード（初回process呼び出し時）
-    private func ensureModelLoaded() {
-        guard !modelLoaded else { return }
+    /// モデルを遅延ロード（初回process呼び出し時）。ロード済み/失敗確定後は即返す。
+    /// nonisolated: 旧実装は暗黙 @MainActor で、nonisolated な process から呼ぶと
+    /// main へホップし MLModel.compileModel (数秒) を main thread で実行していた。
+    /// 可変状態 (model/modelLoaded) は stateLock で保護。ロード中はロックを保持して
+    /// 並行呼び出しを直列化する (model 無しでは process できないので待たせて問題ない)。
+    nonisolated private func ensureModelLoaded() -> MLModel? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard !modelLoaded else { return model }
         modelLoaded = true
 
         let names = ["ImageEnhance", "SuperResolution", "Upscaler"]
@@ -87,7 +108,7 @@ final class CoreMLImageProcessor: @unchecked Sendable, ImageProcessor {
                         let desc = self.model!.modelDescription
                         LogManager.shared.log("CoreML", "input keys: \(desc.inputDescriptionsByName.keys.sorted())")
                         LogManager.shared.log("CoreML", "output keys: \(desc.outputDescriptionsByName.keys.sorted())")
-                        return
+                        return model
                     } catch {
                         LogManager.shared.log("CoreML", "failed to load \(name).\(ext): \(error)")
                     }
@@ -95,7 +116,8 @@ final class CoreMLImageProcessor: @unchecked Sendable, ImageProcessor {
             }
         }
         LogManager.shared.log("CoreML", "no model could be loaded")
-        self.modelAvailable = false
+        self._modelAvailable = false  // lock 保持中なので backing に直接書く (computed setter 経由は deadlock)
+        return nil
     }
 
     /// 超解像処理（全エラーをキャッチ、クラッシュしない）
@@ -116,9 +138,8 @@ final class CoreMLImageProcessor: @unchecked Sendable, ImageProcessor {
             return nil
         }
 
-        // モデル遅延ロード
-        ensureModelLoaded()
-        guard let model else {
+        // モデル遅延ロード (nonisolated + lock 保護: main へホップしない)
+        guard let model = ensureModelLoaded() else {
             LogManager.shared.log("CoreML", "process: no model loaded")
             return nil
         }

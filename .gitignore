@@ -37,3 +37,12 @@ scripts/
 *.pth
 weights.h5
 CortEX/
+
+# Secrets / credentials (never commit — 憲法第18条)
+Secrets.plist
+.env
+*.pem
+*.key
+*.p8
+*.p12
+credentials.json

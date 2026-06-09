@@ -456,6 +456,12 @@ struct DownloadsView: View {
             } message: {
                 Text(exportError ?? "")
             }
+            // SSD 残量不足で DL を開始できなかった時の通知 (DownloadManager.storageAlertMessage)
+            .alert("ストレージ不足", isPresented: .constant(manager.storageAlertMessage != nil)) {
+                Button("OK") { manager.storageAlertMessage = nil }
+            } message: {
+                Text(manager.storageAlertMessage ?? "")
+            }
             // Phase E1: 外部参照作品タップ時 (Reader 抽象化未対応で alert)
             .alert("外部参照", isPresented: .constant(externalUnsupportedAlert != nil)) {
                 Button("OK") { externalUnsupportedAlert = nil }
@@ -771,9 +777,9 @@ struct DownloadsView: View {
     }
 
     // MARK: - 外部参照の行 (Phase E1, 2026-04-26)
-    // 外部フォルダ配下の作品。Reader 経路の抽象化 (Step 8) 未実装のため、現状タップで
-    // 「リーダー対応は次フェーズ」alert を出す。サムネ表示は security-scoped resource
-    // 経由で重いので Phase E1 内で別 step で対応 (今は アイコン プレースホルダ)。
+    // 外部フォルダ配下の作品。タップで先頭ページを background pre-cache してから
+    // Reader を開く (startPreCacheAndOpenReader)。サムネは ZIP から materialize した
+    // cover を表示する (Phase E1.B で実装済み。「次フェーズ alert」時代の記述は廃止)。
 
     @ViewBuilder
     private func externalRow(meta: DownloadedGallery) -> some View {

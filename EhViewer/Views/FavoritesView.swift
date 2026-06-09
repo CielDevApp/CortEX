@@ -262,6 +262,10 @@ struct FavoritesView: View {
             .onChange(of: authVM.isLoggedIn) {
                 if !authVM.isLoggedIn {
                     viewModel.galleries = []
+                    // allGalleries も必ずクリアする: 残すと applyFilter (検索/並替) が
+                    // displayGalleries 経由でお気に入りを復活させてしまう (2026-06-10 fix)
+                    viewModel.allGalleries = []
+                    viewModel.totalLoaded = 0
                     viewModel.errorMessage = nil
                 }
             }
@@ -452,7 +456,9 @@ struct FavoritesView: View {
             nhSyncedIds = Set(ids)
 
             // キャッシュ済みギャラリーを辞書化（APIコール削減）
-            let cachedDict = Dictionary(uniqueKeysWithValues: cachedSnapshot.map { ($0.id, $0) })
+            // キャッシュに同 id が重複していても落ちないよう uniquingKeysWith で後勝ちマージ
+            // (uniqueKeysWithValues は重複キーで即クラッシュ)
+            let cachedDict = Dictionary(cachedSnapshot.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             LogManager.shared.log("nhFav", "cache has \(cachedDict.count) items, need to fetch \(ids.filter { cachedDict[$0] == nil }.count) new")
 
             var galleries: [NhentaiClient.NhGallery] = []

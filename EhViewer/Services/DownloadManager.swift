@@ -104,6 +104,9 @@ class DownloadManager: ObservableObject {
     /// staging → NAS 転送中の進捗 (nil = 転送なし)。SMB 大量書込中は UI が固まりがちなので
     /// ダイアログ + プログレスバー表示用に MainActor で公開 (2026-04-27 田中)。
     @Published var currentTransfer: TransferProgress?
+    /// SSD 残量不足等で DL を開始できなかった時のユーザー向けメッセージ (nil = なし)。
+    /// DownloadsView の alert で表示・クリアする (田中要望: ENOSPC 前に警告必須)。
+    @Published var storageAlertMessage: String?
 
     struct TransferProgress: Equatable {
         let gid: Int
@@ -553,6 +556,21 @@ class DownloadManager: ObservableObject {
         return estimatedBytes < limit
     }
 
+    /// DL 開始前の SSD 残量ガード (2026-06-10 配線)。
+    /// hasSufficientSSDSpaceForDownload は定義のみで未配線だった (田中要望:
+    /// 大容量 DL 時の ENOSPC 警告必須への対応漏れ)。startDownload /
+    /// startNhentaiDownload の冒頭から呼ぶ。
+    /// 平均ページサイズは DL 前には不明なので 5MB/page の保守的推定で見積もる。
+    /// 不足時は storageAlertMessage (DownloadsView の alert) + ログで通知し false を返す。
+    private func ensureSSDSpaceOrAlert(pageCount: Int, gid: Int) -> Bool {
+        let estimated = UInt64(max(pageCount, 1)) * 5_000_000
+        guard !hasSufficientSSDSpaceForDownload(estimatedBytes: estimated) else { return true }
+        let freeMB = ssdFreeBytes() / 1_048_576
+        LogManager.shared.log("Download", "BLOCKED: insufficient SSD space gid=\(gid) estimated=\(estimated / 1_048_576)MB free=\(freeMB)MB")
+        storageAlertMessage = "ストレージ残量が不足しています（空き \(freeMB)MB / 推定 \(estimated / 1_048_576)MB 必要）。空き容量を確保してから再実行してください。"
+        return false
+    }
+
     /// SSD 残量取得 (CUI debug 用)
     func ssdFreeBytes() -> UInt64 {
         let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -938,6 +956,9 @@ class DownloadManager: ObservableObject {
             LogManager.shared.log("Download", "already downloading gid=\(gallery.gid)")
             return
         }
+        // SSD 残量チェック (田中要望: ENOSPC 前に警告必須)。平均ページサイズは DL 前には
+        // 不明なので 5MB/page の保守的推定。不足なら DL を開始せずユーザーに通知する。
+        guard ensureSSDSpaceOrAlert(pageCount: gallery.pageCount, gid: gallery.gid) else { return }
         // 明示 DL 開始なので、以前の「このまま閉じる」ブロックを解除
         recentlyDeletedGids.remove(gallery.gid)
 
@@ -996,6 +1017,8 @@ class DownloadManager: ObservableObject {
             LogManager.shared.log("Download", "already complete nhentai gid=\(gallery.id)")
             return
         }
+        // SSD 残量チェック (E-H 側 startDownload と同じ。不足なら DL を開始しない)
+        guard ensureSSDSpaceOrAlert(pageCount: gallery.num_pages, gid: gid) else { return }
 
         LogManager.shared.log("Download", "startNhentaiDownload: id=\(gallery.id) pages=\(gallery.num_pages) title=\(gallery.displayTitle)")
 

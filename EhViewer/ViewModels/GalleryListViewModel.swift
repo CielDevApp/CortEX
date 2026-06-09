@@ -57,6 +57,12 @@ class GalleryListViewModel: ObservableObject {
         if galleries.isEmpty {
             isLoading = true
         }
+        // isLoading=true の残留防止 (2026-06-10 fix): キャンセル3経路
+        // (fetch 後の isCancelled return / CancellationError / URLError.cancelled) は
+        // 早期 return するため、末尾の isLoading=false に到達せず true が残り、
+        // loadNextPage の guard !isLoading が以後永久に弾いていた。
+        // 結果の反映ガード (return 自体) は従来通り維持し、解除だけ defer で保証する。
+        defer { isLoading = false }
         errorMessage = nil
 
         let start = CFAbsoluteTimeGetCurrent()
@@ -108,9 +114,7 @@ class GalleryListViewModel: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
-
-        if Task.isCancelled { return }
-        isLoading = false
+        // isLoading の解除は冒頭の defer が全経路 (キャンセル含む) で保証する
     }
 
     // MARK: - 一覧キャッシュ

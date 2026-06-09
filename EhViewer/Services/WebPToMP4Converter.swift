@@ -20,7 +20,13 @@ private func memoryFootprintMB() -> Int {
 
 /// アニメ WebP / GIF / APNG を MP4 (H.264) に変換。
 /// decode はマルチコア並列、append は sequential、メモリピーク抑制のため縮小 decode。
-enum WebPToMP4Converter {
+///
+/// nonisolated: プロジェクトの Default Actor Isolation = @MainActor 設定により、
+/// 無注釈のままだと GIF/APNG/fallback 経路 (convertUsingCGImageSource) の
+/// CG 描画 + VT encode ループが main thread で実行されていた (libwebp 経路は
+/// DispatchQueue.global へ明示的に逃がす対策済みだったが、こちらは未対策)。
+/// enum 全体を nonisolated 化して main から降ろす (GalleryExporter と同じ対策)。
+nonisolated enum WebPToMP4Converter {
     /// 変換済み MP4 の保存先ディレクトリ（Documents/animated_cache/）
     static var cacheDir: URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -40,7 +46,8 @@ enum WebPToMP4Converter {
     }
 
     /// 出力の最大長辺ピクセル数（メモリ優先、画質は妥協）
-    static var maxOutputPixelSize: CGFloat = 540
+    /// nonisolated(unsafe): enum nonisolated 化に伴い明示。現状書き換え箇所なし (実質定数)。
+    nonisolated(unsafe) static var maxOutputPixelSize: CGFloat = 540
 
     /// 同時変換数制限（OOM 回避）: 1ページずつ順次
     private static let concurrencyLimit = AsyncSemaphore(limit: 1)
@@ -352,6 +359,9 @@ enum WebPToMP4Converter {
         let decodeTask = Task.detached(priority: .userInitiated) {
             for i in 1..<frameCount {
                 bufferSem.wait()  // slot 空くまで待つ
+                // append 側のエラー/キャンセル時は cancel() + bufferSem.signal() で
+                // ここを起こしてもらい、dispatch を打ち切る (永久ブロック防止)
+                if Task.isCancelled { break }
                 decodeGroup.enter()
                 let capturedURL = sourceURL
                 decodeQueue.async {
@@ -382,6 +392,18 @@ enum WebPToMP4Converter {
                 if cg != nil { frames[i] = nil }
                 lock.unlock()
                 if cg == nil {
+                    // キャンセル済みだと Task.sleep が即 return して busy-spin 化するため、
+                    // 明示チェックでループを脱出し、デコーダ Task を起こしてから抜ける
+                    if Task.isCancelled {
+                        decodeTask.cancel()
+                        bufferSem.signal()
+                        VTCompressionSessionInvalidate(vtSession)
+                        input.markAsFinished()
+                        writer.cancelWriting()
+                        try? FileManager.default.removeItem(at: outputURL)
+                        LogManager.shared.log("Convert", "CANCELLED at frame \(i)")
+                        throw CancellationError()
+                    }
                     try? await Task.sleep(nanoseconds: 5_000_000)
                 }
             }
@@ -394,6 +416,10 @@ enum WebPToMP4Converter {
             accumulatedMs += max(delayMs, 10)
 
             guard let cgImage = cg, let pb = makeStandalonePixelBuffer(cgImage: cgImage, width: width, height: height) else {
+                // デコーダ Task の後始末: cancel + signal で bufferSem.wait() の
+                // 永久ブロック (協調プールスレッド占有) を防いでから抜ける
+                decodeTask.cancel()
+                bufferSem.signal()
                 VTCompressionSessionInvalidate(vtSession)
                 input.markAsFinished()
                 writer.cancelWriting()
@@ -411,6 +437,10 @@ enum WebPToMP4Converter {
                 infoFlagsOut: nil
             )
             if encStatus != noErr {
+                // デコーダ Task の後始末: cancel + signal で bufferSem.wait() の
+                // 永久ブロック (協調プールスレッド占有) を防いでから抜ける
+                decodeTask.cancel()
+                bufferSem.signal()
                 VTCompressionSessionInvalidate(vtSession)
                 input.markAsFinished()
                 writer.cancelWriting()
@@ -419,6 +449,10 @@ enum WebPToMP4Converter {
                 throw ConverterError.appendFailed("VT encode \(encStatus)")
             }
             if let err = vtContext.error {
+                // デコーダ Task の後始末: cancel + signal で bufferSem.wait() の
+                // 永久ブロック (協調プールスレッド占有) を防いでから抜ける
+                decodeTask.cancel()
+                bufferSem.signal()
                 VTCompressionSessionInvalidate(vtSession)
                 input.markAsFinished()
                 writer.cancelWriting()

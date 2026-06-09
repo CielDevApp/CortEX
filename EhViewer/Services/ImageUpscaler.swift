@@ -7,18 +7,25 @@ import Accelerate
 import UIKit
 #endif
 
-protocol ImageUpscaler {
+nonisolated protocol ImageUpscaler {
     func upscale(_ image: PlatformImage, scale: CGFloat) -> PlatformImage?
 }
 
-final class LanczosUpscaler: ImageUpscaler {
+/// nonisolated メソッド群: プロジェクトの Default Actor Isolation = @MainActor 設定により、
+/// 無注釈のままだと Task.detached 内から呼んでも main へホップして CI フィルタが
+/// main thread 実行になる (EhClient / HDREnhancer と同じ対策の横展開)。
+/// 内部状態は CIContext (スレッドセーフ) のみなので @unchecked Sendable で良い。
+final class LanczosUpscaler: ImageUpscaler, @unchecked Sendable {
     static let shared = LanczosUpscaler()
 
+    /// CIContext はスレッドセーフ (Apple ドキュメント明記)。複数スレッドから共有可。
     private let context = CIContext(options: [.useSoftwareRenderer: false])
+
+    nonisolated init() {}
 
     // MARK: - モード1用: サムネアップスケール
 
-    func upscale(_ image: PlatformImage, scale: CGFloat) -> PlatformImage? {
+    nonisolated func upscale(_ image: PlatformImage, scale: CGFloat) -> PlatformImage? {
         #if canImport(UIKit)
         return autoreleasepool {
             guard let cgImage = image.cgImage else { return nil }
@@ -48,7 +55,7 @@ final class LanczosUpscaler: ImageUpscaler {
 
     // MARK: - モード1用: サムネアップスケール後の画質強化
 
-    func enhanceLowQuality(_ image: PlatformImage) -> PlatformImage? {
+    nonisolated func enhanceLowQuality(_ image: PlatformImage) -> PlatformImage? {
         #if canImport(UIKit)
         return autoreleasepool {
             guard let cgImage = image.cgImage else { return nil }
@@ -88,7 +95,7 @@ final class LanczosUpscaler: ImageUpscaler {
 
     // MARK: - モード1用: テキスト領域強化アップスケール
 
-    func upscaleWithTextEnhance(_ image: PlatformImage, scale: CGFloat) -> PlatformImage? {
+    nonisolated func upscaleWithTextEnhance(_ image: PlatformImage, scale: CGFloat) -> PlatformImage? {
         #if canImport(UIKit)
         return autoreleasepool {
             guard let cgImage = image.cgImage else { return nil }
@@ -256,7 +263,7 @@ final class LanczosUpscaler: ImageUpscaler {
         }
     }
 
-    func enhanceFilter(_ image: PlatformImage) -> PlatformImage? {
+    nonisolated func enhanceFilter(_ image: PlatformImage) -> PlatformImage? {
         #if canImport(UIKit)
         return autoreleasepool {
             guard let cgImage = image.cgImage else { return nil }
@@ -312,7 +319,7 @@ final class LanczosUpscaler: ImageUpscaler {
 
     // MARK: - モード3: フル画像シャープネスのみ
 
-    func sharpenOnly(_ image: PlatformImage) -> PlatformImage? {
+    nonisolated func sharpenOnly(_ image: PlatformImage) -> PlatformImage? {
         #if canImport(UIKit)
         return autoreleasepool {
             guard let cgImage = image.cgImage else { return nil }
@@ -334,7 +341,7 @@ final class LanczosUpscaler: ImageUpscaler {
 
     // MARK: - モード4: 究極画質
 
-    func enhanceUltimate(_ image: PlatformImage) -> PlatformImage? {
+    nonisolated func enhanceUltimate(_ image: PlatformImage) -> PlatformImage? {
         #if canImport(UIKit)
         return autoreleasepool {
             guard let cgImage = image.cgImage else { return nil }
@@ -376,7 +383,7 @@ final class LanczosUpscaler: ImageUpscaler {
 
     // MARK: - ローカルトーンマップ
 
-    private func applyLocalToneMap(_ ciImage: CIImage) -> CIImage {
+    nonisolated private func applyLocalToneMap(_ ciImage: CIImage) -> CIImage {
         if #available(iOS 17, macOS 14, *) {
             if let f = CIFilter(name: "CIToneMapHeadroom") {
                 f.setValue(ciImage, forKey: kCIInputImageKey)
@@ -391,7 +398,7 @@ final class LanczosUpscaler: ImageUpscaler {
     // MARK: - ヒストグラム均等化 (vImage)
 
     #if canImport(UIKit)
-    private func applyHistogramEqualization(_ image: UIImage) -> UIImage? {
+    nonisolated private func applyHistogramEqualization(_ image: UIImage) -> UIImage? {
         guard let cgImage = image.cgImage else { return nil }
         let width = cgImage.width
         let height = cgImage.height
@@ -420,7 +427,7 @@ final class LanczosUpscaler: ImageUpscaler {
     // MARK: - 人物検出+重点補正 (Neural Engine)
 
     /// 人物領域を検出して選択的シャープネス+彩度強化（NE活用）
-    func applyPersonSegmentation(_ image: UIImage) -> UIImage? {
+    nonisolated func applyPersonSegmentation(_ image: UIImage) -> UIImage? {
         guard let cgImage = image.cgImage else { return nil }
 
         let request = VNGeneratePersonSegmentationRequest()
@@ -477,7 +484,7 @@ final class LanczosUpscaler: ImageUpscaler {
 
     // MARK: - テキスト検出
 
-    private func detectTextRegions(in cgImage: CGImage) -> [CGRect] {
+    nonisolated private func detectTextRegions(in cgImage: CGImage) -> [CGRect] {
         var boxes: [CGRect] = []
         let request = VNRecognizeTextRequest { request, _ in
             guard let results = request.results as? [VNRecognizedTextObservation] else { return }
@@ -490,7 +497,7 @@ final class LanczosUpscaler: ImageUpscaler {
         return boxes
     }
 
-    private func createTextMask(boxes: [CGRect], width: Int, height: Int) -> CGImage? {
+    nonisolated private func createTextMask(boxes: [CGRect], width: Int, height: Int) -> CGImage? {
         let colorSpace = CGColorSpaceCreateDeviceGray()
         guard let ctx = CGContext(
             data: nil, width: width, height: height,

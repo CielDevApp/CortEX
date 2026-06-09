@@ -218,7 +218,7 @@ struct EhViewerApp: App {
         Task.detached(priority: .utility) {
             WebPToMP4Converter.enforceCacheCap()
         }
-        print("[CoreML] modelAvailable: \(CoreMLImageProcessor.shared.modelAvailable)")
+        LogManager.shared.log("CoreML", "modelAvailable: \(CoreMLImageProcessor.shared.modelAvailable)")
 
         #if DEBUG
         HTMLParserTests.runAll()
@@ -231,9 +231,9 @@ struct EhViewerApp: App {
         let center = UNUserNotificationCenter.current()
         center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
             if let error {
-                print("[Notification] auth error: \(error)")
+                LogManager.shared.log("Notification", "auth error: \(error)")
             } else {
-                print("[Notification] auth granted: \(granted)")
+                LogManager.shared.log("Notification", "auth granted: \(granted)")
             }
         }
 

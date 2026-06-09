@@ -150,6 +150,10 @@ class FavoritesViewModel: ObservableObject {
             serverGalleries = first.galleries
             var nextURL = first.pageNumber.nextURL
             var hasMorePages = first.pageNumber.hasNext
+            // ページ横断の gid dedupe (差分側 refreshFromServer と同形)。
+            // ページング中にサーバー側で件数が動くと同 gid が複数ページに跨って返り、
+            // LazyVGrid + .id(gid) の重複でrow 抜け / 空白化する対策 (2026-06-10 fix)。
+            var seenGids = Set(serverGalleries.map { $0.gid })
 
             allGalleries = serverGalleries
             totalLoaded = allGalleries.count
@@ -162,7 +166,8 @@ class FavoritesViewModel: ObservableObject {
                 let result = try await client.fetchByURL(urlString: url, host: host)
                 if result.galleries.isEmpty { break }
 
-                serverGalleries.append(contentsOf: result.galleries)
+                let deduped = result.galleries.filter { seenGids.insert($0.gid).inserted }
+                serverGalleries.append(contentsOf: deduped)
                 nextURL = result.pageNumber.nextURL
                 hasMorePages = result.pageNumber.hasNext
 
