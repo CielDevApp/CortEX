@@ -155,12 +155,17 @@ final class AnimatedSourceImageView: UIImageView {
         } else {
             #if !targetEnvironment(macCatalyst)
             let st = ProcessInfo.processInfo.thermalState
-            if st == .serious || st == .critical {
+            // 田中要望 2026-06-09: 重い (preload=fugen-class) 動画は decode 負荷で thermal=serious
+            // に上がりやすく、旧実装はそこで Boomerang を切っていた → 「重い動画ほど boomerang
+            // しない」状態だった (実機ログで確認: preload class=fugen 直後に thermal=serious →
+            // Boomerang OFF)。serious では維持し、critical のみ OFF にする。critical では別途
+            // AnimatedPlaybackCoordinator.stopAll() が全アニメ停止するので安全弁は残る。
+            if st == .critical {
                 effective = false
-                reason = "thermal=\(st == .critical ? "critical" : "serious")"
+                reason = "thermal=critical"
             } else {
                 effective = true
-                reason = "toggle=ON, thermal=OK"
+                reason = "toggle=ON, thermal=\(st == .serious ? "serious(維持)" : "OK")"
             }
             #else
             effective = true

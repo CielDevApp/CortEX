@@ -164,6 +164,10 @@ struct EhViewerApp: App {
         BackgroundDownloadManager.registerBGProcessingHandler()
         #endif
 
+        // メモリ枯渇を OS の memoryWarning より早く段階検知し、可視ページの体感を
+        // 落とさず先回り解放する (warning=soft trim / critical=全力解放)。田中要望 2026-06-09。
+        MemoryPressureMonitor.shared.start()
+
         // 既存ユーザーのdownloadQualityModeを0→2に移行（register前に実行）
         if !UserDefaults.standard.bool(forKey: "dlQualityMigrated2") {
             // 明示的に保存された値がなければ2をセット、0なら2に上書き

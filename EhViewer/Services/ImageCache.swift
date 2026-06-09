@@ -46,6 +46,26 @@ final class ImageCache {
         LogManager.shared.log("App", "cache limit: \(target / 1_048_576)MB (free=\(freeMem / 1_048_576)MB)")
     }
 
+    /// 軽度メモリ圧迫時の soft trim (田中要望 2026-06-09)。
+    /// NSCache の totalCostLimit を一時的に半減 → LRU で「最近使っていない=オフスクリーン」
+    /// 画像だけが排出される。可視ページは直近使用なので残り、体感は落ちない。
+    /// 圧迫が去る頃 (20s 後) に通常上限へ自動復帰。
+    func softTrim() {
+        let reduced = max(50 * 1024 * 1024, memoryCache.totalCostLimit / 2)
+        memoryCache.totalCostLimit = reduced
+        LogManager.shared.log("Mem", "softTrim: cost limit → \(reduced / 1_048_576)MB")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
+            self?.recalculateCacheLimit()
+        }
+    }
+
+    /// 重度メモリ圧迫時: メモリキャッシュ全破棄 + 上限再計算。
+    func clearMemory() {
+        memoryCache.removeAllObjects()
+        recalculateCacheLimit()
+        LogManager.shared.log("Mem", "ImageCache memory cleared (pressure)")
+    }
+
     private let fileManager = FileManager.default
     let maxDiskBytes: Int = 8_589_934_592 // 8GB
     private let maxAgeDays: Int = 30
@@ -394,5 +414,57 @@ final class ImageCache {
             try? fileManager.removeItem(at: info.url)
             totalSize -= info.size
         }
+    }
+}
+
+/// メモリ枯渇を OS の memoryWarning (発火が遅め・全か無か) より早く段階検知し、
+/// 可視ページの体感を落とさない範囲で先回り解放する。DispatchSource のメモリ圧迫
+/// ソースで warning / critical を区別:
+///   - warning: ImageCache を soft trim (NSCache LRU でオフスクリーン静止画のみ排出、
+///              可視ページ・再生中アニメは温存 → 体感維持)。
+///   - critical: Jetsam 寸前。再デコードが入っても kill より遥かにマシなので全力解放
+///              (メモリキャッシュ全破棄 + 全 frameCache 解放 + 多重アニメ停止)。
+/// 田中要望 2026-06-09 (DL/閲覧でメモリ枯渇間近に落とさず解放したい)。
+final class MemoryPressureMonitor {
+    static let shared = MemoryPressureMonitor()
+    private var source: DispatchSourceMemoryPressure?
+    private init() {}
+
+    func start() {
+        guard source == nil else { return }
+        let src = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        src.setEventHandler { [weak self] in
+            guard let event = self?.source?.data else { return }
+            if event.contains(.critical) {
+                MemoryPressureMonitor.handleCritical()
+            } else if event.contains(.warning) {
+                MemoryPressureMonitor.handleWarning()
+            }
+        }
+        src.resume()
+        source = src
+        LogManager.shared.log("Mem", "MemoryPressureMonitor started")
+    }
+
+    /// 軽度: オフスクリーン中心に解放。可視ページの表示/再生は維持。
+    private static func handleWarning() {
+        let freeMB = Int(os_proc_available_memory()) / 1_048_576
+        LogManager.shared.log("Mem", "pressure=warning free=\(freeMB)MB → soft trim")
+        ImageCache.shared.softTrim()
+    }
+
+    /// 重度: Jetsam 寸前。全力解放 (kill 回避を最優先)。
+    private static func handleCritical() {
+        let freeMB = Int(os_proc_available_memory()) / 1_048_576
+        LogManager.shared.log("Mem", "pressure=critical free=\(freeMB)MB → full release")
+        ImageCache.shared.clearMemory()
+        #if canImport(UIKit)
+        BoomerangWebPView.systemDowngraded = true
+        AnimatedImageSourceRegistry.shared.dropAllCaches()
+        Task { @MainActor in
+            AnimatedImageSourceCache.shared.clear()
+            AnimatedPlaybackCoordinator.shared.stopAll()
+        }
+        #endif
     }
 }
