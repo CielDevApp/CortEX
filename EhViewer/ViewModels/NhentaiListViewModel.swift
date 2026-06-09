@@ -62,17 +62,25 @@ class NhentaiListViewModel: ObservableObject {
     /// レート制限対策: 1.5秒間隔で順次取得
     @MainActor
     private func enrichGalleries(from startIndex: Int = 0) async {
-        for i in startIndex..<galleries.count {
-            guard galleries[i].num_pages == 0 else { continue }
+        // クラッシュ修正 2026-06-09 (EXC_BREAKPOINT): await を跨ぐ間に galleries が
+        // 別経路 (refresh/clearSearch の galleries=[]、再検索) で短くなると、固定した
+        // index `i` が範囲外になり galleries[i] で Swift トラップ → 即落ちしていた。
+        // 対策: 毎反復で bounds を再確認し、await 後は index を信用せず id で再特定して更新。
+        var i = startIndex
+        while i < galleries.count {
+            guard galleries[i].num_pages == 0 else { i += 1; continue }
+            let targetID = galleries[i].id
             do {
-                let full = try await NhentaiClient.fetchGallery(id: galleries[i].id)
-                var updated = galleries
-                updated[i] = full
-                galleries = updated
+                let full = try await NhentaiClient.fetchGallery(id: targetID)
+                // await 復帰後: galleries は差し替わっている可能性 → id で現在位置を再特定。
+                if let idx = galleries.firstIndex(where: { $0.id == targetID }) {
+                    galleries[idx] = full
+                }
             } catch {
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
             }
             try? await Task.sleep(nanoseconds: 1_500_000_000)
+            i += 1
         }
     }
 

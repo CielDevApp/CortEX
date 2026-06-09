@@ -61,6 +61,12 @@ extension ReaderViewModel {
                 guard !urlResolvingPages.contains(idx) else { continue }
                 urlResolvingPages.insert(idx)
                 Task(priority: .utility) {
+                    // クラッシュ修正 2026-06-09: guard は Task 外 (同期) なので、Task 実行までに
+                    // imagePageURLs が別作品ロード/リセットで縮むと subscript で範囲外 → 再確認。
+                    guard idx < imagePageURLs.count else {
+                        urlResolvingPages.remove(idx)
+                        return
+                    }
                     do {
                         let url = try await client.fetchImageURL(pageURL: imagePageURLs[idx])
                         resolvedImageURLs[idx] = url
@@ -188,6 +194,11 @@ extension ReaderViewModel {
             if let resolved = resolvedImageURLs[index] {
                 imageURL = resolved
             } else {
+                // クラッシュ修正 2026-06-09 (EXC_BREAKPOINT / Array index out of range):
+                // 上部の `index < imagePageURLs.count` guard 後、await getThumbImage を挟む間に
+                // imagePageURLs が別作品ロード/リセットで再代入され縮むと、ここの subscript で
+                // 範囲外トラップ → 即落ちしていた。await を跨いだので再確認する。
+                guard index < imagePageURLs.count else { return false }
                 imageURL = try await client.fetchImageURL(pageURL: imagePageURLs[index])
                 resolvedImageURLs[index] = imageURL
                 Self.saveResolvedURLs(resolvedImageURLs, gid: gallery.gid)
@@ -343,6 +354,8 @@ extension ReaderViewModel {
                 resolvedImageURLs.removeValue(forKey: index)
                 Self.saveResolvedURLs(resolvedImageURLs, gid: gallery.gid)
                 do {
+                    // クラッシュ修正 2026-06-09: 多数の await を経ているので再確認 (imagePageURLs 範囲外防止)。
+                    guard index < imagePageURLs.count else { return false }
                     let freshURL = try await client.fetchImageURL(pageURL: imagePageURLs[index])
                     resolvedImageURLs[index] = freshURL
                     Self.saveResolvedURLs(resolvedImageURLs, gid: gallery.gid)

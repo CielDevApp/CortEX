@@ -1106,7 +1106,9 @@ class DownloadManager: ObservableObject {
                 state.downloadedSet.insert(index)
                 continue
             }
-            let nhPage = state.nhPages?[index]
+            // クラッシュ修正 2026-06-09: num_pages > images.pages.count の作品で範囲外トラップしていた。
+            // `?[index]` は nil は防ぐが Array 範囲外は防げない。line 1076 と同じく bounds 確認。
+            let nhPage = (index < (state.nhPages?.count ?? 0)) ? state.nhPages?[index] : nil
             let urls = await NhentaiClient.candidateImageURLs(
                 galleryId: state.nhGalleryId,
                 mediaId: state.nhMediaId ?? "",
@@ -1230,7 +1232,8 @@ class DownloadManager: ObservableObject {
                 state.downloadedSet.insert(index)
                 continue
             }
-            let nhPage3 = state.nhPages?[index]
+            // クラッシュ修正 2026-06-09: 1109行と同型の範囲外。bounds 確認してから取得。
+            let nhPage3 = (index < (state.nhPages?.count ?? 0)) ? state.nhPages?[index] : nil
             let success = await downloadNhPage(gid: gid, galleryId: state.nhGalleryId, index: index, mediaId: state.nhMediaId ?? "", pageNum: index + 1, ext: nhPage3?.ext ?? "jpg", filePath: filePath, maxRetries: 3)
             if success {
                 state.downloadedSet.insert(index)
