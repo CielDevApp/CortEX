@@ -8,7 +8,7 @@ final class EcoMode: ObservableObject {
 
     @Published var isEnabled: Bool {
         didSet {
-            UserDefaults.standard.set(isEnabled, forKey: "ecoMode")
+            UserDefaults.standard.set(isEnabled, forKey: UDKey.ecoMode)
             if isEnabled {
                 // セーフティと排他とは逆: ECO ON 時は safety ON 強制 (攻撃的設定と不整合回避)
                 SafetyMode.shared.isEnabled = true
@@ -17,14 +17,14 @@ final class EcoMode: ObservableObject {
     }
 
     @Published var linkToLowPower: Bool {
-        didSet { UserDefaults.standard.set(linkToLowPower, forKey: "ecoLinkLowPower") }
+        didSet { UserDefaults.standard.set(linkToLowPower, forKey: UDKey.ecoLinkLowPower) }
     }
 
     private var lowPowerObserver: NSObjectProtocol?
 
     private init() {
-        self.isEnabled = UserDefaults.standard.bool(forKey: "ecoMode")
-        self.linkToLowPower = UserDefaults.standard.bool(forKey: "ecoLinkLowPower")
+        self.isEnabled = UserDefaults.standard.bool(forKey: UDKey.ecoMode)
+        self.linkToLowPower = UserDefaults.standard.bool(forKey: UDKey.ecoLinkLowPower)
         startLowPowerMonitoring()
     }
 

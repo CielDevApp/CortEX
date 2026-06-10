@@ -169,30 +169,30 @@ struct EhViewerApp: App {
         MemoryPressureMonitor.shared.start()
 
         // 既存ユーザーのdownloadQualityModeを0→2に移行（register前に実行）
-        if !UserDefaults.standard.bool(forKey: "dlQualityMigrated2") {
+        if !UserDefaults.standard.bool(forKey: UDKey.dlQualityMigrated2) {
             // 明示的に保存された値がなければ2をセット、0なら2に上書き
-            if UserDefaults.standard.object(forKey: "downloadQualityMode") == nil
-                || UserDefaults.standard.integer(forKey: "downloadQualityMode") == 0 {
-                UserDefaults.standard.set(2, forKey: "downloadQualityMode")
+            if UserDefaults.standard.object(forKey: UDKey.downloadQualityMode) == nil
+                || UserDefaults.standard.integer(forKey: UDKey.downloadQualityMode) == 0 {
+                UserDefaults.standard.set(2, forKey: UDKey.downloadQualityMode)
             }
-            UserDefaults.standard.set(true, forKey: "dlQualityMigrated2")
+            UserDefaults.standard.set(true, forKey: UDKey.dlQualityMigrated2)
         }
 
         // UserDefaultsのデフォルト値を登録（Bundle ID変更や初回起動時に必要）
         UserDefaults.standard.register(defaults: [
-            "onlineQualityMode": 2,
-            "downloadQualityMode": 2,
-            "noFilterMode": false,
+            UDKey.onlineQualityMode: 2,
+            UDKey.downloadQualityMode: 2,
+            UDKey.noFilterMode: false,
             // アニメ per-frame NE 人物セグメンテーション (本命機能、デフォルト ON)
-            "animatedPersonSegmentation": true,
+            UDKey.animatedPersonSegmentation: true,
             // プリロード再生 (default ON)。SwiftUI @AppStorage の default は読み出し時にしか効かず、
             // ユーザがトグル操作するまで UserDefaults 本体には書き込まれない。
             // UIImageView 側 (UIKit) から `bool(forKey:)` で読むと未登録 → false が返り、
             // rolling timer の `if !preloadOn` 分岐に入って ultraFugen で retainOnly が動作 →
             // preload した frame が即 evict されて再生中 miss が大量発生する根本原因 (2026-04-25)。
-            "preloadPlayback": true,
+            UDKey.preloadPlayback: true,
             // 同じパターンで Boomerang Mode も UIView 側から読まれているので併せて register。
-            "boomerangMode": true,
+            UDKey.boomerangMode: true,
         ])
 
         ImageCache.shared.cleanupOnLaunch()
@@ -238,9 +238,9 @@ struct EhViewerApp: App {
         }
 
         // TipKit初期化（初回のみ表示）
-        if !UserDefaults.standard.bool(forKey: "tipsShownOnce") {
+        if !UserDefaults.standard.bool(forKey: UDKey.tipsShownOnce) {
             try? Tips.resetDatastore()
-            UserDefaults.standard.set(true, forKey: "tipsShownOnce")
+            UserDefaults.standard.set(true, forKey: UDKey.tipsShownOnce)
         }
         try? Tips.configure([
             .displayFrequency(.immediate)

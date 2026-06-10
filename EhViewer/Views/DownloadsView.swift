@@ -44,9 +44,9 @@ struct DownloadsView: View {
 
     /// 田中要望 2026-04-27: 「保存済み」section のソート方式 (全プラットフォーム共通)。
     /// 外部参照側 (Mac Catalyst のみ) は ExternalFolderManager 側で独立管理、enum は共有。
-    @AppStorage("downloadsCompletedSortOrderRaw") private var completedSortOrderRaw: String = ExternalFolderManager.ExternalSortOrder.dateAdded.rawValue
+    @AppStorage(UDKey.downloadsCompletedSortOrderRaw) private var completedSortOrderRaw: String = ExternalFolderManager.ExternalSortOrder.dateAdded.rawValue
     /// 田中要望 2026-05-01: ライブラリのグリッド/リスト切替 (ギャラリーリストと同じ仕様)。
-    @AppStorage("libraryListLayout") private var libraryListLayout: String = "list"
+    @AppStorage(UDKey.libraryListLayout) private var libraryListLayout: String = "list"
     private var isLibraryGrid: Bool { libraryListLayout == "grid" }
     private var completedSortOrder: ExternalFolderManager.ExternalSortOrder {
         get { ExternalFolderManager.ExternalSortOrder(rawValue: completedSortOrderRaw) ?? .dateAdded }

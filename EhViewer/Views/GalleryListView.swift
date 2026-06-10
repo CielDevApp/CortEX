@@ -42,7 +42,7 @@ struct GalleryListView: View {
     @State private var searchText = ""
     @State private var tabBarHidden = false
     @StateObject private var navPathBox = NavigationPathBox()
-    @AppStorage("galleryListLayout") private var galleryListLayout: String = "grid"
+    @AppStorage(UDKey.galleryListLayout) private var galleryListLayout: String = "grid"
     /// 田中要望 2026-04-30: iOS の `.searchable` (日本語有利 baseQuery 込み) を撤回し、
     /// 検索ボタン → AdvancedSearchView sheet で全カテゴリ + 言語を任意指定する新 UX。
     /// 直近入力を sheet 再表示で復元するため state を保持。
@@ -435,7 +435,7 @@ struct GalleryScrollList: View {
     var onScrollDown: (() -> Void)?
     var onScrollUp: (() -> Void)?
     @Environment(\.horizontalSizeClass) private var hSizeClass
-    @AppStorage("galleryListLayout") private var galleryListLayout: String = "grid"
+    @AppStorage(UDKey.galleryListLayout) private var galleryListLayout: String = "grid"
 
     /// Phase G-A iPad-only パイロット (2026-04-26): iPad のみ Grid、Mac/iPhone は既存 List。
     private var isIPadGrid: Bool {
@@ -923,7 +923,7 @@ struct NhentaiScrollList: View {
     var onScrollDown: (() -> Void)?
     var onScrollUp: (() -> Void)?
     @Environment(\.horizontalSizeClass) private var hSizeClass
-    @AppStorage("galleryListLayout") private var galleryListLayout: String = "grid"
+    @AppStorage(UDKey.galleryListLayout) private var galleryListLayout: String = "grid"
 
     private var isIPadGrid: Bool {
         #if targetEnvironment(macCatalyst)

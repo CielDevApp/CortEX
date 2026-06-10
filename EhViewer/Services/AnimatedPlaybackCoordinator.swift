@@ -29,7 +29,7 @@ final class AnimatedPlaybackCoordinator: ObservableObject {
     /// 1 件再生中に別ページ▶タップで旧再生が自動停止 = シンプルな切替動作。
     /// Mac Catalyst で 3 件同時は libwebp decode + 230MB×3 で負荷過多のため default を 1 に。
     var maxConcurrent: Int {
-        let v = UserDefaults.standard.integer(forKey: "animMaxConcurrentPlay")
+        let v = UserDefaults.standard.integer(forKey: UDKey.animMaxConcurrentPlay)
         return v > 0 ? v : 1
     }
 

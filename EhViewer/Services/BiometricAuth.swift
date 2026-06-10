@@ -13,8 +13,8 @@ class BiometricAuth: ObservableObject {
     private let maxFaceIDAttempts = 1
 
     var isEnabled: Bool {
-        get { UserDefaults.standard.bool(forKey: "biometricLockEnabled") }
-        set { UserDefaults.standard.set(newValue, forKey: "biometricLockEnabled") }
+        get { UserDefaults.standard.bool(forKey: UDKey.biometricLockEnabled) }
+        set { UserDefaults.standard.set(newValue, forKey: UDKey.biometricLockEnabled) }
     }
 
     var isLockActive: Bool {

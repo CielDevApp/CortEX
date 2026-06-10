@@ -70,7 +70,7 @@ struct GachaView: View {
     @StateObject private var displayLink = DisplayLinkDriver()
     @State private var resultDragOffset: CGFloat = 0
     // 田中要望 2026-06-08: 演出スキップ。ON なら tile 演出を飛ばして即結果表示。
-    @AppStorage("gachaSkipEffect") private var gachaSkipEffect = false
+    @AppStorage(UDKey.gachaSkipEffect) private var gachaSkipEffect = false
     // 画面サイズ
     @State private var screenSize: CGSize = .zero
     // 田中報告 2026-05-16: ガチャ結果詳細→タグ→検索結果→作品タップが無反応だった。

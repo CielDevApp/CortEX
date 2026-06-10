@@ -86,7 +86,7 @@ enum NhentaiCookieManager: Sendable {
         save(key: "nh_cookies", value: cookieString)
         // 旧版が UserDefaults に平文バックアップしていた残骸を掃除
         // (session cookie の平文保存はセキュリティ上の問題のため廃止)
-        UserDefaults.standard.removeObject(forKey: "lastNhCookies")
+        UserDefaults.standard.removeObject(forKey: UDKey.lastNhCookies)
         LogManager.shared.log("nhAuth", "cookies saved (\(cookieString.count) chars)")
         NotificationCenter.default.post(name: .nhentaiLoginStateChanged, object: nil)
     }
@@ -106,7 +106,7 @@ enum NhentaiCookieManager: Sendable {
         // v2 API token もログアウト時に削除 (残すと再ログインまで古い認証が生き残る)
         delete(key: "nh_api_token")
         // 旧版の UserDefaults 平文バックアップ残骸も掃除 (restoreFromBackup は呼び出し元ゼロで廃止済)
-        UserDefaults.standard.removeObject(forKey: "lastNhCookies")
+        UserDefaults.standard.removeObject(forKey: UDKey.lastNhCookies)
         LogManager.shared.log("nhAuth", "cookies + api token cleared")
     }
 
@@ -122,7 +122,7 @@ enum NhentaiCookieManager: Sendable {
         ]
         SecItemDelete(query as CFDictionary)
         #endif
-        UserDefaults.standard.removeObject(forKey: "lastNhCookies")
+        UserDefaults.standard.removeObject(forKey: UDKey.lastNhCookies)
         NotificationCenter.default.post(name: .nhentaiLoginStateChanged, object: nil)
         LogManager.shared.log("nhAuth", "all nh credentials deleted")
     }

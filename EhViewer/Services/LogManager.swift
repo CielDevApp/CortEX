@@ -43,7 +43,7 @@ final class LogManager: ObservableObject {
     static var currentLogPath: String { shared.logFileURL.path }
 
     var isEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "debugLogEnabled")
+        UserDefaults.standard.bool(forKey: UDKey.debugLogEnabled)
     }
 
     /// フォーマット済み1行をファイル末尾に append

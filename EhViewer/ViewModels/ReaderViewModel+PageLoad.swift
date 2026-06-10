@@ -261,7 +261,7 @@ extension ReaderViewModel {
             if let cached = diskCached {
                 // 自動保存: キャッシュヒット時もローカルに保存
                 #if canImport(UIKit)
-                if UserDefaults.standard.bool(forKey: "autoSaveOnRead") {
+                if UserDefaults.standard.bool(forKey: UDKey.autoSaveOnRead) {
                     // 2026-06-10: jpegData(0.92) のフル画像再エンコード (数十ms) が main で
                     // 走りスクロールヒッチ源だった → imageQueue でエンコードしてから
                     // main の autoSavePage へ渡す (保存は best-effort、順序保証不要)。
@@ -374,7 +374,7 @@ extension ReaderViewModel {
             let fetchMs = Int((CFAbsoluteTimeGetCurrent() - fetchStart) * 1000)
 
             // 自動保存: 設定ONの場合のみ
-            if UserDefaults.standard.bool(forKey: "autoSaveOnRead") {
+            if UserDefaults.standard.bool(forKey: UDKey.autoSaveOnRead) {
                 DownloadManager.shared.autoSavePage(
                     gid: gallery.gid, token: gallery.token, title: gallery.title,
                     pageCount: totalPages, page: index, imageData: imageData
@@ -477,7 +477,7 @@ extension ReaderViewModel {
                     if Task.isCancelled || isClosed { return false }
 
                     // 自動保存（リトライ時、設定ONの場合のみ）
-                    if UserDefaults.standard.bool(forKey: "autoSaveOnRead") {
+                    if UserDefaults.standard.bool(forKey: UDKey.autoSaveOnRead) {
                         DownloadManager.shared.autoSavePage(
                             gid: gallery.gid, token: gallery.token, title: gallery.title,
                             pageCount: totalPages, page: index, imageData: imageData

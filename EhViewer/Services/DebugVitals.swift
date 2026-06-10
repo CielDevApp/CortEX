@@ -18,7 +18,7 @@ enum DebugVitals {
 /// 画面右上に常駐する小型デバッグHUD（debugLogEnabled 時のみ表示）
 /// メモリMB / アクティブDL数 / DL合計速度 を 1秒毎に更新
 struct DebugVitalsHUD: View {
-    @AppStorage("debugLogEnabled") private var debugLogEnabled = false
+    @AppStorage(UDKey.debugLogEnabled) private var debugLogEnabled = false
     @ObservedObject private var dlManager = DownloadManager.shared
     @State private var memMB: Int = 0
     @State private var peakMemMB: Int = 0

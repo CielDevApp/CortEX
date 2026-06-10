@@ -409,11 +409,11 @@ struct GalleryDetailView: View {
 
     // MARK: - Tags
 
-    @AppStorage("cortexProtocolUnlocked") private var cortexUnlocked = false
+    @AppStorage(UDKey.cortexProtocolUnlocked) private var cortexUnlocked = false
     @State private var cortexSearchURL: URL?
 
     private func cortexAge(for characterName: String) -> Int? {
-        guard let ages = UserDefaults.standard.dictionary(forKey: "cortex_character_ages") as? [String: Int] else { return nil }
+        guard let ages = UserDefaults.standard.dictionary(forKey: UDKey.cortexCharacterAges) as? [String: Int] else { return nil }
         // 完全一致
         if let age = ages[characterName] { return age }
         // 部分一致（CENSUSで登録した名前と詳細タグの名前が微妙に違う場合）

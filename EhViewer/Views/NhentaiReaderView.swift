@@ -35,14 +35,14 @@ struct NhentaiReaderView: View {
     /// ページジャンプ (E-H リーダーと UX 統一、2026-06-10)
     @State private var showPageJump = false
     @State private var jumpPageText = ""
-    @AppStorage("translationMode") private var translationMode = false
-    @AppStorage("noFilterMode") private var noFilterMode = false
-    @AppStorage("imageEnhanceFilter") private var imageEnhanceFilter = false
-    @AppStorage("denoiseEnabled") private var denoiseEnabled = false
-    @AppStorage("hdrEnhancement") private var hdrEnhancement = false
-    @AppStorage("aiImageProcessing") private var aiImageProcessing = false
+    @AppStorage(UDKey.translationMode) private var translationMode = false
+    @AppStorage(UDKey.noFilterMode) private var noFilterMode = false
+    @AppStorage(UDKey.imageEnhanceFilter) private var imageEnhanceFilter = false
+    @AppStorage(UDKey.denoiseEnabled) private var denoiseEnabled = false
+    @AppStorage(UDKey.hdrEnhancement) private var hdrEnhancement = false
+    @AppStorage(UDKey.aiImageProcessing) private var aiImageProcessing = false
     /// 0=低画質(サムネのみ), 2=標準(サムネ→標準画質のプログレッシブ)
-    @AppStorage("onlineQualityMode") private var onlineQualityMode = 2
+    @AppStorage(UDKey.onlineQualityMode) private var onlineQualityMode = 2
 
     init(gallery: NhentaiClient.NhGallery, initialPage: Int = 0) {
         self.gallery = gallery
@@ -56,8 +56,8 @@ struct NhentaiReaderView: View {
     // 無く (alert 文言は表示時評価で足りる)、BGDL 中のページ完了毎にリーダー body 全体が
     // 再評価されてスクロールが荒れていた。
     private var downloadManager: DownloadManager { DownloadManager.shared }
-    @AppStorage("readerDirection") private var userReaderDirection = 0
-    @AppStorage("readingOrder") private var readingOrder = 1
+    @AppStorage(UDKey.readerDirection) private var userReaderDirection = 0
+    @AppStorage(UDKey.readingOrder) private var readingOrder = 1
     /// 動画 WebP per-gallery モード解決結果。nil = 未解決
     @State private var resolvedDirection: Int? = nil
     @State private var showAnimationDialog = false
@@ -499,7 +499,7 @@ struct NhentaiReaderView: View {
         }
     }
 
-    @AppStorage("autoSaveOnRead") private var autoSaveOnRead = false
+    @AppStorage(UDKey.autoSaveOnRead) private var autoSaveOnRead = false
 
     /// ページジャンプ (E-H リーダーの viewModel.jumpTo と同じ clamp 仕様、2026-06-10)。
     /// 新しいスクロール機構は作らず、スライダージャンプと同じ経路

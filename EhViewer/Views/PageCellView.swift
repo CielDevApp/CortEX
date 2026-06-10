@@ -30,9 +30,9 @@ struct PageCellView: View {
 
     /// 静画と共通の HDR 設定 (設定画面の hdrEnhancement トグル)。
     /// 動画 AVPlayer 側はこの値を videoComposition に反映 (CIFilter 注入)。
-    @AppStorage("hdrEnhancement") private var hdrEnhancement = false
+    @AppStorage(UDKey.hdrEnhancement) private var hdrEnhancement = false
     /// アニメ再生方式: "webp" (CADisplayLink 逐次) / "mp4" (旧来変換経路)
-    @AppStorage("animPlaybackMode") private var animPlaybackMode = "webp"
+    @AppStorage(UDKey.animPlaybackMode) private var animPlaybackMode = "webp"
 
     var body: some View {
         if isHorizontalMode {

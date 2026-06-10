@@ -17,7 +17,7 @@ final class MetalImageProcessor: @unchecked Sendable {
 
     /// Metal版を使うかCIFilter版を使うかのフラグ
     static var useMetalPipeline: Bool {
-        UserDefaults.standard.bool(forKey: "useMetalPipeline")
+        UserDefaults.standard.bool(forKey: UDKey.useMetalPipeline)
     }
 
     /// FilterParamsのC互換レイアウト

@@ -8,27 +8,27 @@ struct SettingsView: View {
     @State private var thumbsCacheMB: Int = 0
     @State private var animatedCacheMB: Int = 0
     @State private var showClearAnimatedConfirm = false
-    @AppStorage("onlineQualityMode") private var onlineQualityMode = 2
-    @AppStorage("downloadQualityMode") private var downloadQualityMode = 2
-    @AppStorage("aiImageProcessing") private var aiImageProcessing = false
-    @AppStorage("hdrEnhancement") private var hdrEnhancement = false
-    @AppStorage("imageEnhanceFilter") private var imageEnhanceFilter = false
+    @AppStorage(UDKey.onlineQualityMode) private var onlineQualityMode = 2
+    @AppStorage(UDKey.downloadQualityMode) private var downloadQualityMode = 2
+    @AppStorage(UDKey.aiImageProcessing) private var aiImageProcessing = false
+    @AppStorage(UDKey.hdrEnhancement) private var hdrEnhancement = false
+    @AppStorage(UDKey.imageEnhanceFilter) private var imageEnhanceFilter = false
     /// Boomerang Mode (β) default は true。EhViewerApp.swift register defaults と一致させる
     /// (両者で default 不一致だと「register が効かない条件下で OFF 表示」になる混乱の元、2026-04-25)。
-    @AppStorage("boomerangMode") private var boomerangMode = true
+    @AppStorage(UDKey.boomerangMode) private var boomerangMode = true
     /// アニメ再生方式: "webp" (WebP 原本 CGImageSource + CADisplayLink 逐次 decode) /
     ///              "mp4"  (旧来の HEVC MP4 変換経由 AVPlayer)。default=webp。
-    @AppStorage("animPlaybackMode") private var animPlaybackMode = "webp"
+    @AppStorage(UDKey.animPlaybackMode) private var animPlaybackMode = "webp"
     /// プリロード再生: ▶ タップ後、全 frame を並列 decode し終えてから再生開始 (PSP PMDVis 方式)。
     /// OFF にすると即時再生 (初動 ~5.5s チェース有り)。default=true。
-    @AppStorage("preloadPlayback") private var preloadPlayback = true
+    @AppStorage(UDKey.preloadPlayback) private var preloadPlayback = true
     /// アニメ per-frame に NE 人物セグメンテーションを適用。人物領域のみ CISharpenLuminance + CIVibrance
     /// でブースト。静画の「通常モード NE シャープ化」を動画にも適用する本命機能。default=true。
-    @AppStorage("animatedPersonSegmentation") private var animatedPersonSegmentation = true
-    @AppStorage("translationMode") private var translationMode = false
-    @AppStorage("translationLang") private var translationLang = "ja"
-    @AppStorage("translationSourceLang") private var translationSourceLang = "auto"
-    @AppStorage("autoSaveOnRead") private var autoSaveOnRead = false
+    @AppStorage(UDKey.animatedPersonSegmentation) private var animatedPersonSegmentation = true
+    @AppStorage(UDKey.translationMode) private var translationMode = false
+    @AppStorage(UDKey.translationLang) private var translationLang = "ja"
+    @AppStorage(UDKey.translationSourceLang) private var translationSourceLang = "auto"
+    @AppStorage(UDKey.autoSaveOnRead) private var autoSaveOnRead = false
     @State private var favBackupURL: URL?
     @State private var showImportPicker = false
     @State private var phoenixImportCount = 0
@@ -39,13 +39,13 @@ struct SettingsView: View {
     @State private var showAnimationModeResetConfirm = false
     @State private var showPINSetup = false
     @State private var isPINChange = false
-    @AppStorage("useMetalPipeline") private var useMetalPipeline = false
-    @AppStorage("appTheme") private var appTheme = 0
-    @AppStorage("readerDirection") private var readerDirection = 0
-    @AppStorage("readingOrder") private var readingOrder = 1
+    @AppStorage(UDKey.useMetalPipeline) private var useMetalPipeline = false
+    @AppStorage(UDKey.appTheme) private var appTheme = 0
+    @AppStorage(UDKey.readerDirection) private var readerDirection = 0
+    @AppStorage(UDKey.readingOrder) private var readingOrder = 1
     @State private var showBenchmark = false
     @State private var showLogViewer = false
-    @AppStorage("debugLogEnabled") private var debugLogEnabled = false
+    @AppStorage(UDKey.debugLogEnabled) private var debugLogEnabled = false
     @StateObject private var favVM = FavoritesViewModel()
     @ObservedObject private var safetyMode = SafetyMode.shared
     @ObservedObject private var ecoMode = EcoMode.shared
@@ -59,7 +59,7 @@ struct SettingsView: View {
     @State private var nhPassword: String = KeychainService.load(key: "nh_password") ?? ""
     @State private var showPasswordField: Bool = false
     @State private var nhCredSaved: Bool = false
-    @AppStorage("showAdvancedSettings") private var showAdvanced = false
+    @AppStorage(UDKey.showAdvancedSettings) private var showAdvanced = false
     // CORTEX PROTOCOL (hidden)
     @State private var versionTapCount = 0
     @State private var isCheckingUpdate = false
@@ -85,7 +85,7 @@ struct SettingsView: View {
         }
         showUpdateResult = true
     }
-    @AppStorage("cortexProtocolUnlocked") private var cortexUnlocked = false
+    @AppStorage(UDKey.cortexProtocolUnlocked) private var cortexUnlocked = false
     @State private var showCortexActivation = false
     @State private var cortexSearchURL: URL?
 
@@ -449,8 +449,8 @@ struct SettingsView: View {
                 // 4. 検索
                 Section("検索") {
                     Toggle("タグ自動翻訳", isOn: Binding(
-                        get: { UserDefaults.standard.bool(forKey: "tagTranslation") },
-                        set: { UserDefaults.standard.set($0, forKey: "tagTranslation") }
+                        get: { UserDefaults.standard.bool(forKey: UDKey.tagTranslation) },
+                        set: { UserDefaults.standard.set($0, forKey: UDKey.tagTranslation) }
                     )).tint(.blue)
                     Text("日本語で検索すると自動的にE-Hentaiのタグに変換します（例: 巨乳 → female:big breasts）")
                         .font(.caption2).foregroundStyle(.secondary)
@@ -690,7 +690,7 @@ struct SettingsView: View {
             .alert("動画ギャラリーのモード選択をリセット", isPresented: $showAnimationModeResetConfirm) {
                 Button("リセット", role: .destructive) {
                     DownloadManager.shared.resetAllReaderModeOverrides()
-                    UserDefaults.standard.set(true, forKey: "animationDialogDontAskDefault")
+                    UserDefaults.standard.set(true, forKey: UDKey.animationDialogDontAskDefault)
                 }
                 Button("キャンセル", role: .cancel) {}
             } message: {
@@ -981,7 +981,7 @@ struct CharacterCensusView: View {
     @Binding var nhTagCount: Int
     @Binding var isAnalyzing: Bool
 
-    @AppStorage("cortexProtocolUnlocked") private var cortexUnlocked = false
+    @AppStorage(UDKey.cortexProtocolUnlocked) private var cortexUnlocked = false
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
     @State private var selectedCharacter: String?

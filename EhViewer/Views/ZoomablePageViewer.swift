@@ -13,7 +13,7 @@ struct ZoomablePageViewer: View {
 
     @State private var currentPage: Int
     @State private var isAtMinZoom = true
-    @AppStorage("readingOrder") private var readingOrder = 1
+    @AppStorage(UDKey.readingOrder) private var readingOrder = 1
 
     init(viewModel: ReaderViewModel, initialPage: Int, onClose: @escaping () -> Void, onPageChange: @escaping (Int) -> Void) {
         self.viewModel = viewModel

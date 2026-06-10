@@ -541,7 +541,7 @@ final class CoreMLImageProcessor: @unchecked Sendable, ImageProcessor {
     nonisolated private static func autoDisableAI() {
         LogManager.shared.log("CoreML", "AUTO-DISABLE: turning off AI super resolution due to error/memory")
         DispatchQueue.main.async {
-            UserDefaults.standard.set(false, forKey: "aiImageProcessing")
+            UserDefaults.standard.set(false, forKey: UDKey.aiImageProcessing)
         }
     }
 
