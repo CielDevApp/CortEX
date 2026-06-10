@@ -130,8 +130,28 @@ extension ReaderViewModel {
             }
         }
         #endif
-        if let localData = DownloadManager.shared.loadLocalImageData(gid: gallery.gid, page: index) {
-            if let localImage = PlatformImage(data: localData) {
+        // 2026-06-10: ローカル読み (自動保存/DL 済みページ) が main で Data 読み + 遅延デコード
+        // (描画時に main でフルデコード) されておりスクロールヒッチ源だった →
+        // imageQueue で読み込み+CIContext デコード+downsample (ネットワーク経路と同形) に変更。
+        do {
+            let localPath = DownloadManager.shared.imageFilePath(gid: gallery.gid, page: index)
+            let targetW = Self.displayWidth
+            let localImage: PlatformImage? = await withCheckedContinuation { (cont: CheckedContinuation<PlatformImage?, Never>) in
+                SpriteCache.imageQueue.async {
+                    guard FileManager.default.fileExists(atPath: localPath.path),
+                          let data = try? Data(contentsOf: localPath), !data.isEmpty,
+                          let ciImage = CIImage(data: data),
+                          let cgImage = SpriteCache.ciContext.createCGImage(ciImage, from: ciImage.extent) else {
+                        cont.resume(returning: nil)
+                        return
+                    }
+                    let full = PlatformImage(cgImage: cgImage)
+                    cont.resume(returning: Self.downsample(full, targetWidth: targetW))
+                }
+            }
+            // await を跨いだので close/cancel 再確認 (解放済み dict の再 populate 防止)
+            if Task.isCancelled || isClosed { return false }
+            if let localImage {
                 LogManager.shared.log("Reader", "loadSingle \(index) exit: local image hit")
                 LogManager.shared.log("Perf", "pageLoad[\(index)]: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms source=local")
                 noteEstimatedAspect(of: localImage) // 未ロードセル高さ推定の実測更新
