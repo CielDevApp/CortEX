@@ -81,6 +81,12 @@ final class SpriteCache {
         "\(url.absoluteString)_\(Int(offsetX))"
     }
 
+    /// メモリキャッシュのみ参照 (ディスクIO/デコードなし)。
+    /// リーダーのスクロールパス (main 同期) 用: miss はバックグラウンド読込に回す前提。
+    func croppedImageInMemory(key: String) -> PlatformImage? {
+        croppedCache.object(forKey: key as NSString)
+    }
+
     func croppedImage(key: String) -> PlatformImage? {
         if let mem = croppedCache.object(forKey: key as NSString) { return mem }
         let path = Self.croppedDir.appendingPathComponent(Self.hashName(key))

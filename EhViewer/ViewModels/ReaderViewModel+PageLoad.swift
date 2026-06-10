@@ -29,10 +29,16 @@ extension ReaderViewModel {
         }
 
         // サムネプレースホルダー（全モードで実行 - mode 0/1も初回setLoadedをMainThread保証）
+        // 2026-06-10: 旧実装は thumbnailImage(for:) を main で同期呼び出し、cache miss 時に
+        // スプライトの同期ディスクIO + CIContext デコードが main を塞いでいた (スクロールヒッチ源)。
+        // メモリヒットのみ同期で即表示し、miss は imageQueue での背景読込に分離する。
         if holder(for: index).image == nil {
-            if let thumb = thumbnailImage(for: index) {
+            if let thumb = thumbnailMemoryImage(for: index) {
                 holder(for: index).setLoaded(thumb, placeholder: true)
                 placeholderPages.insert(index)
+                noteEstimatedAspect(of: thumb)
+            } else {
+                loadThumbnailPlaceholderAsync(index)
             }
         }
 
@@ -128,6 +134,7 @@ extension ReaderViewModel {
             if let localImage = PlatformImage(data: localData) {
                 LogManager.shared.log("Reader", "loadSingle \(index) exit: local image hit")
                 LogManager.shared.log("Perf", "pageLoad[\(index)]: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms source=local")
+                noteEstimatedAspect(of: localImage) // 未ロードセル高さ推定の実測更新
                 rawImages[index] = localImage
                 applyFilterPipeline(index: index, raw: localImage)
                 return true
@@ -218,10 +225,20 @@ extension ReaderViewModel {
                 Self.saveResolvedURLs(resolvedImageURLs, gid: gallery.gid)
             }
 
-            let cacheHit = ImageCache.shared.image(for: imageURL) != nil
+            // 2026-06-10: ImageCache.image(for:) はメモリ miss 時に同期ディスク読込+デコードを
+            // 行う。loadSingle は MainActor 上で走るためスクロール中の main ヒッチ源だった →
+            // imageQueue へ退避 (ImageCache は @unchecked Sendable / nonisolated でスレッド安全)。
+            let diskCached: PlatformImage? = await withCheckedContinuation { (cont: CheckedContinuation<PlatformImage?, Never>) in
+                SpriteCache.imageQueue.async {
+                    cont.resume(returning: ImageCache.shared.image(for: imageURL))
+                }
+            }
+            // await を跨いだので close/cancel を再確認 (rawImages 再 populate 防止の既存規約)
+            if Task.isCancelled || isClosed { return false }
+            let cacheHit = diskCached != nil
             LogManager.shared.log("Reader", "loadSingle \(index): resolved=\(resolvedHit) cache=\(cacheHit) url=\(imageURL.absoluteString.prefix(80))")
 
-            if let cached = ImageCache.shared.image(for: imageURL) {
+            if let cached = diskCached {
                 // 自動保存: キャッシュヒット時もローカルに保存
                 #if canImport(UIKit)
                 if UserDefaults.standard.bool(forKey: "autoSaveOnRead") {
@@ -265,6 +282,7 @@ extension ReaderViewModel {
                 }
 
                 let display = Self.downsample(cached)
+                noteEstimatedAspect(of: display) // 未ロードセル高さ推定の実測更新
                 rawImages[index] = display
                 applyFilterPipeline(index: index, raw: display)
                 LogManager.shared.log("Reader", "loadSingle \(index) exit: cache hit, displayed")
@@ -368,6 +386,7 @@ extension ReaderViewModel {
             // (ImageCache への set は global cache なので close 後でも無害、上で実施済み)
             if Task.isCancelled || isClosed { return false }
             let display = Self.downsample(image)
+            noteEstimatedAspect(of: display) // 未ロードセル高さ推定の実測更新
             rawImages[index] = display
             applyFilterPipeline(index: index, raw: display)
             LogManager.shared.log("Reader", "loadSingle \(index) exit: fetched & displayed (\(image.pixelWidth)x\(image.pixelHeight))")
@@ -680,24 +699,82 @@ extension ReaderViewModel {
     func getThumbImage(index: Int) async -> PlatformImage? {
         guard index < thumbnails.count else { return nil }
         let info = thumbnails[index]
-        // SpriteCacheのクロップ済みキャッシュを先に確認
+        // メモリヒットは hop なしで即返す
         let croppedKey = SpriteCache.shared.croppedKey(url: info.spriteURL, offsetX: info.offsetX)
-        if let cached = SpriteCache.shared.croppedImage(key: croppedKey) { return cached }
-        // スプライトシートからクロップ
-        if let sprite = SpriteCache.shared.sprite(for: info.spriteURL) {
-            let x = abs(Int(info.offsetX))
-            let w = Int(info.width), h = Int(info.height)
-            let clampedX = min(x, sprite.pixelWidth - 1)
-            let clampedW = min(w, sprite.pixelWidth - clampedX)
-            let clampedH = min(h, sprite.pixelHeight)
-            if let cropped = sprite.croppedImage(rect: CGRect(x: clampedX, y: 0, width: clampedW, height: clampedH)) {
-                // 書き戻し必須: これが無いと呼ばれるたびに同じスプライトを再クロップしていた
-                // (thumbnailImage(for:) と同型の修正)
-                SpriteCache.shared.setCropped(cropped, key: croppedKey)
-                return cropped
+        if let cached = SpriteCache.shared.croppedImageInMemory(key: croppedKey) { return cached }
+        // 2026-06-10: loadSingle は MainActor 上で走るため、旧実装の同期ディスク読込 +
+        // CIContext デコード + クロップが main を塞いでいた → imageQueue に退避。
+        return await Self.cropSpriteThumbOffMain(info: info)
+    }
+
+    /// スプライト読込 (ディスクIO) + デコード + クロップを imageQueue で実行する共通ヘルパー。
+    /// SpriteCache の NSCache はスレッド安全 / CIContext もスレッド安全。
+    /// 非スレッド安全な fetchingSprites には触れない (既存の imageQueue 利用箇所と同じ規約)。
+    static func cropSpriteThumbOffMain(info: ThumbnailInfo) async -> PlatformImage? {
+        await withCheckedContinuation { (cont: CheckedContinuation<PlatformImage?, Never>) in
+            SpriteCache.imageQueue.async {
+                let cache = SpriteCache.shared
+                let key = cache.croppedKey(url: info.spriteURL, offsetX: info.offsetX)
+                // クロップ済みディスクキャッシュ
+                if let cached = cache.croppedImage(key: key) {
+                    cont.resume(returning: cached)
+                    return
+                }
+                // スプライトシートから新規クロップ
+                guard let sprite = cache.sprite(for: info.spriteURL) else {
+                    cont.resume(returning: nil)
+                    return
+                }
+                let x = abs(Int(info.offsetX))
+                let w = Int(info.width), h = Int(info.height)
+                let clampedX = min(x, sprite.pixelWidth - 1)
+                let clampedW = min(w, sprite.pixelWidth - clampedX)
+                let clampedH = min(h, sprite.pixelHeight)
+                guard let cropped = sprite.croppedImage(rect: CGRect(x: clampedX, y: 0, width: clampedW, height: clampedH)) else {
+                    cont.resume(returning: nil)
+                    return
+                }
+                // 書き戻し必須: 次回以降はメモリヒットで main 同期表示できる
+                cache.setCropped(cropped, key: key)
+                cont.resume(returning: cropped)
             }
-            return nil
         }
-        return nil
+    }
+
+    /// サムネ placeholder の背景読込 (requestLoad のメモリ miss 経路)。
+    /// ディスクIO/デコード/クロップを imageQueue に逃がし、完了後 MainActor で holder に注ぐ。
+    func loadThumbnailPlaceholderAsync(_ index: Int) {
+        guard !isClosed else { return }
+        guard !thumbPlaceholderLoading.contains(index) else { return }
+        // index 0 は cover 優先 (thumbnailImage と同じ優先順位を維持)
+        let coverURL: URL? = (index == 0) ? gallery.coverURL : nil
+        let info: ThumbnailInfo? = (coverURL == nil && index < thumbnails.count) ? thumbnails[index] : nil
+        guard coverURL != nil || info != nil else { return }
+        thumbPlaceholderLoading.insert(index)
+        trackTask(priority: .utility) { [weak self] in
+            guard let self else { return }
+            defer { self.thumbPlaceholderLoading.remove(index) }
+            let thumb: PlatformImage?
+            if let coverURL {
+                // cover のディスク読込も main から退避 (ImageCache は @unchecked Sendable)
+                thumb = await withCheckedContinuation { (cont: CheckedContinuation<PlatformImage?, Never>) in
+                    SpriteCache.imageQueue.async {
+                        cont.resume(returning: ImageCache.shared.image(for: coverURL))
+                    }
+                }
+            } else if let info {
+                thumb = await Self.cropSpriteThumbOffMain(info: info)
+            } else {
+                thumb = nil
+            }
+            if Task.isCancelled || self.isClosed { return }
+            guard let thumb else { return }
+            let h = self.holder(for: index)
+            // 読込中にフル画像が到着していたら placeholder で上書きしない (現行ガード維持)
+            guard h.image == nil else { return }
+            h.setLoaded(thumb, placeholder: true)
+            self.placeholderPages.insert(index)
+            self.noteEstimatedAspect(of: thumb)
+        }
     }
 }

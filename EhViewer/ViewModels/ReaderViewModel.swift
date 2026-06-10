@@ -39,6 +39,15 @@ class ReaderViewModel: ObservableObject {
     var processedPages: Set<Int> = []
     var placeholderPages: Set<Int> = []
     var hasLoadedImagePages = false
+    /// 直近ロード済みページの縦横比 (height/width)。縦リーダー未ロードセルの高さ推定用。
+    /// 初期値 1.42 ≒ 一般的な漫画ページ。@Published にしない: 値更新のたびに既存セルを
+    /// 強制再レイアウトすると逆に位置ズレを誘発するため、セル再生成時に反映されれば十分。
+    var estimatedPageAspect: CGFloat = 1.42
+    /// サムネ placeholder の背景読込中ページ (重複起動防止)
+    var thumbPlaceholderLoading: Set<Int> = []
+    /// evictDistantHolders の前回掃引中心。毎セル onAppear の全キー走査を抑制する
+    /// (Int.min は減算オーバーフローするので十分大きい負数で初期化)
+    private var lastEvictionSweepCenter: Int = -(1 << 30)
 
     // MARK: - 閉鎖フラグ + Task 管理 (2026-06-10)
 
@@ -113,7 +122,12 @@ class ReaderViewModel: ObservableObject {
         // onAppear 毎に縦モードと同じ >20/>50 閾値で全ホルダーを掃引する (縦モードでも
         // onDisappear は viewport 離脱時の distance が小さく実質発火しないため両モードで有効)。
         // 閾値 >20 は先読み窓 (最大 ±15) と見開き合成 (±1) の外側なので表示には影響しない。
-        evictDistantHolders(center: index)
+        // 掃引軽量化 2026-06-10: 毎セル onAppear の全キー走査をやめ、前回掃引から
+        // 10 ページ以上移動した時だけ実行 (evict 閾値 >20/>50 に対し余裕があり表示影響なし)。
+        if abs(index - lastEvictionSweepCenter) >= 10 {
+            lastEvictionSweepCenter = index
+            evictDistantHolders(center: index)
+        }
         requestLoad(index)
         if !isScrolling && !EcoMode.shared.isEnabled {
             // 田中要望 2026-05-02: iPad 見開きモードは 1 画面 = 2 ページなので
@@ -384,6 +398,34 @@ class ReaderViewModel: ObservableObject {
     }
 
     // MARK: - サムネプレースホルダー
+
+    /// thumbnailImage のメモリキャッシュ限定版 (ディスクIO/デコード/クロップなし)。
+    /// requestLoad はセル onAppear ごとに main で同期実行されるため、cache miss 時の
+    /// Data(contentsOf:) + CIContext デコードが main を塞ぎスクロールヒッチ源だった。
+    /// main 同期パスはメモリヒットのみ即表示し、miss は loadThumbnailPlaceholderAsync へ。
+    func thumbnailMemoryImage(for index: Int) -> PlatformImage? {
+        if index == 0, let coverURL = gallery.coverURL {
+            return ImageCache.shared.memoryImage(for: coverURL)
+        }
+        guard index < thumbnails.count else { return nil }
+        let info = thumbnails[index]
+        let key = SpriteCache.shared.croppedKey(url: info.spriteURL, offsetX: info.offsetX)
+        return SpriteCache.shared.croppedImageInMemory(key: key)
+    }
+
+    /// ロード済み画像から未ロードセルの高さ推定用 aspect を更新。
+    /// サムネ (スプライトクロップ) も実ページと同比率なので入力に使ってよい。
+    func noteEstimatedAspect(of image: PlatformImage) {
+        let w = image.pixelWidth
+        guard w > 0 else { return }
+        let aspect = CGFloat(image.pixelHeight) / CGFloat(w)
+        // 異常値 (誤クロップ等) で placeholder 高さが潰れる/暴れるのを防ぐ
+        guard aspect > 0.3, aspect < 3.0 else { return }
+        // 微小変動での placeholder 高さジッタを避ける (1% 未満は無視)
+        if abs(aspect - estimatedPageAspect) > 0.01 {
+            estimatedPageAspect = aspect
+        }
+    }
 
     func thumbnailImage(for index: Int) -> PlatformImage? {
         if index == 0, let coverURL = gallery.coverURL {
