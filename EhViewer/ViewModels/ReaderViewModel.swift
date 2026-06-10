@@ -44,20 +44,14 @@ class ReaderViewModel: ObservableObject {
     /// 強制再レイアウトすると逆に位置ズレを誘発するため、セル再生成時に反映されれば十分。
     var estimatedPageAspect: CGFloat = 1.42
 
-    /// ページ実寸ベースの縦横比 (スプライトサムネ寸法 = 実ページと同比)。
-    /// 慣性スクロール中に placeholder (推定 1.42) → 実画像到着で高さが跳ねて
-    /// 「角つく/止まる」体感になっていた (田中報告 2026-06-10: DL済み範囲では起きない =
-    /// 表示前に実寸が確定しているから)。サムネ情報があるページは最初から正確な高さで置く。
+    /// 未ロードセルの縦横比。実際にロードした画像から学習した estimatedPageAspect を返す。
+    /// 注意 (2026-06-10 誤修正の記録): ThumbnailInfo.width/height はスプライトの固定セル枠
+    /// (200x300 定数) であり実ページ寸法ではない。一度それを使って aspect=1.5 固定で置いて
+    /// しまい、実画像 (~1.40) 到着のたびに高さが跳ねる問題をむしろ悪化させた。
+    /// 同一作品はページ寸法がほぼ均一なので、最初の 1 ページの実測 (noteEstimatedAspect) で
+    /// 以降の placeholder はほぼ正確になる。
     func pageAspect(for index: Int) -> CGFloat {
-        let info: ThumbnailInfo?
-        if index < thumbnails.count, thumbnails[index].index == index {
-            info = thumbnails[index]
-        } else {
-            info = thumbnails.first(where: { $0.index == index })
-        }
-        guard let info, info.width > 0 else { return estimatedPageAspect }
-        let aspect = info.height / info.width
-        return (0.3...3.0).contains(aspect) ? aspect : estimatedPageAspect
+        estimatedPageAspect
     }
     /// サムネ placeholder の背景読込中ページ (重複起動防止)
     var thumbPlaceholderLoading: Set<Int> = []
