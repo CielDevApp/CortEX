@@ -36,6 +36,11 @@ struct NhentaiReaderView: View {
     @State private var showFilterPanel = false
     @State private var showFavFailedAlert = false
     @State private var favFailedGalleryId: Int = 0
+    /// 左エッジスワイプでリーダー終了 (E-H リーダーと UX 統一、2026-06-10)
+    @State private var dragOffset: CGFloat = 0
+    /// ページジャンプ (E-H リーダーと UX 統一、2026-06-10)
+    @State private var showPageJump = false
+    @State private var jumpPageText = ""
     @AppStorage("translationMode") private var translationMode = false
     @AppStorage("noFilterMode") private var noFilterMode = false
     @AppStorage("imageEnhanceFilter") private var imageEnhanceFilter = false
@@ -122,6 +127,39 @@ struct NhentaiReaderView: View {
                     .transition(.opacity)
             }
         }
+        .offset(x: dragOffset)
+        .opacity(dragOffset > 0 ? max(0, 1.0 - dragOffset / 400.0) : 1.0)
+        .overlay(alignment: .leading) {
+            // 横モード時は左エッジスワイプ無効（ページ送りと干渉防止）
+            // 横モードは PagedReaderView の vertical pan dismiss が既にあるため縦モードのみ
+            if zoomImage == nil && effectiveDirection == 0 {
+                Color.clear
+                    .frame(width: 24)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture()
+                            .onChanged { value in
+                                if value.translation.width > 0 {
+                                    dragOffset = value.translation.width
+                                }
+                            }
+                            .onEnded { value in
+                                if value.translation.width > 120 {
+                                    // handleClose は DL中/保存確認 alert でキャンセルされ得るため、
+                                    // 画面が offset したまま残らないよう先に戻してから閉じる経路へ
+                                    withAnimation(.easeOut(duration: 0.2)) {
+                                        dragOffset = 0
+                                    }
+                                    handleClose()
+                                } else {
+                                    withAnimation(.easeOut(duration: 0.2)) {
+                                        dragOffset = 0
+                                    }
+                                }
+                            }
+                    )
+            }
+        }
         #if os(iOS)
         .persistentSystemOverlays(showControls ? .automatic : .hidden)
         .statusBarHidden(!showControls)
@@ -174,6 +212,46 @@ struct NhentaiReaderView: View {
             Button("キャンセル", role: .cancel) {}
         } message: {
             Text("ローカルには追加済みです。Safari で手動完了するか、設定から nhentai に再認証してください。")
+        }
+        .alert("ページジャンプ", isPresented: $showPageJump) {
+            TextField("ページ番号", text: $jumpPageText)
+                #if os(iOS)
+                .keyboardType(.numberPad)
+                #endif
+            Button("ジャンプ") {
+                if let page = Int(jumpPageText) {
+                    jumpTo(page: page - 1)
+                }
+                jumpPageText = ""
+            }
+            Button("キャンセル", role: .cancel) {
+                jumpPageText = ""
+            }
+        } message: {
+            Text("1〜\(totalPages)のページ番号を入力")
+        }
+        .focusable()
+        .focusEffectDisabled()
+        .onKeyPress(.upArrow) {
+            guard effectiveDirection == 0 else { return .ignored }
+            jumpTo(page: currentIndex - 1)
+            return .handled
+        }
+        .onKeyPress(.downArrow) {
+            guard effectiveDirection == 0 else { return .ignored }
+            jumpTo(page: currentIndex + 1)
+            return .handled
+        }
+        .onKeyPress(.leftArrow) {
+            guard effectiveDirection == 1 else { return .ignored }
+            horizontalPage = max(0, horizontalPage - 1)
+            return .handled
+        }
+        .onKeyPress(.rightArrow) {
+            guard effectiveDirection == 1 else { return .ignored }
+            let maxPage = max(totalPages - 1, 0)
+            horizontalPage = min(maxPage, horizontalPage + 1)
+            return .handled
         }
         .task {
             // リーダー表示開始 → DL側に減速ヒント
@@ -425,6 +503,19 @@ struct NhentaiReaderView: View {
     }
 
     @AppStorage("autoSaveOnRead") private var autoSaveOnRead = false
+
+    /// ページジャンプ (E-H リーダーの viewModel.jumpTo と同じ clamp 仕様、2026-06-10)。
+    /// 新しいスクロール機構は作らず、スライダージャンプと同じ経路
+    /// (縦=sliderJumpTarget→proxy.scrollTo / 横=horizontalPage binding) を再利用する。
+    private func jumpTo(page: Int) {
+        let clamped = max(0, min(page, totalPages - 1))
+        if effectiveDirection == 1 {
+            horizontalPage = clamped
+        } else {
+            sliderJumpTarget = clamped
+        }
+        if !isSliding { sliderValue = Double(clamped) }
+    }
 
     private func handleClose() {
         let gid = -gallery.id
@@ -961,10 +1052,16 @@ struct NhentaiReaderView: View {
                 }
 
                 HStack {
-                    Text(nhSpreadLabel)
-                        .font(.subheadline)
-                        .foregroundStyle(.white)
-                        .monospacedDigit()
+                    // ページラベルタップでジャンプ入力 (E-H リーダーと同じ UI)
+                    Button {
+                        showPageJump = true
+                    } label: {
+                        Text(nhSpreadLabel)
+                            .font(.subheadline)
+                            .foregroundStyle(.white)
+                            .monospacedDigit()
+                    }
+                    .buttonStyle(.plain)
                     Spacer()
                     Text("nhentai")
                         .font(.caption2)

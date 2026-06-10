@@ -43,11 +43,16 @@ struct GalleryReaderView: View {
     @State private var autoSaveInfo: (saved: Int, total: Int) = (0, 0)
     @AppStorage("autoSaveOnRead") private var autoSaveOnRead = false
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    /// リーダーからのお気に入りトグル (nh リーダーと UX 統一、2026-06-10)。
+    /// 詳細ビューとリーダーの両方からトグルしても矛盾しないよう、
+    /// 初期値は FavoritesCache 実体から読む (nh の NhentaiFavoritesCache.contains 初期化と同型)。
+    @State private var isFavorited: Bool
 
     init(gallery: Gallery, host: GalleryHost, initialPage: Int = 0, thumbnails: [ThumbnailInfo] = []) {
         self.gallery = gallery
         self.host = host
         self._viewModel = StateObject(wrappedValue: ReaderViewModel(gallery: gallery, host: host, initialPage: initialPage, thumbnails: thumbnails))
+        self._isFavorited = State(initialValue: FavoritesCache.shared.load().contains { $0.gid == gallery.gid })
     }
 
     /// 動画 WebP モード解決後の有効方向。未解決時は userReaderDirection (一瞬黒画面)
@@ -390,6 +395,32 @@ struct GalleryReaderView: View {
             showAutoSavePrompt = true
         } else {
             dismiss()
+        }
+    }
+
+    // MARK: - お気に入りトグル
+
+    /// GalleryDetailView.toggleFavorite と同じ挙動 (リーダー逆輸入、2026-06-10)。
+    /// サーバー反映が成功した時だけ状態とキャッシュを更新し、失敗時はログのみ
+    /// (詳細ビューがアラートを出さないのでリーダーも出さない)。
+    private func toggleFavorite() async {
+        let action = isFavorited ? "remove" : "add"
+        LogManager.shared.log("Favorite", "(reader) \(action) gid=\(gallery.gid) token=\(gallery.token)")
+        do {
+            if isFavorited {
+                try await EhClient.shared.removeFavorite(host: host, gid: gallery.gid, token: gallery.token)
+                isFavorited = false
+                FavoritesCache.shared.removeFromCache(gid: gallery.gid)
+                LogManager.shared.log("Favorite", "(reader) removed successfully")
+            } else {
+                // category は詳細ビューと同じデフォルト (= 0) を使う
+                try await EhClient.shared.addFavorite(host: host, gid: gallery.gid, token: gallery.token)
+                isFavorited = true
+                FavoritesCache.shared.addToCache(gallery)
+                LogManager.shared.log("Favorite", "(reader) added successfully")
+            }
+        } catch {
+            LogManager.shared.log("Favorite", "(reader) \(action) FAILED: \(error)")
         }
     }
 
@@ -779,6 +810,18 @@ struct GalleryReaderView: View {
                     .lineLimit(1)
 
                 Spacer()
+
+                // お気に入りボタン (nh リーダーと同じ並び: お気に入り → 翻訳 → 画質設定)
+                // 挙動は GalleryDetailView.toggleFavorite と完全に同じ
+                // (サーバー成功後に状態+キャッシュ更新、失敗はログのみ)
+                Button {
+                    Task { await toggleFavorite() }
+                } label: {
+                    Image(systemName: isFavorited ? "heart.fill" : "heart")
+                        .font(.title2)
+                        .foregroundStyle(isFavorited ? .red : .white)
+                }
+                .buttonStyle(.plain)
 
                 Button {
                     if translationMode {
