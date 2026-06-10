@@ -15,20 +15,18 @@ struct ThumbnailCellView: View {
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
-            // .fit 表示 (田中要望 2026-06-10): 旧 .fill + clipped はページ上下が見切れて
-            // 場面が分からなかった。カバー表示と同じく全体を見せ、余白はレターボックス。
             if let image {
                 Image(platformImage: image)
                     .resizable()
-                    .aspectRatio(contentMode: .fit)
+                    .aspectRatio(contentMode: .fill)
                     .frame(minWidth: 0, maxWidth: .infinity, minHeight: cellHeight, maxHeight: cellHeight)
-                    .background(Color.gray.opacity(0.1))
+                    .clipped()
             } else if index == 0, let coverURL, let coverImg = ImageCache.shared.image(for: coverURL) {
                 Image(platformImage: coverImg)
                     .resizable()
-                    .aspectRatio(contentMode: .fit)
+                    .aspectRatio(contentMode: .fill)
                     .frame(minWidth: 0, maxWidth: .infinity, minHeight: cellHeight, maxHeight: cellHeight)
-                    .background(Color.gray.opacity(0.1))
+                    .clipped()
             } else {
                 Color.gray.opacity(0.1)
                     .frame(height: cellHeight)
