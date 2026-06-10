@@ -253,6 +253,8 @@ struct EhViewerApp: App {
             .task {
                 // main 停滞の定量化 (250ms 超のみログ → スクロールヒッチ調査用)
                 MainStallMonitor.shared.start()
+                // 凍結瞬間の main スタック採取 (診断用、main から呼ぶこと)
+                MainBlockSampler.shared.start()
                 FavoritesViewModel.prefetchCachedFavorites()
                 Task.detached(priority: .utility) {
                     ImageCache.shared.prewarmRecentThumbs()

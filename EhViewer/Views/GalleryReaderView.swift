@@ -59,7 +59,9 @@ struct GalleryReaderView: View {
         self.gallery = gallery
         self.host = host
         self._viewModel = StateObject(wrappedValue: ReaderViewModel(gallery: gallery, host: host, initialPage: initialPage, thumbnails: thumbnails))
-        self._isFavorited = State(initialValue: FavoritesCache.shared.load().contains { $0.gid == gallery.gid })
+        // containsFast 必須 (憲兵令 2026-0610-001 真因): load() 直叩きは全件 JSON デコードで、
+        // 親 body 再評価のたびに init が走る SwiftUI では main を 120-150ms 塞いでいた
+        self._isFavorited = State(initialValue: FavoritesCache.shared.containsFast(gid: gallery.gid))
     }
 
     /// 動画 WebP モード解決後の有効方向。未解決時は userReaderDirection (一瞬黒画面)

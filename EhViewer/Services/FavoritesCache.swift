@@ -32,11 +32,24 @@ class FavoritesCache: ObservableObject {
         return (try? JSONDecoder().decode([Gallery].self, from: data)) ?? []
     }
 
+    /// gid 高速参照用の in-memory Set。初回アクセスで一度だけ load() し、save() で同期更新。
+    /// 真因記録 (憲兵令 2026-0610-001): GalleryReaderView.init が load() (全件 JSON デコード
+    /// = 数百件で 120-150ms) を呼んでおり、詳細ビュー body 再評価 (自動保存のページ毎 publish)
+    /// のたびにリーダー struct が再 init → main がフリーズ = スクロール「角つき」の主犯だった。
+    /// init 等のホットパスからは必ずこちらを使うこと。
+    private var cachedGids: Set<Int>?
+
+    func containsFast(gid: Int) -> Bool {
+        if cachedGids == nil { cachedGids = Set(load().map { $0.gid }) }
+        return cachedGids?.contains(gid) ?? false
+    }
+
     func save(_ galleries: [Gallery]) {
         guard let data = try? JSONEncoder().encode(galleries) else { return }
         try? data.write(to: cacheFileURL)
         let timestamp = ISO8601DateFormatter().string(from: Date())
         try? timestamp.write(to: timestampFileURL, atomically: true, encoding: .utf8)
+        cachedGids = Set(galleries.map { $0.gid })
         version += 1
     }
 

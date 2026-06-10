@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import MachO
 #if canImport(UIKit)
 import UIKit
 import QuartzCore
@@ -206,6 +207,8 @@ final class MainStallMonitor {
     }
 
     @objc private func tick(_ l: CADisplayLink) {
+        // BlockSampler の凍結検知用 (CFAbsoluteTime 系で統一)
+        MainBlockSampler.lastFrameTick = CFAbsoluteTimeGetCurrent()
         let now = l.timestamp
         defer { last = now }
         guard last > 0 else { return }
@@ -218,4 +221,100 @@ final class MainStallMonitor {
     #else
     func start() {}
     #endif
+}
+
+// MARK: - Main thread block sampler (診断用 2026-06-10)
+
+/// main thread が凍結 (>120ms) した瞬間に、背景スレッドから main を一時 suspend して
+/// コールスタック (生アドレス + 画像名+オフセット) を採取する。CPU を使わない「待ち」
+/// ブロック (ロック/セマフォ/同期IPC) は Time Profiler に写らないため、この方式でのみ
+/// 特定できる。stall 1 回につき 1 サンプル、ログタグ [BlockSample]。
+final class MainBlockSampler {
+    static let shared = MainBlockSampler()
+    /// CADisplayLink (MainStallMonitor) が毎フレーム更新する最終 tick 時刻
+    static var lastFrameTick: CFAbsoluteTime = 0
+    private var mainThreadPort: thread_act_t = 0
+    private var started = false
+
+    /// main thread から呼ぶこと (main の mach port を捕まえるため)
+    func start() {
+        guard !started, Thread.isMainThread else { return }
+        started = true
+        mainThreadPort = mach_thread_self()
+        Self.lastFrameTick = CFAbsoluteTimeGetCurrent()
+        let port = mainThreadPort
+        Thread.detachNewThread {
+            Thread.current.name = "MainBlockSampler"
+            var lastSampleAt: CFAbsoluteTime = 0
+            while true {
+                usleep(30_000) // 30ms
+                let now = CFAbsoluteTimeGetCurrent()
+                let gap = now - Self.lastFrameTick
+                // 120ms 凍結中 & この stall でまだ未採取 (連発防止に 0.5 秒間隔)
+                if gap > 0.12 && gap < 5 && now - lastSampleAt > 0.5 {
+                    lastSampleAt = now
+                    Self.sampleAndLog(port: port, gapMs: Int(gap * 1000))
+                }
+            }
+        }
+    }
+
+    private static func sampleAndLog(port: thread_act_t, gapMs: Int) {
+        guard thread_suspend(port) == KERN_SUCCESS else { return }
+        var addrs: [UInt64] = []
+        var state = arm_thread_state64_t()
+        var count = mach_msg_type_number_t(MemoryLayout<arm_thread_state64_t>.size / MemoryLayout<UInt32>.size)
+        let kr = withUnsafeMutablePointer(to: &state) { ptr -> kern_return_t in
+            ptr.withMemoryRebound(to: natural_t.self, capacity: Int(count)) {
+                thread_get_state(port, thread_state_flavor_t(ARM_THREAD_STATE64), $0, &count)
+            }
+        }
+        if kr == KERN_SUCCESS {
+            let pacMask: UInt64 = 0x0000_007F_FFFF_FFFF
+            addrs.append(state.__pc & pacMask)
+            addrs.append(state.__lr & pacMask)
+            // fp チェーンを安全に辿る (vm_read_overwrite で読めないアドレスは打ち切り)
+            var fp = state.__fp & pacMask
+            for _ in 0..<24 {
+                guard fp > 0x1000 else { break }
+                var buf = [UInt64](repeating: 0, count: 2)
+                var outSize: vm_size_t = 0
+                let r = buf.withUnsafeMutableBytes { raw -> kern_return_t in
+                    vm_read_overwrite(mach_task_self_, vm_address_t(fp), 16,
+                                      vm_address_t(UInt(bitPattern: raw.baseAddress)), &outSize)
+                }
+                guard r == KERN_SUCCESS, outSize == 16 else { break }
+                let nextFP = buf[0] & pacMask
+                let lr = buf[1] & pacMask
+                if lr > 0x100000000 { addrs.append(lr) }
+                guard nextFP > fp else { break }
+                fp = nextFP
+            }
+        }
+        thread_resume(port)
+
+        // アドレス → 画像名+オフセット (システムフレームはこれで関数の在処が分かる)
+        var lines: [String] = []
+        let imageCount = _dyld_image_count()
+        for a in addrs {
+            var best: (name: String, off: UInt64)? = nil
+            for i in 0..<imageCount {
+                guard let header = _dyld_get_image_header(i) else { continue }
+                let base = UInt64(UInt(bitPattern: header))
+                if a >= base, a - base < 0x8000_0000 {
+                    if best == nil || (a - base) < best!.off {
+                        let name = String(cString: _dyld_get_image_name(i))
+                        best = ((name as NSString).lastPathComponent, a - base)
+                    }
+                }
+            }
+            if let b = best {
+                lines.append("\(b.name)+0x\(String(b.off, radix: 16))")
+            } else {
+                lines.append("0x\(String(a, radix: 16))")
+            }
+        }
+        let appBase = UInt64(UInt(bitPattern: _dyld_get_image_header(0)))
+        LogManager.shared.log("BlockSample", "gap=\(gapMs)ms appBase=0x\(String(appBase, radix: 16)) stack: " + lines.joined(separator: " <- "))
+    }
 }
