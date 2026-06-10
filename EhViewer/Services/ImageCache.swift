@@ -115,10 +115,12 @@ final class ImageCache: @unchecked Sendable {
     /// 作って ThumbnailCellView 等の URL 非保持 view からも参照できるようにする
     /// (混在作品で動画 page にだけマーク表示するための情報源、田中指示 2026-04-25)。
     @discardableResult
-    func saveAnimatedWebPData(_ data: Data, for url: URL, gid: Int? = nil, page: Int? = nil) -> URL {
+    nonisolated func saveAnimatedWebPData(_ data: Data, for url: URL, gid: Int? = nil, page: Int? = nil) -> URL {
         let path = animatedWebPCacheDir.appendingPathComponent(cacheFileHash(for: url))
-        // 即 sync 書き込み: AVPlayer がすぐ読みに行けるよう一時的に main から書く
-        // (5-10MB の Data write はミリ秒単位、長時間ブロックしない)。
+        // 同期書き込み (return 時点でファイルが disk に在る契約 = AVPlayer が即読める)。
+        // nonisolated 化 (2026-06-10): 毎ページ main で write していたのがスクロールヒッチ源
+        // だったため、呼び出し側 (loadSingle) は imageQueue 上から呼ぶ。FileManager/write は
+        // スレッド安全、同期完了の契約は維持。
         try? data.write(to: path)
         // 副 index (gid+page → 同じ data の hard link)
         if let gid, let page {

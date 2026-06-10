@@ -8,7 +8,9 @@ import ImageIO
 /// header 判定で false の場合のみ ImageIO の `CGImageSourceGetCount > 1` で再判定する。
 /// ローカルビューワー (AnimatedImageDecoder.isAnimatedFile) と判定結果を揃えるための
 /// fallback (田中報告 2026-04-25「DLすれば動画になるのに通常リーダーで static 扱い」)。
-enum WebPAnimationDetector {
+// nonisolated: 純関数 (ファイルヘッダ読みのみ、共有状態なし)。デフォルト MainActor 下で
+// 背景キューから呼んでも main へホップさせないため明示 (2026-06-10 スクロールヒッチ対策)。
+nonisolated enum WebPAnimationDetector {
     static func isAnimatedWebP(url: URL) -> Bool {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? handle.close() }

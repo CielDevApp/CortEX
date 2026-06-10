@@ -242,11 +242,21 @@ extension ReaderViewModel {
                 // 自動保存: キャッシュヒット時もローカルに保存
                 #if canImport(UIKit)
                 if UserDefaults.standard.bool(forKey: "autoSaveOnRead") {
-                    if let data = cached.jpegData(compressionQuality: 0.92) {
-                        DownloadManager.shared.autoSavePage(
-                            gid: gallery.gid, token: gallery.token, title: gallery.title,
-                            pageCount: totalPages, page: index, imageData: data
-                        )
+                    // 2026-06-10: jpegData(0.92) のフル画像再エンコード (数十ms) が main で
+                    // 走りスクロールヒッチ源だった → imageQueue でエンコードしてから
+                    // main の autoSavePage へ渡す (保存は best-effort、順序保証不要)。
+                    let gid = gallery.gid
+                    let token = gallery.token
+                    let title = gallery.title
+                    let total = totalPages
+                    SpriteCache.imageQueue.async {
+                        guard let data = cached.jpegData(compressionQuality: 0.92) else { return }
+                        Task { @MainActor in
+                            DownloadManager.shared.autoSavePage(
+                                gid: gid, token: token, title: title,
+                                pageCount: total, page: index, imageData: data
+                            )
+                        }
                     }
                 }
                 #endif
@@ -281,7 +291,15 @@ extension ReaderViewModel {
                     LogManager.shared.log("Anim", "cache hit page \(index) restored animatedFileURL from URL hash")
                 }
 
-                let display = Self.downsample(cached)
+                // 2026-06-10: downsample (全面再描画) を main から imageQueue へ (ヒッチ源)
+                let targetW = Self.displayWidth
+                let display = await withCheckedContinuation { (cont: CheckedContinuation<PlatformImage, Never>) in
+                    SpriteCache.imageQueue.async {
+                        cont.resume(returning: Self.downsample(cached, targetWidth: targetW))
+                    }
+                }
+                // await を跨いだので close/cancel 再確認 (解放済み dict の再 populate 防止)
+                if Task.isCancelled || isClosed { return false }
                 noteEstimatedAspect(of: display) // 未ロードセル高さ推定の実測更新
                 rawImages[index] = display
                 applyFilterPipeline(index: index, raw: display)
@@ -348,26 +366,39 @@ extension ReaderViewModel {
             // のに通常リーダーで static 扱い」根因対策、CGImageSourceCreateWithData で frame 数を
             // 認識しない WebP variant が E-Hentai 配信に存在する)。
             // 判定 true なら保存維持 + holder.animatedFileURL 設定、false なら disk から削除 (cache 圧迫回避)。
-            let preliminaryURL = ImageCache.shared.saveAnimatedWebPData(imageData, for: imageURL, gid: gallery.gid, page: index)
-            if WebPAnimationDetector.isAnimatedWebP(url: preliminaryURL) {
-                await MainActor.run {
-                    self.holder(for: index).animatedFileURL = preliminaryURL
+            // 2026-06-10: アニメ判定の disk write/削除が毎ページ main で走りスクロールヒッチ源
+            // だった → imageQueue へ退避 (saveAnimatedWebPData/Detector とも nonisolated 化済)。
+            let gidForAnim = gallery.gid
+            let animatedURL: URL? = await withCheckedContinuation { (cont: CheckedContinuation<URL?, Never>) in
+                SpriteCache.imageQueue.async {
+                    let url = ImageCache.shared.saveAnimatedWebPData(imageData, for: imageURL, gid: gidForAnim, page: index)
+                    if WebPAnimationDetector.isAnimatedWebP(url: url) {
+                        cont.resume(returning: url)
+                    } else {
+                        // 静画判定 → 動画 cache から削除 (副 index も)
+                        try? FileManager.default.removeItem(at: url)
+                        let byGidDir = url.deletingLastPathComponent().appendingPathComponent("byGid")
+                        try? FileManager.default.removeItem(at: byGidDir.appendingPathComponent("\(gidForAnim)_\(index).webp"))
+                        cont.resume(returning: nil)
+                    }
                 }
+            }
+            if Task.isCancelled || isClosed { return false }
+            if let animatedURL {
+                holder(for: index).animatedFileURL = animatedURL
                 LogManager.shared.log("Anim", "page \(index) detected animated WebP, persisted \(imageData.count)B → disk URL")
-            } else {
-                // 静画判定 → 動画 cache から削除 (副 index も)
-                try? FileManager.default.removeItem(at: preliminaryURL)
-                let byGidDir = preliminaryURL.deletingLastPathComponent().appendingPathComponent("byGid")
-                try? FileManager.default.removeItem(at: byGidDir.appendingPathComponent("\(gallery.gid)_\(index).webp"))
             }
 
             let decodeStart = CFAbsoluteTimeGetCurrent()
-            // 専用キュー+GPU(CIContext)でデコード（協調プール不使用 → UIスレッド影響ゼロ）
-            let image: PlatformImage? = await withCheckedContinuation { (cont: CheckedContinuation<PlatformImage?, Never>) in
+            // 専用キュー+GPU(CIContext)でデコード（協調プール不使用 → UIスレッド影響ゼロ）。
+            // downsample (全面再描画) も同キューで一括実施 (2026-06-10: main 実行がヒッチ源)。
+            let targetW = Self.displayWidth
+            let decoded: (full: PlatformImage, display: PlatformImage)? = await withCheckedContinuation { (cont: CheckedContinuation<(full: PlatformImage, display: PlatformImage)?, Never>) in
                 SpriteCache.imageQueue.async {
                     if let ciImage = CIImage(data: imageData),
                        let cgImage = SpriteCache.ciContext.createCGImage(ciImage, from: ciImage.extent) {
-                        cont.resume(returning: PlatformImage(cgImage: cgImage))
+                        let full = PlatformImage(cgImage: cgImage)
+                        cont.resume(returning: (full, Self.downsample(full, targetWidth: targetW)))
                     } else {
                         cont.resume(returning: nil)
                     }
@@ -375,7 +406,7 @@ extension ReaderViewModel {
             }
             let decodeMs = Int((CFAbsoluteTimeGetCurrent() - decodeStart) * 1000)
 
-            guard let image else {
+            guard let (image, display) = decoded else {
                 LogManager.shared.log("Reader", "loadSingle \(index) exit: image decode failed")
                 holder(for: index).setFailed("画像デコード失敗")
                 return true
@@ -385,7 +416,6 @@ extension ReaderViewModel {
             // decode を跨いで close された場合は rawImages を再 populate しない
             // (ImageCache への set は global cache なので close 後でも無害、上で実施済み)
             if Task.isCancelled || isClosed { return false }
-            let display = Self.downsample(image)
             noteEstimatedAspect(of: display) // 未ロードセル高さ推定の実測更新
             rawImages[index] = display
             applyFilterPipeline(index: index, raw: display)
@@ -462,7 +492,8 @@ extension ReaderViewModel {
                             let byGidDir = preliminaryURL.deletingLastPathComponent().appendingPathComponent("byGid")
                             try? FileManager.default.removeItem(at: byGidDir.appendingPathComponent("\(gallery.gid)_\(index).webp"))
                         }
-                        let display = Self.downsample(retryImage)
+                        // リトライ経路は稀なので main 実行のまま (シグネチャのみ追従)
+                        let display = Self.downsample(retryImage, targetWidth: Self.displayWidth)
                         rawImages[index] = display
                         applyFilterPipeline(index: index, raw: display)
                         LogManager.shared.log("Reader", "loadSingle \(index) exit: retry success (\(retryImage.pixelWidth)x\(retryImage.pixelHeight))")
