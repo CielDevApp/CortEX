@@ -27,9 +27,19 @@ class FavoritesCache: ObservableObject {
         cacheDir.appendingPathComponent("favorites_timestamp.txt")
     }
 
+    /// デコード済みリストの in-memory 保持。load() の呼び出し元は 20 箇所以上あり、
+    /// SettingsView 等のタブ常駐 body からも毎再評価で呼ばれるため、毎回ディスク読み +
+    /// 全件 JSON デコードするとページめくり毎 (自動保存 publish → body 再評価) に
+    /// main が 100ms 級で凍結していた (2026-06-10 BlockSample 実測)。
+    private var cachedList: [Gallery]?
+
     func load() -> [Gallery] {
-        guard let data = try? Data(contentsOf: cacheFileURL) else { return [] }
-        return (try? JSONDecoder().decode([Gallery].self, from: data)) ?? []
+        if let cachedList { return cachedList }
+        guard let data = try? Data(contentsOf: cacheFileURL),
+              let list = try? JSONDecoder().decode([Gallery].self, from: data) else { return [] }
+        cachedList = list
+        cachedGids = Set(list.map { $0.gid })
+        return list
     }
 
     /// gid 高速参照用の in-memory Set。初回アクセスで一度だけ load() し、save() で同期更新。
@@ -47,18 +57,20 @@ class FavoritesCache: ObservableObject {
     /// 起動時の背景ウォームアップ。初回 containsFast の lazy load (全件 JSON デコード =
     /// 数百件で ~100ms) が main で走るのを防ぐ (2026-06-10 BlockSample 実測)。
     func warmUpInBackground() {
-        guard cachedGids == nil else { return }
+        guard cachedList == nil else { return }
         let url = cacheFileURL
         Task.detached(priority: .utility) {
-            let gids: Set<Int>
+            let list: [Gallery]
             if let data = try? Data(contentsOf: url),
-               let list = try? JSONDecoder().decode([Gallery].self, from: data) {
-                gids = Set(list.map { $0.gid })
+               let decoded = try? JSONDecoder().decode([Gallery].self, from: data) {
+                list = decoded
             } else {
-                gids = []
+                list = []
             }
             await MainActor.run { [weak self] in
-                if self?.cachedGids == nil { self?.cachedGids = gids }
+                guard let self, self.cachedList == nil else { return }
+                self.cachedList = list
+                self.cachedGids = Set(list.map { $0.gid })
             }
         }
     }
@@ -68,6 +80,7 @@ class FavoritesCache: ObservableObject {
         try? data.write(to: cacheFileURL)
         let timestamp = ISO8601DateFormatter().string(from: Date())
         try? timestamp.write(to: timestampFileURL, atomically: true, encoding: .utf8)
+        cachedList = galleries
         cachedGids = Set(galleries.map { $0.gid })
         version += 1
     }

@@ -29,9 +29,18 @@ class NhentaiFavoritesCache: ObservableObject {
 
     // MARK: - 読み書き
 
+    /// デコード済みリストの in-memory 保持 (E-H 側 FavoritesCache と同根、2026-06-10)。
+    /// NhGallery は NhPage 配列を内包しデコードが特に重い (~150ms)。SettingsView 等の
+    /// タブ常駐 body から毎再評価で load() され、ページめくり毎に main が凍結していた。
+    private var cachedList: [NhentaiClient.NhGallery]?
+
     func load() -> [NhentaiClient.NhGallery] {
-        guard let data = try? Data(contentsOf: cacheFileURL) else { return [] }
-        return (try? JSONDecoder().decode([NhentaiClient.NhGallery].self, from: data)) ?? []
+        if let cachedList { return cachedList }
+        guard let data = try? Data(contentsOf: cacheFileURL),
+              let list = try? JSONDecoder().decode([NhentaiClient.NhGallery].self, from: data) else { return [] }
+        cachedList = list
+        cachedIds = Set(list.map { $0.id })
+        return list
     }
 
     /// id 高速参照用の in-memory Set (E-H 側 FavoritesCache.containsFast と同根の対策)。
@@ -44,6 +53,7 @@ class NhentaiFavoritesCache: ObservableObject {
         try? data.write(to: cacheFileURL)
         let timestamp = ISO8601DateFormatter().string(from: Date())
         try? timestamp.write(to: timestampFileURL, atomically: true, encoding: .utf8)
+        cachedList = galleries
         cachedIds = Set(galleries.map { $0.id })
         DispatchQueue.main.async {
             self.version += 1
@@ -85,18 +95,20 @@ class NhentaiFavoritesCache: ObservableObject {
     /// 起動時の背景ウォームアップ (E-H 側と同根)。NhGallery は NhPage 配列を内包するため
     /// 初回デコードが特に重く、main で走ると BlockSample に写るレベルだった。
     func warmUpInBackground() {
-        guard cachedIds == nil else { return }
+        guard cachedList == nil else { return }
         let url = cacheFileURL
         Task.detached(priority: .utility) {
-            let ids: Set<Int>
+            let list: [NhentaiClient.NhGallery]
             if let data = try? Data(contentsOf: url),
-               let list = try? JSONDecoder().decode([NhentaiClient.NhGallery].self, from: data) {
-                ids = Set(list.map { $0.id })
+               let decoded = try? JSONDecoder().decode([NhentaiClient.NhGallery].self, from: data) {
+                list = decoded
             } else {
-                ids = []
+                list = []
             }
             await MainActor.run { [weak self] in
-                if self?.cachedIds == nil { self?.cachedIds = ids }
+                guard let self, self.cachedList == nil else { return }
+                self.cachedList = list
+                self.cachedIds = Set(list.map { $0.id })
             }
         }
     }
