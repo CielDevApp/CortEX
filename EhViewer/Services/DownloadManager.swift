@@ -279,6 +279,21 @@ class DownloadManager: ObservableObject {
             LogManager.shared.log("Download", "abortAllOnLaunch: deleted \(toAbort.count) incomplete downloads, skipping auto-resume")
             return
         }
+        // 2026-06-10 ワンタイム移行: autoSaveOnly フラグ導入以前に自動保存が作った未完了 meta
+        // (フラグ nil) が作品ごとに 1 回ずつ幽霊 resume するのを一括で止める。既存の未完了 meta を
+        // まとめて autoSaveOnly=true 化。本当に再開したい DL はユーザーが DL ボタンを押せば
+        // フラグ解除されて従来どおり再開対象に戻る。
+        let migrationKey = "com.kanayayuutou.cortex.autoSaveOnlyMigrated"
+        if !UserDefaults.standard.bool(forKey: migrationKey) {
+            for (gid, meta) in downloads where !meta.isComplete && meta.autoSaveOnly == nil && meta.isCancelled != true {
+                var m = meta
+                m.autoSaveOnly = true
+                saveMetadata(m)
+                LogManager.shared.log("Download", "migrate gid=\(gid) → autoSaveOnly (幽霊DL根治の一括移行)")
+            }
+            UserDefaults.standard.set(true, forKey: migrationKey)
+        }
+
         // 田中 emergency fix 2026-04-26: NAS に対応 .cortex がある gid は phantom resume 阻止
         let cortexBaseNames: Set<String> = {
             #if targetEnvironment(macCatalyst)
@@ -667,13 +682,24 @@ class DownloadManager: ObservableObject {
         galleryDirectory(gid: gid).appendingPathComponent("metadata.json")
     }
 
+    /// metadata.json 書き出し用の直列背景キュー (per-page 呼び出しが main を塞がないため)
+    private static let metadataQueue = DispatchQueue(label: "downloadmanager.metadata", qos: .utility)
+
     func saveMetadata(_ meta: DownloadedGallery) {
-        let url = metadataURL(gid: meta.gid)
-        ensureDirectory(galleryDirectory(gid: meta.gid))
-        if let data = try? JSONEncoder().encode(meta) {
-            try? data.write(to: url)
-        }
         downloads[meta.gid] = meta
+        let url = metadataURL(gid: meta.gid)
+        let dir = galleryDirectory(gid: meta.gid)
+        // 2026-06-10: encode + 同期 write が毎ページ main で走り (autoSave / BGDL 完了の双方)、
+        // DL 中スクロールのヒッチ源だった → 直列背景キューへ。dict 更新 (UI 状態) は即時、
+        // disk は直列キューなので最新値が必ず最後に書かれ整合する。meta は値型 (Sendable)。
+        Self.metadataQueue.async {
+            if !FileManager.default.fileExists(atPath: dir.path) {
+                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            }
+            if let data = try? JSONEncoder().encode(meta) {
+                try? data.write(to: url)
+            }
+        }
     }
 
     private func loadMetadata(gid: Int) -> DownloadedGallery? {
