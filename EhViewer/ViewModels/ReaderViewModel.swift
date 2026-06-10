@@ -468,11 +468,14 @@ class ReaderViewModel: ObservableObject {
         #endif
     }
 
-    static func downsample(_ image: PlatformImage) -> PlatformImage {
+    /// nonisolated (2026-06-10): UIGraphicsImageRenderer の全面再描画 = 実質フルデコードで、
+    /// main 実行だとページ完了のたびスクロールがヒッチした。UIScreen 依存は targetWidth
+    /// 引数に切り出し (呼び出し元が main で displayWidth を捕捉)、本体は背景キューで実行可能に。
+    nonisolated static func downsample(_ image: PlatformImage, targetWidth: CGFloat) -> PlatformImage {
         #if canImport(UIKit)
         let imgW = CGFloat(image.pixelWidth)
-        guard imgW > displayWidth * 1.2 else { return image }
-        let scale = displayWidth / imgW
+        guard imgW > targetWidth * 1.2 else { return image }
+        let scale = targetWidth / imgW
         let newSize = CGSize(width: imgW * scale, height: CGFloat(image.pixelHeight) * scale)
         let renderer = UIGraphicsImageRenderer(size: newSize)
         return renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: newSize)) }
