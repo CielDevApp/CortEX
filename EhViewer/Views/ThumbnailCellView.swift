@@ -14,38 +14,40 @@ struct ThumbnailCellView: View {
     @State private var image: PlatformImage?
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            if let image {
-                Image(platformImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else if index == 0, let coverURL, let coverImg = ImageCache.shared.image(for: coverURL) {
-                Image(platformImage: coverImg)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else {
-                Color.gray.opacity(0.1)
-            }
-
-            Text("\(index + 1)")
-                .font(.caption2)
-                .fontWeight(.semibold)
-                .padding(.horizontal, 4)
-                .padding(.vertical, 1)
-                .background(.black.opacity(0.6))
-                .foregroundStyle(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 3))
-                .padding(3)
-        }
         // 縦長枠 (田中要望 2026-06-10): 旧・固定高 (cellHeight=150) は iPad の 3 カラム
-        // 可変幅で枠が超横長 (~390x150) になり、ページ上下が大きく見切れて場面が分から
-        // なかった。幅基準の 5:7 (≒漫画ページ縦横比) で枠自体を縦長にし、.fill のまま
-        // クロップをほぼゼロにする。表示モード (.fill) は変えない。
-        .frame(maxWidth: .infinity)
-        .aspectRatio(5.0 / 7.0, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .contentShape(Rectangle())
-        .onTapGesture { onTap() }
+        // 可変幅で枠が超横長 (~390x150) になり、ページ上下が大きく見切れていた。
+        // 幅基準の 5:7 (≒漫画ページ縦横比) で枠自体を縦長に。
+        // サイズ決定はベース図形 (Color) だけが行い、画像は overlay (レイアウト不参加) で
+        // 載せて clip する: 画像を ZStack に直置きすると横長ページ (見開き等) の .fill が
+        // セル自体を押し広げて隣にはみ出すため (田中報告のはみ出しバグ)。
+        Color.gray.opacity(0.1)
+            .aspectRatio(5.0 / 7.0, contentMode: .fit)
+            .frame(maxWidth: .infinity)
+            .overlay {
+                if let image {
+                    Image(platformImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } else if index == 0, let coverURL, let coverImg = ImageCache.shared.image(for: coverURL) {
+                    Image(platformImage: coverImg)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(alignment: .bottomTrailing) {
+                Text("\(index + 1)")
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(.black.opacity(0.6))
+                    .foregroundStyle(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                    .padding(3)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { onTap() }
         .task(id: info?.spriteURL ?? URL(string: "local://\(index)")) {
             await loadThumb()
         }
