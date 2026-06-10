@@ -1,7 +1,10 @@
 import Foundation
 
 /// nhentai API クライアント
-enum NhentaiClient {
+/// nonisolated (2026-06-10 BlockSample 実測): 素の enum は暗黙 @MainActor で、検索/ギャラリー
+/// 取得の JSON デコード (NhPage 数千件級) が main で走りフレーム凍結源だった。EhClient の
+/// nonisolated 化 (f1df811) から漏れていた箇所。static 可変状態は cdnCache のみで NSLock 保護済み。
+nonisolated enum NhentaiClient {
 
     // MARK: - Models
 
