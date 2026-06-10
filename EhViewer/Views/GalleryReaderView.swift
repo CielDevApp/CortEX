@@ -78,30 +78,17 @@ struct GalleryReaderView: View {
                 controlsOverlay
             }
 
-            // スライダー操作中のページプレビュー + 番号オーバーレイ
-            // 横モードでスクラブ中に行き先が分かるよう、サムネ画像を表示 (田中要望 2026-06-09)。
-            // thumbnailImage はスプライトから同期取得 (ネット不要)。未ロード時は holder の本画像、
-            // それも無ければ番号のみにフォールバック。
+            // スライダー操作中のページ番号オーバーレイ
+            // サムネプレビュー版は撤回 (田中指示 2026-06-10): オンラインビューワーは
+            // スプライト未取得でプレビューが出ない。プレビューはライブラリ側だけの話。
             if showPageOverlay {
-                let previewIdx = min(max(Int(sliderValue), 0), max(viewModel.totalPages - 1, 0))
-                VStack(spacing: 10) {
-                    if let thumb = viewModel.thumbnailImage(for: previewIdx) ?? viewModel.holder(for: previewIdx).image {
-                        Image(uiImage: thumb)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(maxWidth: 220, maxHeight: 300)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.4), lineWidth: 1))
-                    }
-                    Text("\(previewIdx + 1) / \(viewModel.totalPages)")
-                        .font(.system(size: 30, weight: .bold))
-                        .foregroundStyle(.white)
-                        .monospacedDigit()
-                }
-                .padding(16)
-                .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-                .transition(.opacity)
+                Text("\(Int(sliderValue) + 1)")
+                    .font(.system(size: 72, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 140, height: 140)
+                    .background(.ultraThinMaterial)
+                    .clipShape(Circle())
+                    .transition(.opacity)
             }
 
             if showFilterPanel && zoomImage == nil {
