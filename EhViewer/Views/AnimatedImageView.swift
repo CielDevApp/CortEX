@@ -18,10 +18,10 @@ fileprivate struct AnimEnhanceConfig: Hashable {
     let personSeg: Bool
     var hasAny: Bool { enhanceFilter || denoise || hdr || personSeg }
     static func fromDefaults() -> AnimEnhanceConfig {
-        let enh = UserDefaults.standard.bool(forKey: "imageEnhanceFilter")
-        let den = UserDefaults.standard.bool(forKey: "denoiseEnabled")
-        let hdrRaw = UserDefaults.standard.bool(forKey: "hdrEnhancement")
-        let seg = UserDefaults.standard.bool(forKey: "animatedPersonSegmentation")
+        let enh = UserDefaults.standard.bool(forKey: UDKey.imageEnhanceFilter)
+        let den = UserDefaults.standard.bool(forKey: UDKey.denoiseEnabled)
+        let hdrRaw = UserDefaults.standard.bool(forKey: UDKey.hdrEnhancement)
+        let seg = UserDefaults.standard.bool(forKey: UDKey.animatedPersonSegmentation)
         return AnimEnhanceConfig(enhanceFilter: enh, denoise: den, hdr: hdrRaw && !enh, personSeg: seg)
     }
 }
@@ -146,7 +146,7 @@ final class AnimatedSourceImageView: UIImageView {
     /// Boomerang の実効有効性: iPhone で thermalState が serious 以上なら強制 OFF。
     /// 状態変化を検知したら理由付きでログ出力 (再発時の追跡用、2026-04-25「いつの間にか切れた」報告)。
     private var effectiveBoomerangEnabled: Bool {
-        let toggleOn = UserDefaults.standard.bool(forKey: "boomerangMode")
+        let toggleOn = UserDefaults.standard.bool(forKey: UDKey.boomerangMode)
         let effective: Bool
         let reason: String
         if !toggleOn {
@@ -277,7 +277,7 @@ final class AnimatedSourceImageView: UIImageView {
             // 2026-04-25 追記: preloadPlayback=ON の時は ▶ タップ時点で全 frame 事前 decode 済み
             // なので retainOnly は完全停止 (evict すると preload 作業が無駄になる)。
             // Tanaka 明示指示: 「全 platform 同じロジック」「234MB (iPhone) / 1.26GB (Mac full) は想定内」。
-            let preloadOn = UserDefaults.standard.bool(forKey: "preloadPlayback")
+            let preloadOn = UserDefaults.standard.bool(forKey: UDKey.preloadPlayback)
             if !preloadOn {
                 #if targetEnvironment(macCatalyst)
                 source.retainOnly(indices: keepSet)
@@ -582,7 +582,7 @@ struct BoomerangWebPView: View {
     @ObservedObject private var coordinator = AnimatedPlaybackCoordinator.shared
     /// PSP PMDVis 方式プリロード: ▶ タップ → 全 frame 並列 decode → 完了後に再生開始。
     /// 初動チェース (~5s) を完全除去する代償に、再生開始まで待機時間 (iPhone 3-4s / Mac 1-2s)。
-    @AppStorage("preloadPlayback") private var preloadPlayback = true
+    @AppStorage(UDKey.preloadPlayback) private var preloadPlayback = true
 
     /// システム逼迫時の共有フラグ (熱 or メモリ警告)。registry から書き換えられる。現状は retained for 将来。
     static var systemDowngraded: Bool = false

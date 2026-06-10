@@ -215,10 +215,10 @@ struct NhentaiDetailView: View {
 
     // MARK: - Tags
 
-    @AppStorage("cortexProtocolUnlocked") private var cortexUnlocked = false
+    @AppStorage(UDKey.cortexProtocolUnlocked) private var cortexUnlocked = false
 
     private func cortexAge(for characterName: String) -> Int? {
-        guard let ages = UserDefaults.standard.dictionary(forKey: "cortex_character_ages") as? [String: Int] else { return nil }
+        guard let ages = UserDefaults.standard.dictionary(forKey: UDKey.cortexCharacterAges) as? [String: Int] else { return nil }
         if let age = ages[characterName] { return age }
         for (name, age) in ages {
             if name.localizedCaseInsensitiveCompare(characterName) == .orderedSame { return age }

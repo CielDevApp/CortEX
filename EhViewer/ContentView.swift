@@ -20,7 +20,7 @@ struct ContentView: View {
     @State private var lockTiles: [LockTile] = []
     @State private var lockScrollOffset: CGFloat = 0
     @StateObject private var lockDisplayLink = DisplayLinkDriver()
-    @AppStorage("appTheme") private var appTheme = 0
+    @AppStorage(UDKey.appTheme) private var appTheme = 0
     @ObservedObject private var safetyMode = SafetyMode.shared
     @ObservedObject private var ecoMode = EcoMode.shared
     @ObservedObject private var networkMonitor = NetworkMonitor.shared
@@ -666,7 +666,7 @@ struct CharacterManagementTab: View {
     @State private var characterStats: [(name: String, count: Int)] = []
     @State private var isAnalyzing = false
     @State private var characterAges: [String: Int] = {
-        (UserDefaults.standard.dictionary(forKey: "cortex_character_ages") as? [String: Int]) ?? [:]
+        (UserDefaults.standard.dictionary(forKey: UDKey.cortexCharacterAges) as? [String: Int]) ?? [:]
     }()
     @State private var ehTagCount = 0
     @State private var nhTagCount = 0
@@ -683,7 +683,7 @@ struct CharacterManagementTab: View {
             if characterStats.isEmpty { analyzeCharacters() }
         }
         .onChange(of: characterAges) { _, newAges in
-            UserDefaults.standard.set(newAges, forKey: "cortex_character_ages")
+            UserDefaults.standard.set(newAges, forKey: UDKey.cortexCharacterAges)
         }
     }
 
@@ -695,7 +695,7 @@ struct CharacterManagementTab: View {
             var ehWith = 0, nhWith = 0
 
             let ehFavs = FavoritesCache.shared.load()
-            let apiTagged = UserDefaults.standard.bool(forKey: "cortex_eh_tags_fetched")
+            let apiTagged = UserDefaults.standard.bool(forKey: UDKey.cortexEhTagsFetched)
             let needsApi = apiTagged ? ehFavs.filter { $0.tags.isEmpty } : ehFavs
             let cached = apiTagged ? ehFavs.filter { !$0.tags.isEmpty } : []
 
@@ -711,7 +711,7 @@ struct CharacterManagementTab: View {
                     if let tags = tagMap[updated[i].gid], !tags.isEmpty { updated[i].tags = tags }
                 }
                 FavoritesCache.shared.save(updated)
-                UserDefaults.standard.set(true, forKey: "cortex_eh_tags_fetched")
+                UserDefaults.standard.set(true, forKey: UDKey.cortexEhTagsFetched)
                 for (_, tags) in tagMap {
                     let chars = tags.filter { $0.hasPrefix("character:") }
                     if !chars.isEmpty { ehWith += 1 }

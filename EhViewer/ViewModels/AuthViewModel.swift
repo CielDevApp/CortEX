@@ -17,9 +17,9 @@ class AuthViewModel: ObservableObject {
             passHash = creds.passHash
             igneous = creds.igneous ?? ""
         } else {
-            memberID = UserDefaults.standard.string(forKey: "lastMemberID") ?? ""
-            passHash = UserDefaults.standard.string(forKey: "lastPassHash") ?? ""
-            igneous = UserDefaults.standard.string(forKey: "lastIgneous") ?? ""
+            memberID = UserDefaults.standard.string(forKey: UDKey.lastMemberID) ?? ""
+            passHash = UserDefaults.standard.string(forKey: UDKey.lastPassHash) ?? ""
+            igneous = UserDefaults.standard.string(forKey: UDKey.lastIgneous) ?? ""
         }
     }
 
@@ -61,9 +61,9 @@ class AuthViewModel: ObservableObject {
     func logout() {
         // ログアウト前にバックアップ（次回ログイン時の自動入力用）
         if let creds = CookieManager.loadCredentials() {
-            UserDefaults.standard.set(creds.memberID, forKey: "lastMemberID")
-            UserDefaults.standard.set(creds.passHash, forKey: "lastPassHash")
-            UserDefaults.standard.set(creds.igneous ?? "", forKey: "lastIgneous")
+            UserDefaults.standard.set(creds.memberID, forKey: UDKey.lastMemberID)
+            UserDefaults.standard.set(creds.passHash, forKey: UDKey.lastPassHash)
+            UserDefaults.standard.set(creds.igneous ?? "", forKey: UDKey.lastIgneous)
         }
         CookieManager.clearCredentials()
         isLoggedIn = false

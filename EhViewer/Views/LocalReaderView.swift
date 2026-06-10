@@ -33,15 +33,15 @@ struct LocalReaderView: View {
     @State private var availablePages: Set<Int> = []
     @State private var pageCheckTimer: Timer?
     @Environment(\.verticalSizeClass) private var verticalSizeClass
-    @AppStorage("downloadQualityMode") private var storedDlMode = 2
-    @AppStorage("imageEnhanceFilter") private var storedEnhanceFilter = false
-    @AppStorage("hdrEnhancement") private var storedHDR = false
-    @AppStorage("aiImageProcessing") private var storedAI = false
-    @AppStorage("denoiseEnabled") private var storedDenoise = false
-    @AppStorage("noFilterMode") private var storedNoFilter = false
-    @AppStorage("readerDirection") private var readerDirection = 0
-    @AppStorage("readingOrder") private var readingOrder = 1
-    @AppStorage("animPlaybackMode") private var animPlaybackMode = "webp"
+    @AppStorage(UDKey.downloadQualityMode) private var storedDlMode = 2
+    @AppStorage(UDKey.imageEnhanceFilter) private var storedEnhanceFilter = false
+    @AppStorage(UDKey.hdrEnhancement) private var storedHDR = false
+    @AppStorage(UDKey.aiImageProcessing) private var storedAI = false
+    @AppStorage(UDKey.denoiseEnabled) private var storedDenoise = false
+    @AppStorage(UDKey.noFilterMode) private var storedNoFilter = false
+    @AppStorage(UDKey.readerDirection) private var readerDirection = 0
+    @AppStorage(UDKey.readingOrder) private var readingOrder = 1
+    @AppStorage(UDKey.animPlaybackMode) private var animPlaybackMode = "webp"
     @State private var horizontalPage: Int
     /// 縦モードでトップに見えてるセル id を Apple 公式 .scrollPosition(id:) で追跡。
     /// 旧実装の ForEach.onAppear 上書きは mount 順非決定 → スライダー値が「明後日」になる欠陥があった。
@@ -330,7 +330,7 @@ struct LocalReaderView: View {
             // 自動栞 (Phase R-1): 明示ページ未指定 & 非ライブ & 栞あり → 続き/最初 選択ダイアログ
             if initialPage == 0 && !isLiveDownload && !didOfferResume {
                 didOfferResume = true
-                let saved = UserDefaults.standard.integer(forKey: "localReaderBookmark_\(meta.gid)")
+                let saved = UserDefaults.standard.integer(forKey: UDKey.localReaderBookmark(gid: meta.gid))
                 if saved > 0 && saved < meta.pageCount {
                     pendingResumePage = saved
                     showResumeDialog = true
@@ -605,7 +605,7 @@ struct LocalReaderView: View {
                 if !isSliding {
                     sliderValue = Double(new)
                     // 自動栞 (Phase R-1): ライブラリ作品の最終閲覧ページを保存 (gid キー)
-                    UserDefaults.standard.set(new, forKey: "localReaderBookmark_\(meta.gid)")
+                    UserDefaults.standard.set(new, forKey: UDKey.localReaderBookmark(gid: meta.gid))
                 }
                 // enhancedImages LRU: 400 ページスクロールで dict 無制限膨張 → メモリ圧迫。
                 // currentIndex 前後 ±30 ページ外のエントリを削除して常時 ~60 entry に抑制。

@@ -11,7 +11,7 @@ final class HDREnhancer: @unchecked Sendable {
     private let context = CIContext(options: [.useSoftwareRenderer: false])
 
     nonisolated var isEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "hdrEnhancement")
+        UserDefaults.standard.bool(forKey: UDKey.hdrEnhancement)
     }
 
     /// CGImage を直接受け取る版 (アニメフレーム処理用、UIImage 経由しない)。

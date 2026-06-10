@@ -146,7 +146,7 @@ final class LanczosUpscaler: ImageUpscaler, @unchecked Sendable {
     // MARK: - 画像補正フィルタ（独立トグル）
 
     nonisolated var isEnhanceFilterEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "imageEnhanceFilter")
+        UserDefaults.standard.bool(forKey: UDKey.imageEnhanceFilter)
     }
 
     /// CG→CG 版 NE 人物セグメンテーション (アニメ per-frame 用)。UIImage roundtrip なし。

@@ -10,7 +10,7 @@ struct AnimationModeDialog: ViewModifier {
     /// ユーザーが選んだモードを親に通知 (@AppStorage 経由で「次回から聞かない」が OFF の場合は保存しない)
     let onChoose: (GalleryReaderMode, _ dontAskAgain: Bool) -> Void
 
-    @AppStorage("animationDialogDontAskDefault") private var dontAskAgainDefault = true
+    @AppStorage(UDKey.animationDialogDontAskDefault) private var dontAskAgainDefault = true
     @State private var dontAskAgain: Bool = true
 
     func body(content: Content) -> some View {

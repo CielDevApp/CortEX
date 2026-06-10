@@ -270,12 +270,12 @@ class DownloadManager: ObservableObject {
         // 田中要望 2026-05-04: 起動時に全未完了 DL を強制中止する救済 flag。
         // PlistBuddy / defaults write で設定可能、launch 後 1 回だけ発火して clear。
         // 「消したり中止押したら絶対止まったり終わる設計」確保のため。
-        if UserDefaults.standard.bool(forKey: "com.kanayayuutou.cortex.abortAllOnLaunch") {
+        if UserDefaults.standard.bool(forKey: UDKey.abortAllOnLaunch) {
             let toAbort = downloads.filter { !$0.value.isComplete }.map { $0.key }
             for gid in toAbort {
                 deleteDownload(gid: gid)
             }
-            UserDefaults.standard.removeObject(forKey: "com.kanayayuutou.cortex.abortAllOnLaunch")
+            UserDefaults.standard.removeObject(forKey: UDKey.abortAllOnLaunch)
             LogManager.shared.log("Download", "abortAllOnLaunch: deleted \(toAbort.count) incomplete downloads, skipping auto-resume")
             return
         }
@@ -283,7 +283,7 @@ class DownloadManager: ObservableObject {
         // (フラグ nil) が作品ごとに 1 回ずつ幽霊 resume するのを一括で止める。既存の未完了 meta を
         // まとめて autoSaveOnly=true 化。本当に再開したい DL はユーザーが DL ボタンを押せば
         // フラグ解除されて従来どおり再開対象に戻る。
-        let migrationKey = "com.kanayayuutou.cortex.autoSaveOnlyMigrated"
+        let migrationKey = UDKey.autoSaveOnlyMigrated
         if !UserDefaults.standard.bool(forKey: migrationKey) {
             for (gid, meta) in downloads where !meta.isComplete && meta.autoSaveOnly == nil && meta.isCancelled != true {
                 var m = meta
@@ -830,7 +830,7 @@ class DownloadManager: ObservableObject {
 
     /// オンライン閲覧中の画像データをDLフォルダに保存（バックグラウンド）
     func autoSavePage(gid: Int, token: String, title: String, pageCount: Int, page: Int, imageData: Data) {
-        guard UserDefaults.standard.bool(forKey: "autoSaveOnRead") else { return }
+        guard UserDefaults.standard.bool(forKey: UDKey.autoSaveOnRead) else { return }
         // 「このまま閉じる」で deleteDownload 直後、in-flight Task がゾンビ復活させる経路をブロック
         guard !recentlyDeletedGids.contains(gid) else { return }
 
@@ -899,7 +899,7 @@ class DownloadManager: ObservableObject {
 
     /// カバー画像の自動保存
     func autoSaveCover(gid: Int, imageData: Data) {
-        guard UserDefaults.standard.bool(forKey: "autoSaveOnRead") else { return }
+        guard UserDefaults.standard.bool(forKey: UDKey.autoSaveOnRead) else { return }
         guard !recentlyDeletedGids.contains(gid) else { return }
         let coverPath = coverFilePath(gid: gid)
         guard !fileManager.fileExists(atPath: coverPath.path) else { return }

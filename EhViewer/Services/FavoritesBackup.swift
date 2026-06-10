@@ -95,14 +95,14 @@ enum FavoritesBackup {
         let fileURL = dir.appendingPathComponent(fileName)
         try? data.write(to: fileURL)
 
-        UserDefaults.standard.set(true, forKey: "phoenixBackupDone")
+        UserDefaults.standard.set(true, forKey: UDKey.phoenixBackupDone)
         LogManager.shared.log("App", "phoenix export: \(entries.count) E-H + \(nhEntries.count) nhentai → \(fileName)")
         return fileURL
     }
 
     /// バックアップ済みかどうか
     static var hasBackup: Bool {
-        UserDefaults.standard.bool(forKey: "phoenixBackupDone")
+        UserDefaults.standard.bool(forKey: UDKey.phoenixBackupDone)
     }
 
     // MARK: - インポート

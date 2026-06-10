@@ -84,7 +84,7 @@ class ReaderViewModel: ObservableObject {
     }
 
     var qualityMode: Int {
-        UserDefaults.standard.integer(forKey: "onlineQualityMode")
+        UserDefaults.standard.integer(forKey: UDKey.onlineQualityMode)
     }
     var isOfflineMode: Bool { qualityMode <= 1 }
 
@@ -264,7 +264,7 @@ class ReaderViewModel: ObservableObject {
     func jumpTo(page: Int) {
         let clamped = max(0, min(page, totalPages - 1))
         // 縦モードのみscrollTarget（横モードはhorizontalPageで制御）
-        let direction = UserDefaults.standard.integer(forKey: "readerDirection")
+        let direction = UserDefaults.standard.integer(forKey: UDKey.readerDirection)
         if direction == 0 {
             scrollTarget = clamped
         }
@@ -384,19 +384,19 @@ class ReaderViewModel: ObservableObject {
     }
 
     func switchToUpscaleMode() {
-        UserDefaults.standard.set(1, forKey: "onlineQualityMode")
+        UserDefaults.standard.set(1, forKey: UDKey.onlineQualityMode)
         resetAllState()
         reloadAround()
     }
 
     func switchToLowQualityMode() {
-        UserDefaults.standard.set(0, forKey: "onlineQualityMode")
+        UserDefaults.standard.set(0, forKey: UDKey.onlineQualityMode)
         resetAllState()
         reloadAround()
     }
 
     func switchToStandardQuality() {
-        UserDefaults.standard.set(2, forKey: "onlineQualityMode")
+        UserDefaults.standard.set(2, forKey: UDKey.onlineQualityMode)
         resetAllState()
         hasLoadedImagePages = false
         trackTask(priority: .userInitiated) { [weak self] in

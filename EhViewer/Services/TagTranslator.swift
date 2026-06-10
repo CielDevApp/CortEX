@@ -5,7 +5,7 @@ enum TagTranslator {
 
     /// 設定でON/OFF
     static var isEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "tagTranslation")
+        UserDefaults.standard.bool(forKey: UDKey.tagTranslation)
     }
 
     /// 日本語入力をE-Hentaiタグに変換。マッチしないワードはそのまま返す。

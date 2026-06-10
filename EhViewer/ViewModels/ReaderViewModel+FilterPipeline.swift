@@ -25,10 +25,10 @@ extension ReaderViewModel {
             let enhanceFilterOn = LanczosUpscaler.shared.isEnhanceFilterEnabled
             let hdrOn = HDREnhancer.shared.isEnabled
             let mode = self.qualityMode
-            let useAI = UserDefaults.standard.bool(forKey: "aiImageProcessing")
+            let useAI = UserDefaults.standard.bool(forKey: UDKey.aiImageProcessing)
                 && CoreMLImageProcessor.shared.modelAvailable
-            let denoiseOn = UserDefaults.standard.bool(forKey: "denoiseEnabled")
-            let noFilter = UserDefaults.standard.bool(forKey: "noFilterMode")
+            let denoiseOn = UserDefaults.standard.bool(forKey: UDKey.denoiseEnabled)
+            let noFilter = UserDefaults.standard.bool(forKey: UDKey.noFilterMode)
 
             // 無補正モード
             if noFilter {

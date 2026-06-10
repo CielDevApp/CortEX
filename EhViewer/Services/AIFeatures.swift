@@ -32,7 +32,7 @@ final class AIFeatures: ObservableObject {
 
     @Published var isAvailable = false
     @Published var isEnabled: Bool {
-        didSet { UserDefaults.standard.set(isEnabled, forKey: "aiGenreClassification") }
+        didSet { UserDefaults.standard.set(isEnabled, forKey: UDKey.aiGenreClassification) }
     }
 
     /// おすすめタグ（履歴分析結果）
@@ -41,7 +41,7 @@ final class AIFeatures: ObservableObject {
     @Published var genreCache: [Int: String] = [:] // gid → genre
 
     private init() {
-        self.isEnabled = UserDefaults.standard.bool(forKey: "aiGenreClassification")
+        self.isEnabled = UserDefaults.standard.bool(forKey: UDKey.aiGenreClassification)
         checkAvailability()
     }
 

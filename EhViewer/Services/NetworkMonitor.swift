@@ -14,8 +14,8 @@ final class NetworkMonitor: ObservableObject {
 
     /// モバイルデータでのDL自動許可
     var allowCellularDownload: Bool {
-        get { UserDefaults.standard.bool(forKey: "allowCellularDownload") }
-        set { UserDefaults.standard.set(newValue, forKey: "allowCellularDownload") }
+        get { UserDefaults.standard.bool(forKey: UDKey.allowCellularDownload) }
+        set { UserDefaults.standard.set(newValue, forKey: UDKey.allowCellularDownload) }
     }
 
     private let monitor = NWPathMonitor()
