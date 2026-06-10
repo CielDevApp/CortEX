@@ -277,7 +277,7 @@ class ReaderViewModel: ObservableObject {
                         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
                             SpriteCache.imageQueue.async {
                                 if let ciImage = CIImage(data: data),
-                                   let cgImage = SpriteCache.ciContext.createCGImage(ciImage, from: ciImage.extent) {
+                                   let cgImage = SpriteCache.makeDisplayCGImage(ciImage) {
                                     SpriteCache.shared.setSprite(PlatformImage(cgImage: cgImage), for: info.spriteURL)
                                 }
                                 cont.resume()
@@ -540,7 +540,7 @@ class ReaderViewModel: ObservableObject {
                 f.setValue(0.4, forKey: kCIInputSharpnessKey)
                 if let out = f.outputImage { ciImage = out }
             }
-            guard let cg = ctx.createCGImage(ciImage, from: ciImage.extent) else { return nil }
+            guard let cg = ctx.createCGImage(ciImage, from: ciImage.extent, format: .RGBA8, colorSpace: SpriteCache.displayColorSpace) else { return nil }
             return UIImage(cgImage: cg)
         }
         #else

@@ -725,7 +725,7 @@ struct NhentaiReaderView: View {
         return await withCheckedContinuation { (cont: CheckedContinuation<PlatformImage?, Never>) in
             SpriteCache.imageQueue.async {
                 if let ciImage = CIImage(data: data),
-                   let cgImage = SpriteCache.ciContext.createCGImage(ciImage, from: ciImage.extent) {
+                   let cgImage = SpriteCache.makeDisplayCGImage(ciImage) {
                     cont.resume(returning: PlatformImage(cgImage: cgImage))
                 } else {
                     cont.resume(returning: nil)

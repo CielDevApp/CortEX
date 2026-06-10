@@ -224,7 +224,7 @@ class FavoritesViewModel: ObservableObject {
                             // GPU経由デコード（CachedImageViewと同じパターン）
                             let ciCtx = SpriteCache.ciContext
                             if let ciImage = CIImage(data: data),
-                               let cgImage = ciCtx.createCGImage(ciImage, from: ciImage.extent) {
+                               let cgImage = SpriteCache.makeDisplayCGImage(ciImage) {
                                 ImageCache.shared.setThumb(UIImage(cgImage: cgImage), for: url)
                                 return
                             }
