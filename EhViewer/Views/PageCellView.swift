@@ -129,7 +129,10 @@ struct PageCellView: View {
                     .background(.black.opacity(0.6)).clipShape(Capsule())
                     .padding(.bottom, 14)
                 }
-            } else if isPlaceholder && qualityMode >= 2 && holder.image != nil {
+            } else if holder.isPlaceholder && qualityMode >= 2 && holder.image != nil {
+                // 2026-06-10: 親渡しの isPlaceholder 定数は rawImages (非 @Published) 更新で
+                // 再評価されず、標準画質到着後もぐるぐるだけ残留した。進捗バーと同じく
+                // holder の @Published フラグ (setLoaded がフル画像で false に落とす) を見る。
                 VStack {
                     Spacer()
                     ProgressView().scaleEffect(0.6).tint(.white)
@@ -224,7 +227,9 @@ struct PageCellView: View {
                             .background(.black.opacity(0.6)).clipShape(Capsule())
                             .padding(.bottom, 14)
                         }
-                    } else if isPlaceholder && qualityMode >= 2 {
+                    } else if holder.isPlaceholder && qualityMode >= 2 {
+                        // 2026-06-10: 同上、定数 isPlaceholder はぐるぐる残留の真因
+                        // (rawImages 非 @Published で親が再評価されない)。holder 側を見る。
                         VStack {
                             Spacer()
                             ProgressView().scaleEffect(0.6).tint(.white)
