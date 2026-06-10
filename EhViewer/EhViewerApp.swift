@@ -251,6 +251,8 @@ struct EhViewerApp: App {
         WindowGroup {
             ContentView()
             .task {
+                // main 停滞の定量化 (250ms 超のみログ → スクロールヒッチ調査用)
+                MainStallMonitor.shared.start()
                 FavoritesViewModel.prefetchCachedFavorites()
                 Task.detached(priority: .utility) {
                     ImageCache.shared.prewarmRecentThumbs()
