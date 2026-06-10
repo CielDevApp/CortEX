@@ -97,9 +97,10 @@ final class LogManager: ObservableObject {
                 }
             }
         }
-        // 常にprint（Xcodeコンソール用）
-        print("[\(category)] \(message)")
-        // ファイルにも書き出し（Mac Catalyst で stdout 消失しても確認可能）
+        // per-line の print() は廃止 (2026-06-10): 実機の stdout は OS ログパイプ同期書込で
+        // main をブロックし得るリスクの割に、実運用のログ確認は全てファイル経由 (devicectl pull)。
+        // Xcode コンソールが必要な場合のみ一時的に復活させること。
+        // print("[\(category)] \(message)")
         let timeStr = Self.timeFormatter.string(from: Date())
         appendToFile("[\(timeStr)] [\(category)] \(message)")
 
@@ -186,30 +187,35 @@ extension UIDevice {
 #endif
 
 /// main thread の停滞検出 (2026-06-10 スクロールヒッチ定量化用)。
-/// 50ms 周期の main timer の実発火間隔を測り、250ms 超の遅延 = main が塞がれた証拠
-/// として LogManager に記録する。ログ量は停滞時のみなので常時有効でも肥大しない。
+/// v2 (CADisplayLink 版): 旧実装 (DispatchSourceTimer) は UIScrollView スクロール中に
+/// main が暇でも GCD main キューの配送が遅れて 200ms 級の偽 stall を量産した
+/// (Time Profiler 実測: スクロール 50 秒で main busy 0.25 秒なのに stall 90 件超)。
+/// CADisplayLink は common modes で毎フレーム発火するため、コールバック間隔の開き =
+/// 本当に描画フレームが落ちた証拠になる。
 final class MainStallMonitor {
     static let shared = MainStallMonitor()
-    private var timer: DispatchSourceTimer?
-    private var last = CFAbsoluteTimeGetCurrent()
+    #if canImport(UIKit)
+    private var link: CADisplayLink?
+    private var last: CFTimeInterval = 0
 
     func start() {
-        guard timer == nil else { return }
-        last = CFAbsoluteTimeGetCurrent()
-        let t = DispatchSource.makeTimerSource(queue: .main)
-        t.schedule(deadline: .now() + .milliseconds(50), repeating: .milliseconds(50), leeway: .milliseconds(10))
-        t.setEventHandler { [weak self] in
-            guard let self else { return }
-            let now = CFAbsoluteTimeGetCurrent()
-            let gap = now - self.last
-            self.last = now
-            // 100ms 超 = 体感カクつき域 (60fps で 6 フレーム落ち)。250ms 閾値では
-            // スクロール中の細かいヒッチが拾えなかった (2026-06-10 実測) ため引き下げ。
-            if gap > 0.1 {
-                LogManager.shared.log("MainStall", "\(Int(gap * 1000))ms")
-            }
-        }
-        t.resume()
-        timer = t
+        guard link == nil else { return }
+        let l = CADisplayLink(target: self, selector: #selector(tick))
+        l.add(to: .main, forMode: .common)
+        link = l
     }
+
+    @objc private func tick(_ l: CADisplayLink) {
+        let now = l.timestamp
+        defer { last = now }
+        guard last > 0 else { return }
+        let gap = now - last
+        // 100ms 超 = 6 フレーム以上の実フレーム落ち (バックグラウンド復帰の巨大値は無視)
+        if gap > 0.1 && gap < 10 {
+            LogManager.shared.log("MainStall", "\(Int(gap * 1000))ms")
+        }
+    }
+    #else
+    func start() {}
+    #endif
 }
