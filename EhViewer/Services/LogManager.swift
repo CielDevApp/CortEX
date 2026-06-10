@@ -213,8 +213,9 @@ final class MainStallMonitor {
         defer { last = now }
         guard last > 0 else { return }
         let gap = now - last
-        // 100ms 超 = 6 フレーム以上の実フレーム落ち (バックグラウンド復帰の巨大値は無視)
-        if gap > 0.1 && gap < 10 {
+        // 50ms 超から記録 (スクロールゴール第二基準「30秒で50ms超5回以内」の計測用、
+        // 2026-06-10 閾値引き下げ)。バックグラウンド復帰の巨大値は無視。
+        if gap > 0.05 && gap < 10 {
             LogManager.shared.log("MainStall", "\(Int(gap * 1000))ms")
         }
     }
