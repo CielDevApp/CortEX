@@ -587,7 +587,7 @@ struct GalleryReaderView: View {
             },
             manualPlayForAnimated: true,
             // 未ロードセルの高さを実ページ想定高さに安定化 (iOS 縦のみ有効、Catalyst は cell 側で除外)
-            estimatedAspect: viewModel.estimatedPageAspect
+            estimatedAspect: viewModel.pageAspect(for: index)
         )
         #else
         PageCellView(
@@ -599,7 +599,7 @@ struct GalleryReaderView: View {
             onTap: { img in zoomImage = img },
             onRetry: { viewModel.retry(index: index) },
             isHorizontalMode: effectiveDirection == 1,
-            estimatedAspect: viewModel.estimatedPageAspect
+            estimatedAspect: viewModel.pageAspect(for: index)
         )
         #endif
     }

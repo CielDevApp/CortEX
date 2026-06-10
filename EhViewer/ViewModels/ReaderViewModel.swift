@@ -43,6 +43,22 @@ class ReaderViewModel: ObservableObject {
     /// 初期値 1.42 ≒ 一般的な漫画ページ。@Published にしない: 値更新のたびに既存セルを
     /// 強制再レイアウトすると逆に位置ズレを誘発するため、セル再生成時に反映されれば十分。
     var estimatedPageAspect: CGFloat = 1.42
+
+    /// ページ実寸ベースの縦横比 (スプライトサムネ寸法 = 実ページと同比)。
+    /// 慣性スクロール中に placeholder (推定 1.42) → 実画像到着で高さが跳ねて
+    /// 「角つく/止まる」体感になっていた (田中報告 2026-06-10: DL済み範囲では起きない =
+    /// 表示前に実寸が確定しているから)。サムネ情報があるページは最初から正確な高さで置く。
+    func pageAspect(for index: Int) -> CGFloat {
+        let info: ThumbnailInfo?
+        if index < thumbnails.count, thumbnails[index].index == index {
+            info = thumbnails[index]
+        } else {
+            info = thumbnails.first(where: { $0.index == index })
+        }
+        guard let info, info.width > 0 else { return estimatedPageAspect }
+        let aspect = info.height / info.width
+        return (0.3...3.0).contains(aspect) ? aspect : estimatedPageAspect
+    }
     /// サムネ placeholder の背景読込中ページ (重複起動防止)
     var thumbPlaceholderLoading: Set<Int> = []
     /// evictDistantHolders の前回掃引中心。毎セル onAppear の全キー走査を抑制する
