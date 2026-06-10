@@ -141,7 +141,7 @@ extension ReaderViewModel {
                     guard FileManager.default.fileExists(atPath: localPath.path),
                           let data = try? Data(contentsOf: localPath), !data.isEmpty,
                           let ciImage = CIImage(data: data),
-                          let cgImage = SpriteCache.ciContext.createCGImage(ciImage, from: ciImage.extent) else {
+                          let cgImage = SpriteCache.makeDisplayCGImage(ciImage) else {
                         cont.resume(returning: nil)
                         return
                     }
@@ -416,7 +416,7 @@ extension ReaderViewModel {
             let decoded: (full: PlatformImage, display: PlatformImage)? = await withCheckedContinuation { (cont: CheckedContinuation<(full: PlatformImage, display: PlatformImage)?, Never>) in
                 SpriteCache.imageQueue.async {
                     if let ciImage = CIImage(data: imageData),
-                       let cgImage = SpriteCache.ciContext.createCGImage(ciImage, from: ciImage.extent) {
+                       let cgImage = SpriteCache.makeDisplayCGImage(ciImage) {
                         let full = PlatformImage(cgImage: cgImage)
                         cont.resume(returning: (full, Self.downsample(full, targetWidth: targetW)))
                     } else {
@@ -487,7 +487,7 @@ extension ReaderViewModel {
                     let retryImage: PlatformImage? = await withCheckedContinuation { (cont: CheckedContinuation<PlatformImage?, Never>) in
                         SpriteCache.imageQueue.async {
                             if let ciImage = CIImage(data: imageData),
-                               let cgImage = SpriteCache.ciContext.createCGImage(ciImage, from: ciImage.extent) {
+                               let cgImage = SpriteCache.makeDisplayCGImage(ciImage) {
                                 cont.resume(returning: PlatformImage(cgImage: cgImage))
                             } else {
                                 cont.resume(returning: nil)
@@ -551,7 +551,7 @@ extension ReaderViewModel {
                                     let img: PlatformImage? = await withCheckedContinuation { cont in
                                         SpriteCache.imageQueue.async {
                                             if let ci = CIImage(data: data),
-                                               let cg = SpriteCache.ciContext.createCGImage(ci, from: ci.extent) {
+                                               let cg = SpriteCache.makeDisplayCGImage(ci) {
                                                 cont.resume(returning: PlatformImage(cgImage: cg))
                                             } else { cont.resume(returning: nil) }
                                         }
@@ -724,7 +724,7 @@ extension ReaderViewModel {
                             let img: PlatformImage? = await withCheckedContinuation { cont in
                                 SpriteCache.imageQueue.async {
                                     if let ci = CIImage(data: data),
-                                       let cg = SpriteCache.ciContext.createCGImage(ci, from: ci.extent) {
+                                       let cg = SpriteCache.makeDisplayCGImage(ci) {
                                         cont.resume(returning: PlatformImage(cgImage: cg))
                                     } else { cont.resume(returning: nil) }
                                 }

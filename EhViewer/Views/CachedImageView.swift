@@ -95,7 +95,7 @@ struct CachedImageView: View {
                 // GPU経由デコード: CIImage → CIContext(GPU) → CGImage
                 let ciCtx = SpriteCache.ciContext
                 if let ciImage = CIImage(data: data),
-                   let cgImage = ciCtx.createCGImage(ciImage, from: ciImage.extent) {
+                   let cgImage = SpriteCache.makeDisplayCGImage(ciImage) {
                     let gpuDecoded = UIImage(cgImage: cgImage)
                     let decMs = (CFAbsoluteTimeGetCurrent() - decStart) * 1000
                     let totalMs = (CFAbsoluteTimeGetCurrent() - totalStart) * 1000

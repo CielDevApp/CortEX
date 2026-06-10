@@ -518,7 +518,7 @@ struct GalleryScrollList: View {
                                                 let data = try await EhClient.shared.fetchThumbData(url: url, host: .exhentai)
                                                 let ciCtx = SpriteCache.ciContext
                                                 if let ciImage = CIImage(data: data),
-                                                   let cgImage = ciCtx.createCGImage(ciImage, from: ciImage.extent) {
+                                                   let cgImage = SpriteCache.makeDisplayCGImage(ciImage) {
                                                     let img = UIImage(cgImage: cgImage)
                                                     ImageCache.shared.setThumb(img, for: url)
                                                 } else if let img = PlatformImage(data: data) {
@@ -642,7 +642,7 @@ struct GalleryScrollList: View {
                                         #if canImport(UIKit)
                                         let ciCtx = SpriteCache.ciContext
                                         if let ciImage = CIImage(data: data),
-                                           let cgImage = ciCtx.createCGImage(ciImage, from: ciImage.extent) {
+                                           let cgImage = SpriteCache.makeDisplayCGImage(ciImage) {
                                             let img = UIImage(cgImage: cgImage)
                                             ImageCache.shared.setThumb(img, for: url)
                                         } else if let img = PlatformImage(data: data) {

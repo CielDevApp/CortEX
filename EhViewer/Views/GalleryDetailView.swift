@@ -19,6 +19,16 @@ final class SpriteCache {
         CIContext(options: [.useSoftwareRenderer: false, .cacheIntermediates: false])
     }()
 
+    /// 表示用 CGImage 生成 (RGBA8 / sRGB 固定)。
+    /// format 未指定の createCGImage は CIContext の作業フォーマット (拡張レンジ) の
+    /// CGImage を返し、画面に出す瞬間の CA commit で main thread がピクセル変換を行う
+    /// (1 ページ 100-200ms の MainStall = スクロール重さの真因、2026-06-10 実測)。
+    /// 表示前提の画像は必ずこちらを使うこと。
+    static let displayColorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
+    static func makeDisplayCGImage(_ ci: CIImage) -> CGImage? {
+        ciContext.createCGImage(ci, from: ci.extent, format: .RGBA8, colorSpace: displayColorSpace)
+    }
+
     /// 専用スレッド: 画像処理を協調プールから完全分離（UIスレッド飢餓防止）
     static let imageQueue = DispatchQueue(label: "sprite-processing", qos: .userInitiated)
 
@@ -53,7 +63,7 @@ final class SpriteCache {
         let path = Self.spriteDir.appendingPathComponent(Self.hashName(url.absoluteString))
         guard let data = try? Data(contentsOf: path) else { return nil }
         if let ci = CIImage(data: data),
-           let cg = Self.ciContext.createCGImage(ci, from: ci.extent) {
+           let cg = Self.makeDisplayCGImage(ci) {
             let img = PlatformImage(cgImage: cg)
             sprites.setObject(img, forKey: url as NSURL)
             return img
@@ -92,7 +102,7 @@ final class SpriteCache {
         let path = Self.croppedDir.appendingPathComponent(Self.hashName(key))
         guard let data = try? Data(contentsOf: path) else { return nil }
         if let ci = CIImage(data: data),
-           let cg = Self.ciContext.createCGImage(ci, from: ci.extent) {
+           let cg = Self.makeDisplayCGImage(ci) {
             let img = PlatformImage(cgImage: cg)
             croppedCache.setObject(img, forKey: key as NSString)
             return img
@@ -1112,7 +1122,7 @@ struct GalleryDetailView: View {
                         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
                             SpriteCache.imageQueue.async {
                                 if let ciImage = CIImage(data: data),
-                                   let cgImage = SpriteCache.ciContext.createCGImage(ciImage, from: ciImage.extent) {
+                                   let cgImage = SpriteCache.makeDisplayCGImage(ciImage) {
                                     let image = PlatformImage(cgImage: cgImage)
                                     SpriteCache.shared.setSprite(image, for: url)
                                 }
@@ -1186,7 +1196,7 @@ struct GalleryDetailView: View {
                 sprite = await withCheckedContinuation { (cont: CheckedContinuation<PlatformImage?, Never>) in
                     SpriteCache.imageQueue.async {
                         if let ciImage = CIImage(data: data),
-                           let cgImage = SpriteCache.ciContext.createCGImage(ciImage, from: ciImage.extent) {
+                           let cgImage = SpriteCache.makeDisplayCGImage(ciImage) {
                             let img = PlatformImage(cgImage: cgImage)
                             cache.setSprite(img, for: info.spriteURL)
                             cont.resume(returning: img)
@@ -1235,7 +1245,7 @@ struct GalleryDetailView: View {
                     output = output.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
                 }
 
-                guard let rendered = SpriteCache.ciContext.createCGImage(output, from: output.extent) else {
+                guard let rendered = SpriteCache.makeDisplayCGImage(output) else {
                     cont.resume(returning: nil); return
                 }
                 cont.resume(returning: PlatformImage(cgImage: rendered))
