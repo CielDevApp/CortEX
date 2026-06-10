@@ -1115,6 +1115,14 @@ struct DownloadsView: View {
                 ForEach(items) { meta in
                     libraryGridCell(meta: meta)
                         .contextMenu {
+                            // 自動保存作品の救済: 昇格すれば上限(5作品)の自動削除対象から外れる
+                            if meta.autoSaveOnly == true {
+                                Button {
+                                    manager.promoteAutoSavedToDownload(gid: meta.gid)
+                                } label: {
+                                    Label("正式にダウンロード登録", systemImage: "arrow.down.circle")
+                                }
+                            }
                             Button {
                                 previewMeta = meta
                             } label: {
