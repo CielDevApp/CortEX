@@ -496,14 +496,14 @@ class ReaderViewModel: ObservableObject {
 
     // MARK: - URLキャッシュ
 
-    static func urlCacheDir() -> URL {
+    nonisolated static func urlCacheDir() -> URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let dir = docs.appendingPathComponent("EhViewer/urlcache", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
-    static func saveResolvedURLs(_ urls: [Int: URL], gid: Int) {
+    nonisolated static func saveResolvedURLs(_ urls: [Int: URL], gid: Int) {
         Task.detached(priority: .utility) {
             let path = urlCacheDir().appendingPathComponent("\(gid)_resolved.json")
             let dict = urls.mapValues(\.absoluteString)
@@ -511,7 +511,7 @@ class ReaderViewModel: ObservableObject {
         }
     }
 
-    static func loadResolvedURLs(gid: Int) -> [Int: URL]? {
+    nonisolated static func loadResolvedURLs(gid: Int) -> [Int: URL]? {
         let path = urlCacheDir().appendingPathComponent("\(gid)_resolved.json")
         guard let data = try? Data(contentsOf: path),
               let dict = try? JSONDecoder().decode([Int: String].self, from: data) else { return nil }
@@ -520,7 +520,7 @@ class ReaderViewModel: ObservableObject {
         return result.isEmpty ? nil : result
     }
 
-    static func saveURLCache(_ urls: [URL], gid: Int) {
+    nonisolated static func saveURLCache(_ urls: [URL], gid: Int) {
         Task.detached(priority: .utility) {
             let path = urlCacheDir().appendingPathComponent("\(gid).json")
             let strings = urls.map(\.absoluteString)
@@ -528,7 +528,7 @@ class ReaderViewModel: ObservableObject {
         }
     }
 
-    static func loadURLCache(gid: Int) -> [URL]? {
+    nonisolated static func loadURLCache(gid: Int) -> [URL]? {
         let path = urlCacheDir().appendingPathComponent("\(gid).json")
         guard let data = try? Data(contentsOf: path),
               let strings = try? JSONDecoder().decode([String].self, from: data) else { return nil }

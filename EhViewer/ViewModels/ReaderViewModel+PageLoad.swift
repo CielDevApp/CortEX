@@ -586,7 +586,15 @@ extension ReaderViewModel {
         }
 
         if imagePageURLs.isEmpty {
-            if let cached = Self.loadURLCache(gid: gallery.gid) {
+            // 2026-06-10: URL キャッシュの読込+デコードが main で 50ms 級だったため背景へ
+            let gidForCache = gallery.gid
+            let cachedURLs: [URL]? = await withCheckedContinuation { (cont: CheckedContinuation<[URL]?, Never>) in
+                SpriteCache.imageQueue.async {
+                    cont.resume(returning: Self.loadURLCache(gid: gidForCache))
+                }
+            }
+            if Task.isCancelled || isClosed { return }
+            if let cached = cachedURLs {
                 imagePageURLs = cached
                 totalPages = cached.count
                 LogManager.shared.log("Reader", "URL cache hit: \(cached.count) pages for gid=\(gallery.gid)")
