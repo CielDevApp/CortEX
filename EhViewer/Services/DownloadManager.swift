@@ -766,23 +766,41 @@ class DownloadManager: ObservableObject {
             coverCache.setObject(image, forKey: key)
             return image
         }
-        // カバーが存在しない場合は1枚目をリサイズして代用 + cover.jpgに保存
-        if let img = generateCoverFromFirstPage(gid: gid) {
-            coverCache.setObject(img, forKey: key)
-            return img
+        // カバーが存在しない場合は1枚目をリサイズして代用 + cover.jpgに保存。
+        // 2026-06-10 BlockSample 実測: デコード + JPEG 再エンコードが main を ~100ms 塞いでいた
+        // ため背景生成に変更。完了までは nil (placeholder)、完了時に publish で再描画させる。
+        if !pendingCoverGenerations.contains(gid) {
+            pendingCoverGenerations.insert(gid)
+            let candidates = (0..<5).map { imageFilePath(gid: gid, page: $0) }
+            let coverPath = coverFilePath(gid: gid)
+            Task.detached(priority: .utility) { [weak self] in
+                let img = Self.renderCover(candidates: candidates, coverPath: coverPath)
+                await MainActor.run {
+                    guard let self else { return }
+                    self.pendingCoverGenerations.remove(gid)
+                    if let img {
+                        self.coverCache.setObject(img, forKey: key)
+                        self.objectWillChange.send()
+                    }
+                }
+            }
         }
         return nil
     }
 
+    /// カバー背景生成の重複起動防止
+    private var pendingCoverGenerations: Set<Int> = []
+
     /// 1枚目の画像をリサイズしてcover.jpgとして保存、結果を返す
     /// 動画WebPで UIImage(contentsOfFile:) が全フレーム展開→OOM するため
-    /// CGImageSource の mmap + サムネイルデコード（先頭フレームのみ）で読む
-    private func generateCoverFromFirstPage(gid: Int) -> PlatformImage? {
+    /// CGImageSource の mmap + サムネイルデコード（先頭フレームのみ）で読む。
+    /// nonisolated static (2026-06-10): main 実行が BlockSample に写ったため、呼び出し側が
+    /// パスを捕捉して背景 Task から呼ぶ形に変更 (共有状態に触らない純関数)。
+    private nonisolated static func renderCover(candidates: [URL], coverPath: URL) -> PlatformImage? {
         #if canImport(UIKit)
         var srcFileURL: URL?
-        for page in 0..<5 {
-            let p = imageFilePath(gid: gid, page: page)
-            if fileManager.fileExists(atPath: p.path) {
+        for p in candidates {
+            if FileManager.default.fileExists(atPath: p.path) {
                 srcFileURL = p
                 break
             }
@@ -801,8 +819,8 @@ class DownloadManager: ObservableObject {
         }
         let img = UIImage(cgImage: cg)
         if let data = img.jpegData(compressionQuality: 0.85) {
-            try? data.write(to: coverFilePath(gid: gid))
-            LogManager.shared.log("Download", "generated cover from page 0 for gid=\(gid)")
+            try? data.write(to: coverPath)
+            LogManager.shared.log("Download", "generated cover from first page → \(coverPath.lastPathComponent)")
         }
         return img
         #else

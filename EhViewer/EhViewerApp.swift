@@ -255,6 +255,9 @@ struct EhViewerApp: App {
                 MainStallMonitor.shared.start()
                 // 凍結瞬間の main スタック採取 (診断用、main から呼ぶこと)
                 MainBlockSampler.shared.start()
+                // お気に入りキャッシュの ID Set を背景で温める (初回 contains の main デコード回避)
+                FavoritesCache.shared.warmUpInBackground()
+                NhentaiFavoritesCache.shared.warmUpInBackground()
                 FavoritesViewModel.prefetchCachedFavorites()
                 Task.detached(priority: .utility) {
                     ImageCache.shared.prewarmRecentThumbs()
