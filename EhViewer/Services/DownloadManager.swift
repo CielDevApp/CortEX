@@ -851,13 +851,33 @@ class DownloadManager: ObservableObject {
                     downloadDate: Date(), isComplete: false, downloadedPages: []
                 )
                 // autoSave が新規に作る meta は「DL 意思なし」マーク (幽霊 DL 根治)
-                if self.downloads[gid] == nil { meta.autoSaveOnly = true }
+                let isNewAutoSave = self.downloads[gid] == nil
+                if isNewAutoSave { meta.autoSaveOnly = true }
                 if !meta.downloadedPages.contains(page) {
                     meta.downloadedPages.append(page)
                 }
                 meta.isComplete = meta.downloadedPages.count >= pageCount
                 self.saveMetadata(meta)
+                // 新しい作品の自動保存が始まったら上限を執行 (古い順に削除)
+                if isNewAutoSave { self.enforceAutoSaveLimit(keeping: gid) }
             }
+        }
+    }
+
+    /// 自動保存作品の保持上限 (田中要望 2026-06-10: 5 作品)。
+    /// 超過分は古い順 (downloadDate) に削除。「正式にダウンロード登録」で昇格した作品は
+    /// autoSaveOnly が外れるため上限の対象外 = 救済済み扱い。
+    private func enforceAutoSaveLimit(keeping newGid: Int) {
+        let limit = 5
+        let autoSaved = downloads.values.filter { $0.autoSaveOnly == true }
+        guard autoSaved.count > limit else { return }
+        let purgeCount = autoSaved.count - limit
+        let oldestFirst = autoSaved
+            .filter { $0.gid != newGid }  // いま読んでいる作品は消さない
+            .sorted { $0.downloadDate < $1.downloadDate }
+        for meta in oldestFirst.prefix(purgeCount) {
+            LogManager.shared.log("Download", "autoSave 上限(\(limit))超過: gid=\(meta.gid) を削除 (\(meta.title.prefix(30)))")
+            deleteDownload(gid: meta.gid)
         }
     }
 
