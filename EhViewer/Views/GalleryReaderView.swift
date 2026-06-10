@@ -41,7 +41,11 @@ struct GalleryReaderView: View {
     /// 縦リーダーの scrollTo リトライ Task (数百ページジャンプ吹き飛び対策)。
     /// 新ジャンプ要求/画面破棄時に必ず cancel して多重リトライを防ぐ。
     @State private var jumpRetryTask: Task<Void, Never>?
-    @ObservedObject private var downloadManager = DownloadManager.shared
+    // 2026-06-10: @ObservedObject を撤去。リーダーは downloadManager を関数内の単発参照
+    // (resolve/override/cancel) でしか使わず body でのリアクティブ利用はゼロなのに、
+    // BGDL 中はページ完了毎の @Published 更新でリーダー body 全体 (数百セルの LazyVStack
+    // 含む) が毎秒数回再評価されていた = DL 中スクロールが重い構造的真因 (MainStall 実測)。
+    private var downloadManager: DownloadManager { DownloadManager.shared }
     @State private var showAutoSavePrompt = false
     @State private var autoSaveInfo: (saved: Int, total: Int) = (0, 0)
     @AppStorage("autoSaveOnRead") private var autoSaveOnRead = false

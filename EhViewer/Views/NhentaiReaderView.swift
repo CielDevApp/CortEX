@@ -58,7 +58,10 @@ struct NhentaiReaderView: View {
         self._horizontalPage = State(initialValue: initialPage)
         self._isFavorited = State(initialValue: NhentaiFavoritesCache.shared.contains(id: gallery.id))
     }
-    @ObservedObject private var downloadManager = DownloadManager.shared
+    // 2026-06-10: @ObservedObject を撤去 (E-H リーダーと同根)。body でのリアクティブ利用は
+    // 無く (alert 文言は表示時評価で足りる)、BGDL 中のページ完了毎にリーダー body 全体が
+    // 再評価されてスクロールが荒れていた。
+    private var downloadManager: DownloadManager { DownloadManager.shared }
     @AppStorage("readerDirection") private var userReaderDirection = 0
     @AppStorage("readingOrder") private var readingOrder = 1
     /// 動画 WebP per-gallery モード解決結果。nil = 未解決
