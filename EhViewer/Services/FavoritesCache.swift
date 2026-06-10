@@ -44,6 +44,25 @@ class FavoritesCache: ObservableObject {
         return cachedGids?.contains(gid) ?? false
     }
 
+    /// 起動時の背景ウォームアップ。初回 containsFast の lazy load (全件 JSON デコード =
+    /// 数百件で ~100ms) が main で走るのを防ぐ (2026-06-10 BlockSample 実測)。
+    func warmUpInBackground() {
+        guard cachedGids == nil else { return }
+        let url = cacheFileURL
+        Task.detached(priority: .utility) {
+            let gids: Set<Int>
+            if let data = try? Data(contentsOf: url),
+               let list = try? JSONDecoder().decode([Gallery].self, from: data) {
+                gids = Set(list.map { $0.gid })
+            } else {
+                gids = []
+            }
+            await MainActor.run { [weak self] in
+                if self?.cachedGids == nil { self?.cachedGids = gids }
+            }
+        }
+    }
+
     func save(_ galleries: [Gallery]) {
         guard let data = try? JSONEncoder().encode(galleries) else { return }
         try? data.write(to: cacheFileURL)

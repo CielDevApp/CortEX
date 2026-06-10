@@ -82,6 +82,25 @@ class NhentaiFavoritesCache: ObservableObject {
         return cachedIds?.contains(id) ?? false
     }
 
+    /// 起動時の背景ウォームアップ (E-H 側と同根)。NhGallery は NhPage 配列を内包するため
+    /// 初回デコードが特に重く、main で走ると BlockSample に写るレベルだった。
+    func warmUpInBackground() {
+        guard cachedIds == nil else { return }
+        let url = cacheFileURL
+        Task.detached(priority: .utility) {
+            let ids: Set<Int>
+            if let data = try? Data(contentsOf: url),
+               let list = try? JSONDecoder().decode([NhentaiClient.NhGallery].self, from: data) {
+                ids = Set(list.map { $0.id })
+            } else {
+                ids = []
+            }
+            await MainActor.run { [weak self] in
+                if self?.cachedIds == nil { self?.cachedIds = ids }
+            }
+        }
+    }
+
     /// 最終更新テキスト
     var lastUpdatedText: String {
         guard let date = lastUpdated() else { return "未取得" }
