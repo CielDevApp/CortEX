@@ -203,7 +203,9 @@ final class MainStallMonitor {
             let now = CFAbsoluteTimeGetCurrent()
             let gap = now - self.last
             self.last = now
-            if gap > 0.25 {
+            // 100ms 超 = 体感カクつき域 (60fps で 6 フレーム落ち)。250ms 閾値では
+            // スクロール中の細かいヒッチが拾えなかった (2026-06-10 実測) ため引き下げ。
+            if gap > 0.1 {
                 LogManager.shared.log("MainStall", "\(Int(gap * 1000))ms")
             }
         }
