@@ -34,11 +34,17 @@ class NhentaiFavoritesCache: ObservableObject {
         return (try? JSONDecoder().decode([NhentaiClient.NhGallery].self, from: data)) ?? []
     }
 
+    /// id 高速参照用の in-memory Set (E-H 側 FavoritesCache.containsFast と同根の対策)。
+    /// contains() が毎回全件 JSON デコードしており、NhentaiReaderView.init から呼ばれる
+    /// ホットパスで main を塞いでいた。
+    private var cachedIds: Set<Int>?
+
     func save(_ galleries: [NhentaiClient.NhGallery]) {
         guard let data = try? JSONEncoder().encode(galleries) else { return }
         try? data.write(to: cacheFileURL)
         let timestamp = ISO8601DateFormatter().string(from: Date())
         try? timestamp.write(to: timestampFileURL, atomically: true, encoding: .utf8)
+        cachedIds = Set(galleries.map { $0.id })
         DispatchQueue.main.async {
             self.version += 1
         }
@@ -72,7 +78,8 @@ class NhentaiFavoritesCache: ObservableObject {
     }
 
     func contains(id: Int) -> Bool {
-        load().contains { $0.id == id }
+        if cachedIds == nil { cachedIds = Set(load().map { $0.id }) }
+        return cachedIds?.contains(id) ?? false
     }
 
     /// 最終更新テキスト
