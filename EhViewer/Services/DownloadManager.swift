@@ -885,6 +885,15 @@ class DownloadManager: ObservableObject {
         return meta.isComplete && meta.downloadedPages.count > 0
     }
 
+    /// 自動保存由来 (autoSaveOnly) の作品を正式な DL としてライブラリに昇格する。
+    /// 未完了の場合は「未完了」セクションへ移り、起動時 auto-resume の対象にも戻る。
+    func promoteAutoSavedToDownload(gid: Int) {
+        guard var meta = downloads[gid], meta.autoSaveOnly == true else { return }
+        meta.autoSaveOnly = nil
+        saveMetadata(meta)
+        LogManager.shared.log("Download", "promote gid=\(gid) 自動保存 → 正式DL (\(meta.downloadedPages.count)/\(meta.pageCount))")
+    }
+
     /// 壊れたメタデータ（0ページでisComplete=true）を修復
     func repairBrokenDownloads() {
         for (gid, meta) in downloads {

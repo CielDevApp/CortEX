@@ -99,7 +99,8 @@ struct DownloadsView: View {
         }
         #endif
         // 田中要望 2026-04-30: 同名作品が大量に並ぶ問題に対し title ベース dedup (downloadDate 最新を残す)。
-        let filtered = Self.dedupeByTitle(manager.downloads.values.filter { $0.isComplete })
+        // 田中要望 2026-06-10: 自動保存由来 (DL 意思なし) は「自動保存」セクションへ分離
+        let filtered = Self.dedupeByTitle(manager.downloads.values.filter { $0.isComplete && $0.autoSaveOnly != true })
         switch completedSortOrder {
         case .dateAdded:
             return filtered.sorted { $0.downloadDate > $1.downloadDate }
@@ -112,8 +113,62 @@ struct DownloadsView: View {
 
     private var incompleteList: [DownloadedGallery] {
         manager.downloads.values
-            .filter { !$0.isComplete && manager.activeDownloads[$0.gid] == nil }
+            .filter { !$0.isComplete && manager.activeDownloads[$0.gid] == nil && $0.autoSaveOnly != true }
             .sorted(by: { $0.downloadDate > $1.downloadDate })
+    }
+
+    /// 自動保存由来 (DL 意思なし) の作品。完了/未完了問わずここに分離して、
+    /// 意図的な DL と混ざらないようにする (田中要望 2026-06-10)。
+    private var autoSavedList: [DownloadedGallery] {
+        manager.downloads.values
+            .filter { $0.autoSaveOnly == true && manager.activeDownloads[$0.gid] == nil }
+            .sorted(by: { $0.downloadDate > $1.downloadDate })
+    }
+
+    /// 「自動保存」セクション (List 用)。body 直書きだと type-check タイムアウトするため分離。
+    @ViewBuilder
+    private var autoSavedSection: some View {
+        if !autoSavedList.isEmpty {
+            Section {
+                ForEach(autoSavedList) { meta in
+                    autoSavedRow(meta: meta)
+                }
+            } header: {
+                Text("自動保存 (\(autoSavedList.count))")
+            } footer: {
+                Text("読んだページが自動保存された作品です。ライブラリに残したい場合は長押しから「正式にダウンロード登録」")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func autoSavedRow(meta: DownloadedGallery) -> some View {
+        Group {
+            if meta.isComplete {
+                completedRow(meta: meta)
+            } else {
+                incompleteRow(meta: meta)
+            }
+        }
+        .contextMenu {
+            Button {
+                manager.promoteAutoSavedToDownload(gid: meta.gid)
+            } label: {
+                Label("正式にダウンロード登録", systemImage: "arrow.down.circle")
+            }
+            Button(role: .destructive) {
+                manager.deleteDownload(gid: meta.gid)
+            } label: {
+                Label("削除", systemImage: "trash")
+            }
+        }
+        .swipeActions(edge: .trailing) {
+            Button(role: .destructive) {
+                manager.deleteDownload(gid: meta.gid)
+            } label: {
+                Label("削除", systemImage: "trash")
+            }
+        }
     }
 
     var body: some View {
@@ -292,6 +347,11 @@ struct DownloadsView: View {
                         }
                     }
                 }
+
+                // 自動保存 (読んだページの保存のみ = DL 意思なし)。意図的な DL と混ざらない
+                // よう分離 (田中要望 2026-06-10)。「正式にダウンロード登録」で昇格可能。
+                // body の type-check タイムアウト回避のためヘルパーに分離。
+                autoSavedSection
 
                 if manager.downloads.isEmpty && manager.activeDownloads.isEmpty {
                     ContentUnavailableView {
@@ -1023,7 +1083,13 @@ struct DownloadsView: View {
                         items: incompleteList
                     )
                 }
-                if completedList.isEmpty && visibleSortedExternal.isEmpty && incompleteList.isEmpty {
+                if !autoSavedList.isEmpty {
+                    libraryGridSection(
+                        title: String(localized: "自動保存 (\(autoSavedList.count))"),
+                        items: autoSavedList
+                    )
+                }
+                if completedList.isEmpty && visibleSortedExternal.isEmpty && incompleteList.isEmpty && autoSavedList.isEmpty {
                     ContentUnavailableView {
                         Label("保存済みギャラリーがありません", systemImage: "arrow.down.circle")
                     } description: {
