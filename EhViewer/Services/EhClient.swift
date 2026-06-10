@@ -372,8 +372,12 @@ final class EhClient: Sendable {
                     cont.resume(throwing: EhError.parseFailed)
                 }
             }
+            // 2026-06-10: KVO はチャンク毎 (1 DL あたり毎秒数十回 × 並列 20) に発火し、その都度
+            // onProgress → main ホップ + holder 再描画が走りスクロールを荒らした → 2% 刻みに間引く。
+            let throttle = ProgressReportThrottle()
             obs = task.progress.observe(\.fractionCompleted) { prog, _ in
-                onProgress(prog.fractionCompleted)
+                let f = prog.fractionCompleted
+                if throttle.shouldReport(f) { onProgress(f) }
             }
             task.resume()
         }
@@ -639,5 +643,21 @@ enum EhError: LocalizedError, Sendable, Equatable {
         case .parseFailed: return "ページの解析に失敗しました"
         case .galleryRemoved: return "ギャラリーが削除されています"
         }
+    }
+}
+
+/// DL 進捗報告の間引き (2026-06-10)。KVO のチャンク毎発火をそのまま main へ流すと
+/// 並列 DL 中に毎秒数百回の main ホップ + SwiftUI 再描画が発生しスクロールが荒れるため、
+/// 2% 以上進んだ時と完了時のみ報告する。E-H / nhentai 両クライアントで共用。
+nonisolated final class ProgressReportThrottle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var last: Double = -1
+
+    func shouldReport(_ fraction: Double) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard fraction >= 1.0 || fraction - last >= 0.02 else { return false }
+        last = fraction
+        return true
     }
 }

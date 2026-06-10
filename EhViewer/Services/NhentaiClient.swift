@@ -468,8 +468,12 @@ enum NhentaiClient {
                     cont.resume(throwing: URLError(.badServerResponse))
                 }
             }
+            // 2026-06-10: チャンク毎の main ホップ + 再描画がスクロールを荒らすため 2% 刻みに間引く
+            // (E-H 側と同じ ProgressReportThrottle を共用)
+            let throttle = ProgressReportThrottle()
             obs = task.progress.observe(\.fractionCompleted) { prog, _ in
-                onProgress(prog.fractionCompleted)
+                let f = prog.fractionCompleted
+                if throttle.shouldReport(f) { onProgress(f) }
             }
             task.resume()
         }

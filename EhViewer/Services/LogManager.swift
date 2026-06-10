@@ -184,3 +184,30 @@ extension UIDevice {
     }
 }
 #endif
+
+/// main thread の停滞検出 (2026-06-10 スクロールヒッチ定量化用)。
+/// 50ms 周期の main timer の実発火間隔を測り、250ms 超の遅延 = main が塞がれた証拠
+/// として LogManager に記録する。ログ量は停滞時のみなので常時有効でも肥大しない。
+final class MainStallMonitor {
+    static let shared = MainStallMonitor()
+    private var timer: DispatchSourceTimer?
+    private var last = CFAbsoluteTimeGetCurrent()
+
+    func start() {
+        guard timer == nil else { return }
+        last = CFAbsoluteTimeGetCurrent()
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        t.schedule(deadline: .now() + .milliseconds(50), repeating: .milliseconds(50), leeway: .milliseconds(10))
+        t.setEventHandler { [weak self] in
+            guard let self else { return }
+            let now = CFAbsoluteTimeGetCurrent()
+            let gap = now - self.last
+            self.last = now
+            if gap > 0.25 {
+                LogManager.shared.log("MainStall", "\(Int(gap * 1000))ms")
+            }
+        }
+        t.resume()
+        timer = t
+    }
+}
