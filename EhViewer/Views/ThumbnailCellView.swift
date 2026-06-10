@@ -19,17 +19,12 @@ struct ThumbnailCellView: View {
                 Image(platformImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: cellHeight, maxHeight: cellHeight)
-                    .clipped()
             } else if index == 0, let coverURL, let coverImg = ImageCache.shared.image(for: coverURL) {
                 Image(platformImage: coverImg)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: cellHeight, maxHeight: cellHeight)
-                    .clipped()
             } else {
                 Color.gray.opacity(0.1)
-                    .frame(height: cellHeight)
             }
 
             Text("\(index + 1)")
@@ -42,7 +37,12 @@ struct ThumbnailCellView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 3))
                 .padding(3)
         }
-        .frame(maxWidth: .infinity, minHeight: cellHeight, maxHeight: cellHeight)
+        // 縦長枠 (田中要望 2026-06-10): 旧・固定高 (cellHeight=150) は iPad の 3 カラム
+        // 可変幅で枠が超横長 (~390x150) になり、ページ上下が大きく見切れて場面が分から
+        // なかった。幅基準の 5:7 (≒漫画ページ縦横比) で枠自体を縦長にし、.fill のまま
+        // クロップをほぼゼロにする。表示モード (.fill) は変えない。
+        .frame(maxWidth: .infinity)
+        .aspectRatio(5.0 / 7.0, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .contentShape(Rectangle())
         .onTapGesture { onTap() }
