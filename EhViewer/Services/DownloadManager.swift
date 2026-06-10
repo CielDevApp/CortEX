@@ -150,6 +150,10 @@ class DownloadManager: ObservableObject {
 
     /// Live Activity管理
     private var liveActivities: [Int: String] = [:] // gid → activityID
+    /// LiveActivity 更新の間引き用 (gid → 最終更新時刻)。ページ完了毎 (最大 6回/秒) の
+    /// activity.update は IPC を伴い main を 100-250ms 単位で塞ぐ (2026-06-10 MainStall 実測
+    /// 182件、DL 中のリーダースクロールが荒れる真因) → 1 秒間引き。
+    private var lastLiveActivityUpdate: [Int: CFAbsoluteTime] = [:]
 
     /// 双方向DL用の共有状態（gid単位）
     private var biDirStates: [Int: BiDirectionalState] = [:]
@@ -912,6 +916,11 @@ class DownloadManager: ObservableObject {
     private func updateLiveActivity(gid: Int, current: Int, total: Int) {
         #if os(iOS) && !targetEnvironment(macCatalyst)
         guard let activityID = liveActivities[gid] else { return }
+        // 1 秒間引き: ページ完了毎の update (IPC) が main を細切れに塞ぐため。
+        // 最終状態は endLiveActivity が確定表示するので取りこぼしなし。
+        let now = CFAbsoluteTimeGetCurrent()
+        if let last = lastLiveActivityUpdate[gid], now - last < 1.0 { return }
+        lastLiveActivityUpdate[gid] = now
         let progress = total > 0 ? Double(current) / Double(total) : 0
         LogManager.shared.log("LiveActivity", "update: gid=\(gid) page=\(current)/\(total) progress=\(Int(progress * 100))%")
 
@@ -933,6 +942,7 @@ class DownloadManager: ObservableObject {
     private func endLiveActivity(gid: Int, success: Bool) {
         #if os(iOS) && !targetEnvironment(macCatalyst)
         guard let activityID = liveActivities.removeValue(forKey: gid) else { return }
+        lastLiveActivityUpdate.removeValue(forKey: gid)
         let state = DownloadActivityAttributes.ContentState(
             currentPage: 0,
             progress: success ? 1 : 0,
