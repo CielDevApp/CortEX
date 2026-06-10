@@ -901,13 +901,15 @@ struct NhentaiReaderView: View {
         }
     }
 
-    /// 現在ページから離れたキャッシュを解放（@State 辞書の無制限成長対策）。
+    /// 現在ページから離れたキャッシュを解放（@State 辞書の無制限成長対策)。
     /// 先読み窓 (±5) とフィルタ再適用 (rawImages 参照) を壊さない保守的な距離設定:
-    /// pageDataCache (生Data) > 10、rawImages (元画像) > 20、images (フィルタ後) > 40
+    /// rawImages (元画像) > 20、images (フィルタ後) > 40。
+    /// pageDataCache (生 Data) は evict しない (田中指摘 2026-06-10): 「閉じる時に閲覧分を
+    /// 保存 → 残り DL」(saveReadPagesAndDownload) が閲覧済み全ページの生 Data を前提に
+    /// しており、evict すると ±10 ページ分しか保存されず機構が死ぬ。生 Data は
+    /// 1 ページ ~100KB と軽く (デコード済み bitmap の 1/30 以下)、メモリ対策の本体は
+    /// bitmap 2 種の解放で足りる。
     private func evictDistantPages(around center: Int) {
-        for key in pageDataCache.keys where abs(key - center) > 10 {
-            pageDataCache.removeValue(forKey: key)
-        }
         for key in rawImages.keys where abs(key - center) > 20 {
             rawImages.removeValue(forKey: key)
         }
