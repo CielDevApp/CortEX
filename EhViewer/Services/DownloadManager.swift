@@ -30,6 +30,11 @@ struct DownloadedGallery: Codable, Identifiable, Sendable {
     var source: String?  // "ehentai" or "nhentai"（nilは旧データ=ehentai）
     /// 明示的にキャンセルされたか（trueなら起動時autoResumeをスキップ）
     var isCancelled: Bool? = nil
+    /// 自動保存 (autoSaveOnRead) だけで作られた meta = ユーザーの DL 意思なし。
+    /// true なら起動時 auto-resume の対象外。突然終了するとキャンセルマークが付かない
+    /// まま未完了 meta が残り、次回起動で読んだだけの作品がフル DL される幽霊 DL バグの
+    /// 根治 (田中報告 2026-06-10)。明示的な DL 開始で解除される。
+    var autoSaveOnly: Bool? = nil
     /// VP8X ANIM flag 走査結果。nil = 未走査（初回 Reader 起動時に migration で埋める）
     var hasAnimatedWebp: Bool? = nil
     /// ダイアログで選択された per-gallery モード上書き。nil = 未選択
@@ -287,6 +292,12 @@ class DownloadManager: ObservableObject {
         }()
         let incompleteItems = downloads.filter {
             guard !$0.value.isComplete && !$0.value.token.isEmpty && $0.value.isCancelled != true else { return false }
+            // autoSave 由来 (DL 意思なし) は再開しない。突然終了後に読んだだけの作品が
+            // フル DL される幽霊 DL の根治 (田中報告 2026-06-10)。
+            if $0.value.autoSaveOnly == true {
+                LogManager.shared.log("Download", "skip auto-resume gid=\($0.key) (autoSaveOnly, DL 意思なし)")
+                return false
+            }
             // .cortex 名 = title.prefix(50) (GalleryExporter と整合)
             let safeName = String($0.value.title.replacingOccurrences(of: "/", with: "_").prefix(50))
             if cortexBaseNames.contains(safeName) {
@@ -309,6 +320,7 @@ class DownloadManager: ObservableObject {
         // reconcile 後に meta を取り直す (reconcileGallery が downloads を更新してる)
         let refreshedItems = downloads.filter {
             !$0.value.isComplete && !$0.value.token.isEmpty && $0.value.isCancelled != true
+                && $0.value.autoSaveOnly != true
         }
         for (gid, meta) in refreshedItems {
             guard activeDownloads[gid] == nil else { continue }
@@ -812,6 +824,8 @@ class DownloadManager: ObservableObject {
                     coverFileName: "cover.jpg", pageCount: pageCount,
                     downloadDate: Date(), isComplete: false, downloadedPages: []
                 )
+                // autoSave が新規に作る meta は「DL 意思なし」マーク (幽霊 DL 根治)
+                if self.downloads[gid] == nil { meta.autoSaveOnly = true }
                 if !meta.downloadedPages.contains(page) {
                     meta.downloadedPages.append(page)
                 }
@@ -986,8 +1000,10 @@ class DownloadManager: ObservableObject {
 
         // メタデータを即座に保存（既存ありならキャンセルフラグのみリセット）
         if var existing = downloads[gid] {
-            if existing.isCancelled == true {
+            // 明示 DL 開始 = キャンセル/autoSave 由来フラグを解除 (auto-resume 対象に昇格)
+            if existing.isCancelled == true || existing.autoSaveOnly == true {
                 existing.isCancelled = false
+                existing.autoSaveOnly = nil
                 saveMetadata(existing)
             }
         } else {
@@ -1033,8 +1049,10 @@ class DownloadManager: ObservableObject {
         LogManager.shared.log("Download", "startNhentaiDownload: id=\(gallery.id) pages=\(gallery.num_pages) title=\(gallery.displayTitle)")
 
         if var existing = downloads[gid] {
-            if existing.isCancelled == true {
+            // 明示 DL 開始 = キャンセル/autoSave 由来フラグを解除 (E-H 側と同じ)
+            if existing.isCancelled == true || existing.autoSaveOnly == true {
                 existing.isCancelled = false
+                existing.autoSaveOnly = nil
                 saveMetadata(existing)
             }
         } else {
