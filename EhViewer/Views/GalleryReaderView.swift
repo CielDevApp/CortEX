@@ -38,6 +38,9 @@ struct GalleryReaderView: View {
     /// monitorAnimationDetection のハンドル。旧実装は `.task { Task { ... } }` の内側 Task に
     /// 外側 (.task) のキャンセルが伝播せず、閉鎖後も最大 30 秒 polling が viewModel を retain していた。
     @State private var animationMonitorTask: Task<Void, Never>?
+    /// 縦リーダーの scrollTo リトライ Task (数百ページジャンプ吹き飛び対策)。
+    /// 新ジャンプ要求/画面破棄時に必ず cancel して多重リトライを防ぐ。
+    @State private var jumpRetryTask: Task<Void, Never>?
     @ObservedObject private var downloadManager = DownloadManager.shared
     @State private var showAutoSavePrompt = false
     @State private var autoSaveInfo: (saved: Int, total: Int) = (0, 0)
@@ -205,6 +208,9 @@ struct GalleryReaderView: View {
             // 動画検知 polling を停止 (放置すると最大 30 秒 viewModel を retain し続ける)
             animationMonitorTask?.cancel()
             animationMonitorTask = nil
+            // ジャンプリトライも停止 (proxy/viewModel を retain したまま scrollTo し続けない)
+            jumpRetryTask?.cancel()
+            jumpRetryTask = nil
             // reader close 時にこの reader 配下の再生を全停止 + 全 animated source cache 解放。
             // これをしないと SwiftUI が LazyVStack セルを即 unmount しない環境で
             // displayLink + rolling prefetch が reader 外で回り続け CPU 100% になる。
@@ -488,24 +494,18 @@ struct GalleryReaderView: View {
             }
             .onChange(of: viewModel.totalPages) { _, total in
                 if viewModel.initialPage > 0 && total > viewModel.initialPage {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        proxy.scrollTo(viewModel.initialPage, anchor: .top)
-                    }
+                    scrollWithRetry(to: viewModel.initialPage, proxy: proxy, initialDelayMs: 100)
                 }
             }
             .onAppear {
                 if viewModel.initialPage > 0 && viewModel.totalPages > viewModel.initialPage {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                        proxy.scrollTo(viewModel.initialPage, anchor: .top)
-                    }
+                    scrollWithRetry(to: viewModel.initialPage, proxy: proxy, initialDelayMs: 200)
                 }
             }
             .onChange(of: viewModel.scrollTarget) { _, target in
                 if let target {
-                    withAnimation {
-                        proxy.scrollTo(target, anchor: .top)
-                    }
                     viewModel.scrollTarget = nil
+                    scrollWithRetry(to: target, proxy: proxy, animatedFirst: true)
                 }
             }
             .onChange(of: viewModel.currentIndex) { _, newIndex in
@@ -530,6 +530,39 @@ struct GalleryReaderView: View {
         }
     }
 
+    /// scrollTo 一発勝負だと、ジャンプ直後に周辺セルがロードされて高さが激変し、
+    /// LazyVStack の推定レイアウトが崩れて目標から先頭側へ吹き飛ぶことがある
+    /// (大ページ数作品で「数百ページ目へジャンプしても 1 ページ目のまま」の正体)。
+    /// セル onAppear で更新される currentIndex が目標 ±3 に入るまで 0.3 秒間隔で
+    /// 最大 5 回再 scrollTo する。距離が前回より「離れた」場合はユーザーの手動
+    /// スクロールとみなして即中断 (奪い合い防止の安全弁)。
+    private func scrollWithRetry(to target: Int, proxy: ScrollViewProxy, initialDelayMs: UInt64 = 0, animatedFirst: Bool = false) {
+        jumpRetryTask?.cancel()
+        jumpRetryTask = Task { @MainActor in
+            if initialDelayMs > 0 {
+                // 旧実装の asyncAfter 相当: LazyVStack のセル mount を待つ
+                try? await Task.sleep(nanoseconds: initialDelayMs * 1_000_000)
+                if Task.isCancelled { return }
+            }
+            var lastDistance = Int.max
+            for attempt in 0..<5 {
+                if animatedFirst && attempt == 0 {
+                    withAnimation { proxy.scrollTo(target, anchor: .top) }
+                } else {
+                    // リトライは非アニメ即時 (アニメ中のセルロードで再度ズレるのを避ける)
+                    proxy.scrollTo(target, anchor: .top)
+                }
+                // セル onAppear → currentIndex 反映を待ってから到達判定
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                if Task.isCancelled { return }
+                let distance = abs(viewModel.currentIndex - target)
+                if distance <= 3 { return }            // 到達
+                if distance > lastDistance { return }  // 手動スクロールで離れていく → ユーザー優先
+                lastDistance = distance
+            }
+        }
+    }
+
     // MARK: - 各ページのセル
 
     private func pageCell(index: Int) -> some View {
@@ -548,7 +581,9 @@ struct GalleryReaderView: View {
             onToggleControls: {
                 withAnimation(.easeInOut(duration: 0.2)) { showControls.toggle() }
             },
-            manualPlayForAnimated: true
+            manualPlayForAnimated: true,
+            // 未ロードセルの高さを実ページ想定高さに安定化 (iOS 縦のみ有効、Catalyst は cell 側で除外)
+            estimatedAspect: viewModel.estimatedPageAspect
         )
         #else
         PageCellView(
@@ -559,7 +594,8 @@ struct GalleryReaderView: View {
             verticalSizeClass: verticalSizeClass,
             onTap: { img in zoomImage = img },
             onRetry: { viewModel.retry(index: index) },
-            isHorizontalMode: effectiveDirection == 1
+            isHorizontalMode: effectiveDirection == 1,
+            estimatedAspect: viewModel.estimatedPageAspect
         )
         #endif
     }

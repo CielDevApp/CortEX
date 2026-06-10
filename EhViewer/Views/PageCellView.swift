@@ -21,6 +21,13 @@ struct PageCellView: View {
     /// false = LocalReader / NhentaiReader 経由、既存の自動再生挙動維持
     var manualPlayForAnimated: Bool = false
 
+    /// 縦モード未ロードセル (loading/failed) の高さ推定用 aspect (height/width)。
+    /// nil = 旧来の minHeight 300 を維持 (E-H 縦リーダー以外は挙動不変)。
+    /// なぜ必要か: 未ロードセル 300pt → ロード後 ~550pt の高さ激変で LazyVStack の
+    /// 推定レイアウトが崩れ、数百ページ目への scrollTo が先頭側へ吹き飛ぶため、
+    /// 未ロード時点から実ページの想定高さを与えてレイアウトを安定させる。
+    var estimatedAspect: CGFloat? = nil
+
     /// 静画と共通の HDR 設定 (設定画面の hdrEnhancement トグル)。
     /// 動画 AVPlayer 側はこの値を videoComposition に反映 (CIFilter 注入)。
     @AppStorage("hdrEnhancement") private var hdrEnhancement = false
@@ -274,6 +281,18 @@ struct PageCellView: View {
 
     // MARK: - 共通サブビュー
 
+    /// 未ロードセルの高さ。iOS 縦モードのみ「画面幅 × 直近ページ縦横比」で実ページに
+    /// 近い高さに安定化 (ジャンプ吹き飛び/スクロール中のレイアウトストーム対策)。
+    /// Mac Catalyst は従来の 300 を維持 (憲法: iPhone 性能調整は Catalyst へ波及させない)。
+    private var placeholderMinHeight: CGFloat {
+        #if os(iOS) && !targetEnvironment(macCatalyst)
+        if !isHorizontalMode, let aspect = estimatedAspect {
+            return UIScreen.main.bounds.width * aspect
+        }
+        #endif
+        return 300
+    }
+
     private var failedView: some View {
         VStack(spacing: 12) {
             Image(systemName: "exclamationmark.triangle").font(.title)
@@ -291,7 +310,7 @@ struct PageCellView: View {
         }
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity, maxHeight: isHorizontalMode ? .infinity : nil, alignment: .center)
-        .frame(minHeight: 300)
+        .frame(minHeight: placeholderMinHeight)
     }
 
     private var loadingView: some View {
@@ -300,7 +319,7 @@ struct PageCellView: View {
             Text("ページ \(index + 1)").font(.caption).foregroundStyle(.gray)
         }
         .frame(maxWidth: .infinity, maxHeight: isHorizontalMode ? .infinity : nil, alignment: .center)
-        .frame(minHeight: 300)
+        .frame(minHeight: placeholderMinHeight)
     }
 
     private var translatingBadge: some View {
