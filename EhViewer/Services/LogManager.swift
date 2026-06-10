@@ -251,8 +251,9 @@ final class MainBlockSampler {
                 usleep(30_000) // 30ms
                 let now = CFAbsoluteTimeGetCurrent()
                 let gap = now - Self.lastFrameTick
-                // 120ms 凍結中 & この stall でまだ未採取 (連発防止に 0.5 秒間隔)
-                if gap > 0.12 && gap < 5 && now - lastSampleAt > 0.5 {
+                // 55ms 凍結から採取 (第二基準 50ms 帯の犯人特定用に 120ms から引き下げ、
+                // 2026-06-10)。ポーリング 30ms なので 50-80ms 帯も概ね捕まる。
+                if gap > 0.055 && gap < 5 && now - lastSampleAt > 0.5 {
                     lastSampleAt = now
                     Self.sampleAndLog(port: port, gapMs: Int(gap * 1000))
                 }

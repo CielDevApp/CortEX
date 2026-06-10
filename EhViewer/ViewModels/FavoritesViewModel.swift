@@ -199,7 +199,9 @@ class FavoritesViewModel: ObservableObject {
     // MARK: - サムネプリフェッチ
 
     /// サムネをバッチ並列プリフェッチ（background priority）
-    static func prefetchThumbnails(_ galleries: [Gallery]) async {
+    /// nonisolated (2026-06-10 BlockSample 実測): 暗黙 @MainActor のままだとフィルタ/バッチ
+    /// ループが main で走り 50ms 級の停滞源だった (ImageCache/EhClient は nonisolated 済み)
+    nonisolated static func prefetchThumbnails(_ galleries: [Gallery]) async {
         let urls = galleries.compactMap(\.coverURL).filter { url in
             ImageCache.shared.image(for: url) == nil && !ImageCache.shared.isLoading(url)
         }

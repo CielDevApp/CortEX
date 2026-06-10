@@ -760,21 +760,19 @@ class DownloadManager: ObservableObject {
         if let cached = coverCache.object(forKey: key) {
             return cached
         }
-        let path = coverFilePath(gid: gid)
-        if fileManager.fileExists(atPath: path.path),
-           let image = PlatformImage(contentsOfFile: path.path) {
-            coverCache.setObject(image, forKey: key)
-            return image
-        }
-        // カバーが存在しない場合は1枚目をリサイズして代用 + cover.jpgに保存。
-        // 2026-06-10 BlockSample 実測: デコード + JPEG 再エンコードが main を ~100ms 塞いでいた
-        // ため背景生成に変更。完了までは nil (placeholder)、完了時に publish で再描画させる。
+        // 2026-06-10 BlockSample 実測 (第二基準 50-80ms 帯): cache miss 時の
+        // fileExists(getattrlist) + 画像デコードが main を塞いでいた → ディスク読み・
+        // フォールバック生成とも背景 Task へ一本化。miss は nil (placeholder) を返し、
+        // 完了時に publish で再描画させる (NSCache に乗った後は同期ヒット)。
         if !pendingCoverGenerations.contains(gid) {
             pendingCoverGenerations.insert(gid)
             let candidates = (0..<5).map { imageFilePath(gid: gid, page: $0) }
             let coverPath = coverFilePath(gid: gid)
             Task.detached(priority: .utility) { [weak self] in
-                let img = Self.renderCover(candidates: candidates, coverPath: coverPath)
+                var img = PlatformImage(contentsOfFile: coverPath.path)
+                if img == nil {
+                    img = Self.renderCover(candidates: candidates, coverPath: coverPath)
+                }
                 await MainActor.run {
                     guard let self else { return }
                     self.pendingCoverGenerations.remove(gid)
