@@ -8,7 +8,7 @@ nonisolated enum NhentaiClient {
 
     // MARK: - Models
 
-    struct NhGallery: Codable, Identifiable, Hashable, Sendable {
+    nonisolated struct NhGallery: Codable, Identifiable, Hashable, Sendable {
         static func == (lhs: NhGallery, rhs: NhGallery) -> Bool { lhs.id == rhs.id }
         func hash(into hasher: inout Hasher) { hasher.combine(id) }
         let id: Int
