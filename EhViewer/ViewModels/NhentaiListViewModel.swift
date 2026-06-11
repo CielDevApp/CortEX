@@ -51,9 +51,8 @@ class NhentaiListViewModel: ObservableObject {
             let sort = sortMode == .popular ? "popular" : nil
             let result = try await NhentaiClient.search(query: query, page: currentPage, sort: sort)
             // 田中報告 2026-04-27: append 時に同 id 重複除外 (LazyVGrid 空白化対策)
-            let existingIDs = Set(galleries.map { $0.id })
-            let deduped = result.result.filter { !existingIDs.contains($0.id) }
-            galleries.append(contentsOf: deduped)
+            // B3: E-H 側と共通の appendDeduplicated
+            galleries.appendDeduplicated(result.result)
             hasMore = currentPage < result.num_pages
         } catch {
             // 失敗時にページ番号を戻さないと該当ページ 25 件が恒久欠落するので rollback
