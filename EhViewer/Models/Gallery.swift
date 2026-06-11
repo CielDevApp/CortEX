@@ -58,7 +58,7 @@ enum GalleryCategory: String, CaseIterable, Sendable, Codable {
     }
 }
 
-struct Gallery: Identifiable, Hashable, Sendable, Codable {
+nonisolated struct Gallery: Identifiable, Hashable, Sendable, Codable {
     let gid: Int
     let token: String
     var title: String
