@@ -762,9 +762,8 @@ struct NhTagSearchResultView: View {
         currentPage += 1
         do {
             let result = try await NhentaiClient.search(query: search.query, page: currentPage)
-            // 田中報告 2026-04-27 同型: append 時に同 id 重複除外 (LazyVGrid 空白行対策)
-            let existingIDs = Set(galleries.map { $0.id })
-            galleries.append(contentsOf: result.result.filter { !existingIDs.contains($0.id) })
+            // 田中報告 2026-04-27 同型: append 時に同 id 重複除外 (LazyVGrid 空白行対策、B3 共通)
+            galleries.appendDeduplicated(result.result)
             hasMore = currentPage < result.num_pages
         } catch {
             LogManager.shared.log("nhentai", "tag search next failed: \(error.localizedDescription)")
