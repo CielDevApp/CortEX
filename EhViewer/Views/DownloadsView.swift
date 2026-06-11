@@ -1456,12 +1456,9 @@ private struct AsyncCoverThumbnail: View {
     private func loadIfNeeded() {
         guard image == nil else { return }
         let gid = gid
-        Task.detached(priority: .userInitiated) {
-            let img = DownloadManager.shared.loadCoverImage(gid: gid)
-            await MainActor.run {
-                self.image = img
-            }
-        }
+        // coverImage(gid:) は完了を直接返す (2026-06-11): 旧 loadCoverImage は miss 時 nil +
+        // publish 頼みで、onAppear 一回きりのこのセルでは再取得されず空のままだった
+        Task { self.image = await DownloadManager.shared.coverImage(gid: gid) }
     }
 }
 
@@ -1487,10 +1484,7 @@ private struct AsyncCoverThumbnailFlexible: View {
     private func loadIfNeeded() {
         guard image == nil else { return }
         let gid = gid
-        Task.detached(priority: .userInitiated) {
-            let img = DownloadManager.shared.loadCoverImage(gid: gid)
-            await MainActor.run { self.image = img }
-        }
+        Task { self.image = await DownloadManager.shared.coverImage(gid: gid) }
     }
 }
 

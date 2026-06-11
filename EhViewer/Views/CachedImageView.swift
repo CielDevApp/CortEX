@@ -32,7 +32,8 @@ struct CachedImageView: View {
         let t0 = CFAbsoluteTimeGetCurrent()
 
         // ダウンロード済みカバー → API不要で即表示
-        if let gid, let localCover = DownloadManager.shared.loadCoverImage(gid: gid) {
+        // coverImage(gid:) は完了を直接返す (2026-06-11、サムネ非表示デグレの修正)
+        if let gid, let localCover = await DownloadManager.shared.coverImage(gid: gid) {
             LogManager.shared.log("Thumb", "local cover hit gid=\(gid)")
             uiImage = localCover
             return

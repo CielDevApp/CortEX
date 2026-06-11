@@ -755,39 +755,27 @@ class DownloadManager: ObservableObject {
         return try? Data(contentsOf: path)
     }
 
-    func loadCoverImage(gid: Int) -> PlatformImage? {
+    /// 非同期カバー取得 (2026-06-11)。loadCoverImage の「miss は nil + 完了時 publish」設計は、
+    /// セル側の onAppear 一回きり読みと噛み合わず「スクロールして戻るまでサムネが出ない」
+    /// デグレを起こした (田中報告)。セルが完了を直接 await できるこちらを正とする。
+    /// NSCache ヒットは即返し、miss はディスク読み/フォールバック生成を imageQueue で実行。
+    func coverImage(gid: Int) async -> PlatformImage? {
         let key = NSNumber(value: gid)
-        if let cached = coverCache.object(forKey: key) {
-            return cached
-        }
-        // 2026-06-10 BlockSample 実測 (第二基準 50-80ms 帯): cache miss 時の
-        // fileExists(getattrlist) + 画像デコードが main を塞いでいた → ディスク読み・
-        // フォールバック生成とも背景 Task へ一本化。miss は nil (placeholder) を返し、
-        // 完了時に publish で再描画させる (NSCache に乗った後は同期ヒット)。
-        if !pendingCoverGenerations.contains(gid) {
-            pendingCoverGenerations.insert(gid)
-            let candidates = (0..<5).map { imageFilePath(gid: gid, page: $0) }
-            let coverPath = coverFilePath(gid: gid)
-            Task.detached(priority: .utility) { [weak self] in
+        if let cached = coverCache.object(forKey: key) { return cached }
+        let coverPath = coverFilePath(gid: gid)
+        let candidates = (0..<5).map { imageFilePath(gid: gid, page: $0) }
+        let img: PlatformImage? = await withCheckedContinuation { (cont: CheckedContinuation<PlatformImage?, Never>) in
+            SpriteCache.imageQueue.async {
                 var img = PlatformImage(contentsOfFile: coverPath.path)
                 if img == nil {
                     img = Self.renderCover(candidates: candidates, coverPath: coverPath)
                 }
-                await MainActor.run {
-                    guard let self else { return }
-                    self.pendingCoverGenerations.remove(gid)
-                    if let img {
-                        self.coverCache.setObject(img, forKey: key)
-                        self.objectWillChange.send()
-                    }
-                }
+                cont.resume(returning: img)
             }
         }
-        return nil
+        if let img { coverCache.setObject(img, forKey: key) }
+        return img
     }
-
-    /// カバー背景生成の重複起動防止
-    private var pendingCoverGenerations: Set<Int> = []
 
     /// 1枚目の画像をリサイズしてcover.jpgとして保存、結果を返す
     /// 動画WebPで UIImage(contentsOfFile:) が全フレーム展開→OOM するため
