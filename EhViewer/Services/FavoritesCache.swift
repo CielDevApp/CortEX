@@ -1,65 +1,86 @@
 import Foundation
 import Combine
 
-/// お気に入り一覧のディスクキャッシュ
-class FavoritesCache: ObservableObject {
+/// お気に入り一覧のディスクキャッシュ。
+///
+/// スレッド安全化 (A2-a, 2026-06-11): load()/containsFast() は main (View body/init) だけで
+/// なく背景コンテキスト (nonisolated な ImageCache.prewarmRecentThumbs や
+/// FavoritesViewModel.prefetchThumbnails 等) からも呼ばれる。旧実装は in-memory キャッシュ
+/// (cachedList/cachedGids) が無保護で、暗黙 @MainActor 前提が崩れた瞬間に COW 配列の
+/// データ競合 (SIGSEGV 級) になり得た。NSLock で状態を保護し全メソッドを nonisolated 化、
+/// どのスレッドから呼んでも安全にする。@Published version の更新だけ main へホップ。
+final class FavoritesCache: ObservableObject, @unchecked Sendable {
     static let shared = FavoritesCache()
 
-    /// 変更カウンター（@Publishedで変更通知）
+    /// 変更カウンター（@Publishedで変更通知、main でのみ更新）
     @Published var version: Int = 0
 
-    private let fileManager = FileManager.default
+    /// cachedList/cachedGids の保護。重い処理 (JSON デコード/エンコード) はロック外で行う
+    private let stateLock = NSLock()
 
-    private var cacheDir: URL {
-        let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    /// デコード済みリストの in-memory 保持。毎回ディスク読み + 全件 JSON デコードすると
+    /// タブ常駐 body の再評価毎に main が 100ms 級で凍結する (2026-06-10 BlockSample 実測)。
+    nonisolated(unsafe) private var cachedList: [Gallery]?
+
+    /// gid 高速参照用 Set。リーダー init 等のホットパスは containsFast を使うこと
+    /// (憲兵令 2026-0610-001 真因: init での load() フルデコードがスクロール凍結の主犯だった)。
+    nonisolated(unsafe) private var cachedGids: Set<Int>?
+
+    nonisolated private var cacheDir: URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let dir = docs.appendingPathComponent("EhViewer", isDirectory: true)
-        if !fileManager.fileExists(atPath: dir.path) {
-            try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        if !FileManager.default.fileExists(atPath: dir.path) {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
         return dir
     }
 
-    private var cacheFileURL: URL {
+    nonisolated private var cacheFileURL: URL {
         cacheDir.appendingPathComponent("favorites_cache.json")
     }
 
-    private var timestampFileURL: URL {
+    nonisolated private var timestampFileURL: URL {
         cacheDir.appendingPathComponent("favorites_timestamp.txt")
     }
 
-    /// デコード済みリストの in-memory 保持。load() の呼び出し元は 20 箇所以上あり、
-    /// SettingsView 等のタブ常駐 body からも毎再評価で呼ばれるため、毎回ディスク読み +
-    /// 全件 JSON デコードするとページめくり毎 (自動保存 publish → body 再評価) に
-    /// main が 100ms 級で凍結していた (2026-06-10 BlockSample 実測)。
-    private var cachedList: [Gallery]?
-
-    func load() -> [Gallery] {
-        if let cachedList { return cachedList }
+    nonisolated func load() -> [Gallery] {
+        stateLock.lock()
+        if let cached = cachedList {
+            stateLock.unlock()
+            return cached
+        }
+        stateLock.unlock()
+        // デコード (~100ms) はロック外: ロック中に行うと他スレッドの containsFast まで道連れ
         guard let data = try? Data(contentsOf: cacheFileURL),
               let list = try? JSONDecoder().decode([Gallery].self, from: data) else { return [] }
-        cachedList = list
-        cachedGids = Set(list.map { $0.gid })
-        return list
+        stateLock.lock()
+        if cachedList == nil {
+            cachedList = list
+            cachedGids = Set(list.map { $0.gid })
+        }
+        let result = cachedList ?? list
+        stateLock.unlock()
+        return result
     }
 
-    /// gid 高速参照用の in-memory Set。初回アクセスで一度だけ load() し、save() で同期更新。
-    /// 真因記録 (憲兵令 2026-0610-001): GalleryReaderView.init が load() (全件 JSON デコード
-    /// = 数百件で 120-150ms) を呼んでおり、詳細ビュー body 再評価 (自動保存のページ毎 publish)
-    /// のたびにリーダー struct が再 init → main がフリーズ = スクロール「角つき」の主犯だった。
-    /// init 等のホットパスからは必ずこちらを使うこと。
-    private var cachedGids: Set<Int>?
-
-    func containsFast(gid: Int) -> Bool {
-        if cachedGids == nil { cachedGids = Set(load().map { $0.gid }) }
-        return cachedGids?.contains(gid) ?? false
+    nonisolated func containsFast(gid: Int) -> Bool {
+        stateLock.lock()
+        let gids = cachedGids
+        stateLock.unlock()
+        if let gids { return gids.contains(gid) }
+        // 未ウォームの初回のみフォールバック (load() が gids も埋める)
+        return load().contains { $0.gid == gid }
     }
 
-    /// 起動時の背景ウォームアップ。初回 containsFast の lazy load (全件 JSON デコード =
-    /// 数百件で ~100ms) が main で走るのを防ぐ (2026-06-10 BlockSample 実測)。
-    func warmUpInBackground() {
-        guard cachedList == nil else { return }
+    /// 起動時の背景ウォームアップ。初回 load のフルデコードが main で走るのを防ぐ。
+    nonisolated func warmUpInBackground() {
+        stateLock.lock()
+        let warmed = cachedList != nil
+        stateLock.unlock()
+        guard !warmed else { return }
         let url = cacheFileURL
-        Task.detached(priority: .utility) {
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
             let list: [Gallery]
             if let data = try? Data(contentsOf: url),
                let decoded = try? JSONDecoder().decode([Gallery].self, from: data) {
@@ -67,36 +88,39 @@ class FavoritesCache: ObservableObject {
             } else {
                 list = []
             }
-            await MainActor.run { [weak self] in
-                guard let self, self.cachedList == nil else { return }
+            self.stateLock.lock()
+            if self.cachedList == nil {
                 self.cachedList = list
                 self.cachedGids = Set(list.map { $0.gid })
             }
+            self.stateLock.unlock()
         }
     }
 
-    func save(_ galleries: [Gallery]) {
+    nonisolated func save(_ galleries: [Gallery]) {
         guard let data = try? JSONEncoder().encode(galleries) else { return }
         try? data.write(to: cacheFileURL)
         let timestamp = ISO8601DateFormatter().string(from: Date())
         try? timestamp.write(to: timestampFileURL, atomically: true, encoding: .utf8)
+        stateLock.lock()
         cachedList = galleries
         cachedGids = Set(galleries.map { $0.gid })
-        version += 1
+        stateLock.unlock()
+        DispatchQueue.main.async { self.version += 1 }
     }
 
     /// 最終更新日時
-    func lastUpdated() -> Date? {
+    nonisolated func lastUpdated() -> Date? {
         guard let str = try? String(contentsOf: timestampFileURL, encoding: .utf8) else { return nil }
         return ISO8601DateFormatter().date(from: str)
     }
 
-    var hasCachedData: Bool {
-        fileManager.fileExists(atPath: cacheFileURL.path)
+    nonisolated var hasCachedData: Bool {
+        FileManager.default.fileExists(atPath: cacheFileURL.path)
     }
 
     /// お気に入りに追加（キャッシュ更新）
-    func addToCache(_ gallery: Gallery) {
+    nonisolated func addToCache(_ gallery: Gallery) {
         var list = load()
         if !list.contains(where: { $0.gid == gallery.gid }) {
             list.insert(gallery, at: 0)
@@ -106,7 +130,7 @@ class FavoritesCache: ObservableObject {
     }
 
     /// お気に入りから削除（キャッシュ更新）
-    func removeFromCache(gid: Int) {
+    nonisolated func removeFromCache(gid: Int) {
         var list = load()
         list.removeAll { $0.gid == gid }
         save(list)
