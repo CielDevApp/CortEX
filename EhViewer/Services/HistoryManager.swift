@@ -87,9 +87,13 @@ class HistoryManager: ObservableObject {
     }
 
     private func save() {
+        // snapshot を取ってから detach (A2-b, 2026-06-11): 旧実装は detached 内で
+        // self.entries を直接読み、main 側の mutate と競合し得た (WishlistStore と同型修正)
+        let snapshot = entries
+        let url = filePath
         Task.detached(priority: .utility) {
-            if let data = try? JSONEncoder().encode(self.entries) {
-                try? data.write(to: self.filePath)
+            if let data = try? JSONEncoder().encode(snapshot) {
+                try? data.write(to: url)
             }
         }
     }
@@ -101,9 +105,12 @@ class HistoryManager: ObservableObject {
     }
 
     private func saveNh() {
+        // snapshot を取ってから detach (save() と同様)
+        let snapshot = nhEntries
+        let url = nhFilePath
         Task.detached(priority: .utility) {
-            if let data = try? JSONEncoder().encode(self.nhEntries) {
-                try? data.write(to: self.nhFilePath)
+            if let data = try? JSONEncoder().encode(snapshot) {
+                try? data.write(to: url)
             }
         }
     }
