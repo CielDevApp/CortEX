@@ -1,7 +1,8 @@
 import Foundation
 
 /// 日本語→E-Hentaiタグのローカル辞書翻訳
-enum TagTranslator {
+/// 純定数辞書 + 純関数のみ (UserDefaults は thread-safe) → nonisolated。
+nonisolated enum TagTranslator {
 
     /// 設定でON/OFF
     static var isEnabled: Bool {

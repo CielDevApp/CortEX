@@ -5,6 +5,7 @@ import UIKit
 #endif
 
 /// 翻訳テキストの画像焼き込みレンダラー
+@MainActor
 enum TranslationRenderer {
 
     #if canImport(UIKit)

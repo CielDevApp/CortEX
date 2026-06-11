@@ -14,7 +14,7 @@ import Compression
 ///
 /// thread-safety: scan は detached task から呼ばれるため、本 class は actor isolated にせず
 /// NSLock で zipInfo を保護。Reader (main thread) から materialize 呼出も同 lock 経由。
-final class ExternalCortexZipReader: @unchecked Sendable {
+nonisolated final class ExternalCortexZipReader: @unchecked Sendable {
     static let shared = ExternalCortexZipReader()
 
     // MARK: - 状態

@@ -22,12 +22,20 @@ struct LogEntry: Identifiable {
     }()
 }
 
+/// isolation 方針 (A2-c, 2026-06-11):
+/// - 型としては @MainActor (UI が観察する @Published logs / CADisplayLink frame monitor)
+/// - log() / appendToFile() は「あらゆるスレッドから呼ばれて呼び出し元スレッドで動く」
+///   のが既存契約なので nonisolated。logs への反映は従来通り main へホップ。
+/// - ファイル書込は fileQueue 直列で保護 (従来のまま)。
+@MainActor
 final class LogManager: ObservableObject {
     static let shared = LogManager()
 
     @Published var logs: [LogEntry] = []
     private let maxEntries = 1000
-    private var deviceInfoLogged = false
+    /// 初回ログ判定。nonisolated な log() から無保護アクセス (従来の暗黙時代と同じ。
+    /// 最悪でも Device/Build 行の重複出力どまりなので許容)
+    nonisolated(unsafe) private var deviceInfoLogged = false
 
     /// ファイル書き出し用キュー + パス
     private let fileQueue = DispatchQueue(label: "logmanager.file", qos: .utility)
@@ -42,12 +50,12 @@ final class LogManager: ObservableObject {
     /// 外部から log パス取得（デバッグ用）
     static var currentLogPath: String { shared.logFileURL.path }
 
-    var isEnabled: Bool {
+    nonisolated var isEnabled: Bool {
         UserDefaults.standard.bool(forKey: UDKey.debugLogEnabled)
     }
 
-    /// フォーマット済み1行をファイル末尾に append
-    private func appendToFile(_ line: String) {
+    /// フォーマット済み1行をファイル末尾に append (どのスレッドからでも可、書込は fileQueue 直列)
+    nonisolated private func appendToFile(_ line: String) {
         fileQueue.async { [weak self] in
             guard let self else { return }
             guard let data = (line + "\n").data(using: .utf8),
@@ -60,14 +68,15 @@ final class LogManager: ObservableObject {
         }
     }
 
-    private static let timeFormatter: DateFormatter = {
+    /// DateFormatter は iOS 7+ でスレッドセーフ。nonisolated な log() から使うため (unsafe) 明示
+    nonisolated(unsafe) private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HH:mm:ss.SSS"
         return f
     }()
 
     /// 実行端末情報を取得
-    static var deviceSignature: String {
+    nonisolated static var deviceSignature: String {
         #if canImport(UIKit)
         let device = UIDevice.current
         let modelName = UIDevice.deviceModelName() ?? device.model
@@ -79,7 +88,9 @@ final class LogManager: ObservableObject {
         #endif
     }
 
-    func log(_ category: String, _ message: String) {
+    /// どのスレッドから呼んでも呼び出し元スレッドで実行される (既存契約の明示化)。
+    /// @Published logs への反映だけ main へホップ。
+    nonisolated func log(_ category: String, _ message: String) {
         // 初回ログ時に端末情報 + ビルドタグを先に出力
         if !deviceInfoLogged {
             deviceInfoLogged = true
@@ -173,7 +184,7 @@ final class LogManager: ObservableObject {
 extension UIDevice {
     /// sysctl から hw.machine (e.g. "iPhone14,5", "iPad14,1") を取得して、
     /// 可能なら可読モデル名に変換
-    static func deviceModelName() -> String? {
+    nonisolated static func deviceModelName() -> String? {
         var systemInfo = utsname()
         uname(&systemInfo)
         let identifier = withUnsafePointer(to: &systemInfo.machine) {

@@ -2,7 +2,8 @@ import SwiftUI
 import Foundation
 
 /// プロセスの物理メモリフットプリント(MB)。デバッグHUD用に公開
-enum DebugVitals {
+/// 純関数のみ (mach API) → nonisolated (Timer/@Sendable closure からも呼ばれる)。
+nonisolated enum DebugVitals {
     static func memoryFootprintMB() -> Int {
         var info = task_vm_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)

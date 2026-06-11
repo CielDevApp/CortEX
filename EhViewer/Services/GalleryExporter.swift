@@ -94,7 +94,9 @@ nonisolated enum GalleryExporter {
             destURL = override
         } else {
             let exportDir = FileManager.default.temporaryDirectory
-            let title = dm.downloads[gid]?.title ?? "\(gid)"
+            // downloads は @MainActor 状態。旧実装は背景スレッドから無保護で読んでいた
+            // (暗黙 isolation の leniency)。明示化に伴い main 同期ホップで読む (A2-c 挙動修正)。
+            let title = onMain { dm.downloads[gid]?.title } ?? "\(gid)"
             let safeName = title.replacingOccurrences(of: "/", with: "_").prefix(50)
             destURL = exportDir.appendingPathComponent("\(safeName).cortex")
         }
@@ -607,9 +609,13 @@ nonisolated enum GalleryExporter {
         }
 
         // DownloadManagerに登録
-        let dm = DownloadManager.shared
-        dm.downloads[meta.gid] = meta
-        dm.lastImportedGid = meta.gid
+        // @Published を背景スレッドから直接 mutate していた旧実装の data race を
+        // main 同期ホップで解消 (A2-c 挙動修正。登録完了後に return する順序は維持)。
+        onMain {
+            let dm = DownloadManager.shared
+            dm.downloads[meta.gid] = meta
+            dm.lastImportedGid = meta.gid
+        }
         try? fm.removeItem(at: tempDir)
 
         LogManager.shared.log("Export", "imported gid=\(meta.gid) title=\(meta.title) pages=\(meta.downloadedPages.count)")
@@ -622,7 +628,20 @@ nonisolated enum GalleryExporter {
         // 田中要望 2026-04-26 staging fix: DL save dest 設定時の staging 経路を尊重するため、
         // DownloadManager.shared.galleryDirectory を使う (旧: Documents/EhViewer/downloads ハードコード)。
         // これで isStaging gid なら staging dir、それ以外は baseDirectory に解決される。
-        return DownloadManager.shared.galleryDirectory(gid: gid)
+        // galleryDirectory は @MainActor (baseDirectory が ExternalFolderManager を参照) のため
+        // main 同期ホップで解決 (A2-c。旧実装は背景スレッドから無保護で呼んでいた)。
+        return onMain { DownloadManager.shared.galleryDirectory(gid: gid) }
+    }
+
+    /// DownloadManager (@MainActor) の状態を export/import (背景スレッド実行) から
+    /// 読み書きする際の main 同期ホップ。export/import は Task.detached から呼ばれ、
+    /// その間 main は await 中で空いているため main.sync は deadlock しない。
+    /// 万一 main から呼ばれた場合は直接実行 (main.sync の自己 deadlock 回避)。
+    private static func onMain<T>(_ body: @MainActor () -> T) -> T {
+        if Thread.isMainThread {
+            return MainActor.assumeIsolated { body() }
+        }
+        return DispatchQueue.main.sync { MainActor.assumeIsolated { body() } }
     }
 }
 
@@ -632,8 +651,9 @@ nonisolated enum GalleryExporter {
 /// - stored: 既に圧縮済みの画像 (WebP/JPEG/PNG/MP4) は deflate 効果薄 + CPU 浪費、stored で速度優先
 /// - ZIP64: file size/offset/entry 数のいずれが 4GB/65535 を超えても安全に動く
 /// - streaming: chunk 単位 (256KB) で読み書き、メモリピーク抑制
-/// - nonisolated: 外側 enum の isolation を継承、Task.detached で別スレッド実行
-final class ZipStreamWriter {
+/// - nonisolated: Task.detached で別スレッド実行する background ワーカー
+///   (トップレベル型のため明示。可変状態は単一コンシューマ前提)
+nonisolated final class ZipStreamWriter {
     private struct Entry {
         let name: String
         let crc32: UInt32
@@ -810,7 +830,8 @@ final class ZipStreamWriter {
 
 // MARK: - Data little-endian append helpers (ZIP is little-endian)
 
-private extension Data {
+/// 純関数ヘルパー → nonisolated (nonisolated な ZipStreamWriter から呼ばれる)
+private nonisolated extension Data {
     mutating func append(le value: UInt16) {
         var le = value.littleEndian
         Swift.withUnsafeBytes(of: &le) { self.append(contentsOf: $0) }

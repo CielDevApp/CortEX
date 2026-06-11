@@ -436,6 +436,7 @@ final class ImageCache: @unchecked Sendable {
 ///   - critical: Jetsam 寸前。再デコードが入っても kill より遥かにマシなので全力解放
 ///              (メモリキャッシュ全破棄 + 全 frameCache 解放 + 多重アニメ停止)。
 /// 田中要望 2026-06-09 (DL/閲覧でメモリ枯渇間近に落とさず解放したい)。
+@MainActor
 final class MemoryPressureMonitor {
     static let shared = MemoryPressureMonitor()
     private var source: DispatchSourceMemoryPressure?
@@ -458,14 +459,16 @@ final class MemoryPressureMonitor {
     }
 
     /// 軽度: オフスクリーン中心に解放。可視ページの表示/再生は維持。
-    private static func handleWarning() {
+    /// (DispatchSource handler = @Sendable closure から呼ぶため nonisolated。queue は .main なので実行は main のまま)
+    nonisolated private static func handleWarning() {
         let freeMB = Int(os_proc_available_memory()) / 1_048_576
         LogManager.shared.log("Mem", "pressure=warning free=\(freeMB)MB → soft trim")
         ImageCache.shared.softTrim()
     }
 
     /// 重度: Jetsam 寸前。全力解放 (kill 回避を最優先)。
-    private static func handleCritical() {
+    /// (DispatchSource handler = @Sendable closure から呼ぶため nonisolated。queue は .main なので実行は main のまま)
+    nonisolated private static func handleCritical() {
         let freeMB = Int(os_proc_available_memory()) / 1_048_576
         LogManager.shared.log("Mem", "pressure=critical free=\(freeMB)MB → full release")
         ImageCache.shared.clearMemory()

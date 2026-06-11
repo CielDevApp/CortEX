@@ -75,6 +75,7 @@ struct DownloadedGallery: Codable, Identifiable, Sendable {
     }
 }
 
+@MainActor
 class DownloadManager: ObservableObject {
     static let shared = DownloadManager()
 
@@ -220,7 +221,9 @@ class DownloadManager: ObservableObject {
     /// Phase 2B: onGidProgressHint 用の per-gid trailing debounce timer
     /// consumer suspend 中の BG wakeup 毎にヒントが来るが、disk scan は高コストなので
     /// per-gid 1s trailing で coalesce → LA 更新頻度も ActivityKit rate limit 内に収める
-    private var bgHintDebounce: [Int: DispatchSourceTimer] = [:]
+    /// bgHintLock でのみ保護 (従来通り)。nonisolated な scheduleBGProgressHintFire から
+    /// 触るため nonisolated(unsafe) を明示
+    nonisolated(unsafe) private var bgHintDebounce: [Int: DispatchSourceTimer] = [:]
     private let bgHintLock = NSLock()
 
     private init() {
@@ -423,19 +426,31 @@ class DownloadManager: ObservableObject {
 
     // MARK: - ディレクトリ
 
-    private var baseDirectory: URL {
+    /// nonisolated: scanHasAnimatedWebp (detached 実行) からも読まれる。
+    /// Catalyst の DL 保存先 override 読みのみ main 同期ホップ (A2-c)。
+    nonisolated private var baseDirectory: URL {
         // Step 9 (Phase E1, 2026-04-26): Mac Catalyst で user-selectable DL 保存先を hook。
         // ExternalFolderManager.activeDLSaveDestinationURL が non-nil ならそれを使う、
         // nil (未設定 or stale) なら default `<documents>/EhViewer/downloads` に fallback。
         // 田中判断 Q-2: 既存 DL は旧パスに残る、新規 DL のみ新パスへ。
         // 切替後は app 再起動で反映 (DL 中の path 切替は safety のため非対応)。
         #if targetEnvironment(macCatalyst)
-        if let custom = ExternalFolderManager.shared.activeDLSaveDestinationURL {
+        if let custom = Self.onMainSync({ ExternalFolderManager.shared.activeDLSaveDestinationURL }) {
             return custom
         }
         #endif
         let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
         return docs.appendingPathComponent("EhViewer/downloads", isDirectory: true)
+    }
+
+    /// @MainActor 状態を nonisolated 文脈から読むための main 同期ホップ (A2-c)。
+    /// 背景スレッドからは main.sync (呼び出し元は detached のため main は await 中で空き)、
+    /// main からは直接実行 (自己 deadlock 回避)。
+    nonisolated private static func onMainSync<T>(_ body: @MainActor () -> T) -> T {
+        if Thread.isMainThread {
+            return MainActor.assumeIsolated { body() }
+        }
+        return DispatchQueue.main.sync { MainActor.assumeIsolated { body() } }
     }
 
     func galleryDirectory(gid: Int) -> URL {
@@ -463,7 +478,8 @@ class DownloadManager: ObservableObject {
     private let stagingLock = NSLock()
 
     /// staging directory (常に local SSD)。
-    private var dlStagingBase: URL {
+    /// 純関数 (FileManager は thread-safe)。scanHasAnimatedWebp (detached) からも読むため nonisolated
+    nonisolated private var dlStagingBase: URL {
         let docs = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
         return docs.appendingPathComponent("EhViewer/dl_staging", isDirectory: true)
     }
@@ -2036,19 +2052,20 @@ class DownloadManager: ObservableObject {
         Task.detached(priority: .utility) {
             await withTaskGroup(of: Void.self) { group in
                 for index in pendingIndices {
-                    if weakSelf.activeDownloads[gid]?.isCancelled == true { break }
+                    // (A2-c) 以下の await は @MainActor メンバーへの従来の暗黙ホップの明示化 (挙動不変)
+                    if await weakSelf.activeDownloads[gid]?.isCancelled == true { break }
                     // 509/HTML 検知で halted gid はこれ以上 enqueue しない
-                    if BackgroundDownloadManager.shared.isRateLimited(gid: gid) {
+                    if await BackgroundDownloadManager.shared.isRateLimited(gid: gid) {
                         LogManager.shared.log("bgdl", "gid=\(gid) enqueue loop halted (rateLimited)")
                         break
                     }
                     let pageURL = allPageURLs[index]
-                    let filePath = weakSelf.imageFilePath(gid: gid, page: index)
+                    let filePath = await weakSelf.imageFilePath(gid: gid, page: index)
                     group.addTask {
                         await urlResolveSem.wait()
                         defer { urlResolveSem.signal() }
                         // wait で待機している間に trip した可能性あるので再チェック
-                        if BackgroundDownloadManager.shared.isRateLimited(gid: gid) { return }
+                        if await BackgroundDownloadManager.shared.isRateLimited(gid: gid) { return }
                         // 田中提案 (2026-04-27): 1st pass にインライン retry を導入。
                         // 一時的な Cloudflare challenge / mirror URL stale で 1 回コケただけでも
                         // 即 2ndpass に push されると 2ndpass の URL 再 resolve コストが大きいので、
@@ -2057,7 +2074,7 @@ class DownloadManager: ObservableObject {
                         var lastError: Error?
                         let maxAttempts = 3
                         for attempt in 1...maxAttempts {
-                            if BackgroundDownloadManager.shared.isRateLimited(gid: gid) { return }
+                            if await BackgroundDownloadManager.shared.isRateLimited(gid: gid) { return }
                             do {
                                 resolved = try await resolveClient.fetchImageURL(pageURL: pageURL)
                                 break
@@ -2065,7 +2082,7 @@ class DownloadManager: ObservableObject {
                                 lastError = error
                                 // BAN 検知時は即 trip: 他の並列 task も次回 check で halt + 2ndpass も skip
                                 if case EhError.banned(let remaining) = error {
-                                    BackgroundDownloadManager.shared.tripRateLimit(gid: gid)
+                                    await BackgroundDownloadManager.shared.tripRateLimit(gid: gid)
                                     LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) BANNED (URL resolve), remaining=\(remaining ?? "unknown"), tripping rateLimit")
                                     return  // ダミー enqueue せず即抜ける
                                 }
@@ -2077,8 +2094,8 @@ class DownloadManager: ObservableObject {
                             }
                         }
                         if let imageURL = resolved {
-                            if BackgroundDownloadManager.shared.isRateLimited(gid: gid) { return }
-                            BackgroundDownloadManager.shared.enqueue(
+                            if await BackgroundDownloadManager.shared.isRateLimited(gid: gid) { return }
+                            await BackgroundDownloadManager.shared.enqueue(
                                 url: imageURL, gid: gid, pageIndex: index, finalPath: filePath,
                                 session: session, headers: ehHeaders
                             )
@@ -2086,7 +2103,7 @@ class DownloadManager: ObservableObject {
                         } else {
                             LogManager.shared.log("Download", "gid=\(gid) page \(index + 1) URL解決失敗 (after \(maxAttempts) attempts): \(lastError?.localizedDescription ?? "?")")
                             // 全 retry 尽きたら 2ndpass に委譲 (ダミー enqueue で 1st pass stream に記録)
-                            BackgroundDownloadManager.shared.enqueue(
+                            await BackgroundDownloadManager.shared.enqueue(
                                 url: pageURL,  // ダミー（HTMLを画像扱いで失敗する）
                                 gid: gid, pageIndex: index, finalPath: filePath,
                                 session: session, headers: ehHeaders
@@ -2202,7 +2219,9 @@ class DownloadManager: ObservableObject {
             var iterator = allFailed.makeIterator()
             await withTaskGroup(of: (Int, Bool?).self) { group in
                 // ファイル既存 skip を先に全件捌いて、本当に DL 必要なものだけ task 化
-                func enqueueNext() -> Bool {
+                // (A2-c) ローカル関数は型の isolation を継承しないため @MainActor を明示
+                // (enclosing 文脈は main で実行されており従来と同一スレッド)
+                @MainActor func enqueueNext() -> Bool {
                     while let (index, pageURL) = iterator.next() {
                         if activeDownloads[gid]?.isCancelled == true { return false }
                         if state.downloadedSet.contains(index) { continue }

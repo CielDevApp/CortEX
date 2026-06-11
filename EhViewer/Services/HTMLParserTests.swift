@@ -2,6 +2,7 @@ import Foundation
 
 /// HTMLParserの回帰テスト（アプリ内実行）
 /// デバッグビルド時にLogManagerに結果出力
+@MainActor
 enum HTMLParserTests {
 
     static func runAll() {

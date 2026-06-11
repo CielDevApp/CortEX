@@ -3,6 +3,7 @@ import Combine
 
 /// ECOモード（低消費電力モード）
 /// NPU/GPU/フィルタを全て無効化し、最小限の機能で動作
+@MainActor
 final class EcoMode: ObservableObject {
     static let shared = EcoMode()
 

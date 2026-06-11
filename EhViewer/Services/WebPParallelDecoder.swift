@@ -8,7 +8,8 @@ import libwebp
 /// 前提: 全フレームが dispose=NONE, blend=NO_BLEND, offset=0,0, size=canvas
 /// これに該当すれば各フレームは他フレームに非依存 → 並列 decode 可能
 /// 不適合な場合は WebPAnimatedDecoder にフォールバックする呼び出し側責任
-final class WebPParallelDecoder: @unchecked Sendable {
+/// nonisolated: 全 stored property が let (不変) + 純関数のみ。decode worker thread で実行。
+nonisolated final class WebPParallelDecoder: @unchecked Sendable {
     struct FrameInfo {
         /// 生の VP8 / VP8L チャンク（WebPDecodeBGRAInto に渡す）
         let data: Data

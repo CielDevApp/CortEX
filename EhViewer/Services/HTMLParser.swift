@@ -1,6 +1,7 @@
 import Foundation
 
-enum HTMLParser: Sendable {
+/// 全メンバーが既に nonisolated (純関数) だったため、enum 全体を nonisolated に統一。
+nonisolated enum HTMLParser: Sendable {
 
     // MARK: - Gallery List Parsing
 

@@ -7,6 +7,7 @@ struct BookInfo {
     let author: String?
 }
 
+@MainActor
 enum BookInfoFetcher {
     static func fetch(isbn: String) async -> BookInfo? {
         if let b = await openBD(isbn) { return b }

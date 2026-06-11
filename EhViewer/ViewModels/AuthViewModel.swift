@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 
+@MainActor
 class AuthViewModel: ObservableObject {
     @Published var memberID: String = ""
     @Published var passHash: String = ""

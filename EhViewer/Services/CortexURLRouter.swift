@@ -20,6 +20,7 @@ struct CortexOpenLocalReaderRequest: Identifiable, Equatable {
 
 /// SwiftUI view が観察する CUI command bus。CortexURLRouter から `@Published` を書き換えると
 /// ContentView の `.fullScreenCover(item:)` が反応して reader が開く。
+@MainActor
 final class CortexCommandBus: ObservableObject {
     static let shared = CortexCommandBus()
     @Published var openOnlineReader: CortexOpenReaderRequest?
@@ -45,6 +46,7 @@ final class CortexCommandBus: ObservableObject {
 /// - `cortex://reader/local?gid=X&page=Y` → local reader 開く (DL 済み作品)
 /// - `cortex://reader/close` → 開いている cortex 経由 reader を閉じる
 /// - `cortex://search?q=...` → 検索 keyword 通知 (GalleryListView 等が NotificationCenter で受信)
+@MainActor
 enum CortexURLRouter {
     @discardableResult
     static func handle(_ url: URL) -> Bool {

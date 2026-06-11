@@ -23,7 +23,8 @@ final class EhClient: Sendable {
         thumbConfig.httpShouldSetCookies = false
         thumbConfig.httpCookieStorage = nil
         thumbConfig.timeoutIntervalForRequest = 10
-        thumbConfig.httpMaximumConnectionsPerHost = SafetyMode.shared.isEnabled ? 6 : 20
+        // nonisolated init から @Published isEnabled は読めないため永続値スナップショットを読む (A2-c)
+        thumbConfig.httpMaximumConnectionsPerHost = SafetyMode.shared.isEnabledSnapshot ? 6 : 20
         thumbConfig.requestCachePolicy = .returnCacheDataElseLoad
         self.thumbSession = URLSession(configuration: thumbConfig)
     }

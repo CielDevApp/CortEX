@@ -44,6 +44,7 @@ enum HistoryItem: Identifiable, Hashable {
     }
 }
 
+@MainActor
 class HistoryManager: ObservableObject {
     static let shared = HistoryManager()
 

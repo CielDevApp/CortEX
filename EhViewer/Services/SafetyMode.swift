@@ -8,10 +8,11 @@ import Combine
 ///
 /// UserDefaults に永続化される (旧 ExtremeMode はメモリ専用だった)。
 /// デフォルト true = 新規ユーザーはセーフ側から開始。
+@MainActor
 final class SafetyMode: ObservableObject {
     static let shared = SafetyMode()
 
-    private static let storageKey = "safetyMode"
+    nonisolated private static let storageKey = "safetyMode"
 
     @Published var isEnabled: Bool {
         didSet {
@@ -33,6 +34,16 @@ final class SafetyMode: ObservableObject {
         } else {
             self.isEnabled = defaults.bool(forKey: Self.storageKey)
         }
+    }
+
+    /// nonisolated 文脈 (EhClient init 等) 向けの永続値スナップショット読み。
+    /// isEnabled (@Published, @MainActor) と同じ UserDefaults キーを読む (未設定時 default true)。
+    /// didSet が常に UserDefaults へ書くため値は isEnabled と一致する。
+    nonisolated var isEnabledSnapshot: Bool {
+        let defaults = UserDefaults.standard
+        return defaults.object(forKey: Self.storageKey) == nil
+            ? true
+            : defaults.bool(forKey: Self.storageKey)
     }
 
     /// ディレイを適用するか (safety ON = 適用、OFF = skip)

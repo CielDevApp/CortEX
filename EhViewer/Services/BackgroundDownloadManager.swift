@@ -8,6 +8,7 @@ import BackgroundTasks
 
 /// バックグラウンドでもダウンロードが継続する URLSessionDownloadTask 管理
 /// 一括enqueue方式: 全タスクを事前投入 → iOSが suspended中も処理 → delegate で完了通知
+@MainActor
 final class BackgroundDownloadManager: NSObject {
     static let shared = BackgroundDownloadManager()
 
@@ -187,7 +188,9 @@ final class BackgroundDownloadManager: NSObject {
     /// didWriteData で speed 表示用に bytes を累積するために必要。
     private var singleTaskGids: [TaskKey: Int] = [:]
     /// gid → AsyncStream（batch DL用）
-    private var gidStreams: [Int: AsyncStream<PageCompletion>.Continuation] = [:]
+    /// stateQueue.sync でのみ触る (従来通り)。onTermination 等の @Sendable closure から
+    /// アクセスするため nonisolated(unsafe) を明示 (キュー保護は既存のまま)
+    nonisolated(unsafe) private var gidStreams: [Int: AsyncStream<PageCompletion>.Continuation] = [:]
     private let stateQueue = DispatchQueue(label: "bgdl.state", qos: .userInitiated)
 
     /// 速度計測用: gid → 前回サンプル以降の受信バイト累積
@@ -1080,7 +1083,8 @@ extension BackgroundDownloadManager: URLSessionDownloadDelegate {
 /// SpeedTracker は 1 task 内の実速度を見る、stream watchdog は task 群全体の progress 間隔を見る。
 /// Kill 発動時は URLSessionTask.cancel() → didCompleteWithError 経由で retriable=true 通知
 /// → 既存 2ndpass 回送フローに乗る (ダブルキル無し)
-final class SpeedTracker: @unchecked Sendable {
+/// nonisolated: 可変状態は全て NSLock 保護済み、URLSession delegate (背景キュー) から同期で使う。
+nonisolated final class SpeedTracker: @unchecked Sendable {
     private let lock = NSLock()
     private var trackers: [Int: Tracker] = [:]
 

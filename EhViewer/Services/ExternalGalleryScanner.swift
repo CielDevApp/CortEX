@@ -13,7 +13,9 @@ import CryptoKit
 ///
 /// 内部キャッシュ場所: `<documents>/EhViewer/external_meta_cache/<bookmark_id>.json` 配下に
 /// folder ID 別 directory を作って各 gallery の metadata.json を保存。
-enum ExternalGalleryScanner {
+///
+/// 可変状態なし (FileManager / CryptoKit のみ、UI 不使用) → nonisolated。
+nonisolated enum ExternalGalleryScanner {
 
     // MARK: - Public API
 

@@ -10,7 +10,9 @@ import Foundation
 ///
 /// Mac Catalyst の `.withSecurityScope` option は実装時に動作検証必要 (Apple doc では
 /// 利用可能とされるが Catalyst 経路の挙動は未確認)。
-enum SecurityScopedBookmark {
+///
+/// 可変状態なし (URL bookmark API は thread-safe) → nonisolated。
+nonisolated enum SecurityScopedBookmark {
 
     enum BookmarkError: Error {
         case createFailed(Error)

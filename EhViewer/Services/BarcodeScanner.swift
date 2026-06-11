@@ -2,17 +2,22 @@ import AVFoundation
 import Vision
 
 /// Phase R-7: カメラ映像から ISBN(EAN-13) を検出。プレビュー非表示 (映像は画面に出さない)。
+/// isolation 方針 (A2-c): 型は @MainActor (start/stop/コールバック設定は UI から)。
+/// capture 処理 (configure/captureOutput) は専用 queue 上で動くため nonisolated。
+@MainActor
 final class BarcodeScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     let session = AVCaptureSession()   // プレビュー表示のため公開
     private let videoOutput = AVCaptureVideoDataOutput()
     private let queue = DispatchQueue(label: "com.kanayayuutou.cortex.barcode", qos: .userInitiated)
-    private var seen = Set<String>()
+    /// queue 上でのみ触る (従来通り)
+    nonisolated(unsafe) private var seen = Set<String>()
 
     /// ISBN(978/979 始まり 13桁) 検出時に main で呼ばれる
     var onISBN: ((String) -> Void)?
     /// タイトル等のOCR結果 (同人誌は ISBN を持たないため). main で呼ばれる
     var onText: (([String]) -> Void)?
-    private var lastTextScan: TimeInterval = 0
+    /// queue 上でのみ触る (従来通り)
+    nonisolated(unsafe) private var lastTextScan: TimeInterval = 0
 
     func start() {
         queue.async { [weak self] in
@@ -54,7 +59,8 @@ final class BarcodeScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         #endif
     }
 
-    private func configure() {
+    /// capture queue 上で実行 (start() の queue.async から呼ばれる)
+    nonisolated private func configure() {
         session.beginConfiguration()
         session.sessionPreset = .hd1280x720
         // 接写ピント対策: マクロ自動切替できる仮想カメラを優先 (Triple→DualWide→Wide)。
@@ -88,7 +94,8 @@ final class BarcodeScanner: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         session.commitConfiguration()
     }
 
-    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+    /// AVFoundation が capture queue 上で呼ぶ delegate (nonisolated 要件)
+    nonisolated func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard let pb = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let request = VNDetectBarcodesRequest { [weak self] req, _ in
             guard let self else { return }

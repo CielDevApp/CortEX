@@ -1,7 +1,8 @@
 import Foundation
 
 /// お気に入りバックアップ（エクスポート/インポート）
-enum FavoritesBackup {
+/// 可変状態なし (FileManager / JSON のみ、UI 不使用) → nonisolated。
+nonisolated enum FavoritesBackup {
 
     struct BackupEntry: Codable {
         let gid: Int

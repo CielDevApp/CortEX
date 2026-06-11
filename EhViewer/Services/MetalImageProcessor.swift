@@ -6,7 +6,8 @@ import UIKit
 #endif
 
 /// Metal Compute Shaderでの画像処理
-final class MetalImageProcessor: @unchecked Sendable {
+/// nonisolated: 全 stored property が let (不変)、Metal API は thread-safe。
+nonisolated final class MetalImageProcessor: @unchecked Sendable {
     static let shared = MetalImageProcessor()
 
     private let device: MTLDevice?
