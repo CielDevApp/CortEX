@@ -6,6 +6,7 @@ enum NhSortMode: String, CaseIterable {
     case popular = "popular"
 }
 
+@MainActor
 class NhentaiListViewModel: ObservableObject {
     @Published var galleries: [NhentaiClient.NhGallery] = []
     @Published var isLoading = false

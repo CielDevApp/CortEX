@@ -21,6 +21,7 @@ struct PageTranslation {
 }
 
 /// Vision OCR でページ内テキストを認識し、翻訳オーバーレイ用データを生成
+@MainActor
 final class TranslationService {
     static let shared = TranslationService()
 

@@ -27,6 +27,7 @@ struct RecommendationResult {
 // MARK: - AIFeatures
 
 /// Apple Intelligence機能管理（iOS 26+ / Foundation Models）
+@MainActor
 final class AIFeatures: ObservableObject {
     static let shared = AIFeatures()
 

@@ -3,6 +3,7 @@ import Network
 import Combine
 
 /// ネットワーク状態監視シングルトン
+@MainActor
 final class NetworkMonitor: ObservableObject {
     static let shared = NetworkMonitor()
 
@@ -24,8 +25,12 @@ final class NetworkMonitor: ObservableObject {
 
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
+            // 背景キューからの callback → main へホップしてから @Published を触る (従来挙動)。
+            // @MainActor 明示化に伴い assumeIsolated で isolation を明示 (実行スレッドは不変)。
             DispatchQueue.main.async {
-                self?.handlePathUpdate(path)
+                MainActor.assumeIsolated {
+                    self?.handlePathUpdate(path)
+                }
             }
         }
         monitor.start(queue: queue)

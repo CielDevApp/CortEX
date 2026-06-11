@@ -60,7 +60,9 @@ final class AnimatedImageSourceCache {
 /// UIApplication.didReceiveMemoryWarning 通知で一斉に frameCache を解放する。
 /// 個別インスタンスが NotificationCenter observer を持つと deinit 順で解放されない
 /// 危険があるため、中央ハブ方式で集中管理する。
-final class AnimatedImageSourceRegistry {
+/// nonisolated: register/unregister は decode thread / deinit からも呼ばれる。
+/// 可変状態 (sources/observerInstalled) は NSLock で保護済み。
+nonisolated final class AnimatedImageSourceRegistry {
     static let shared = AnimatedImageSourceRegistry()
     private let lock = NSLock()
     private var sources: [ObjectIdentifier: Weak<AnimatedImageSource>] = [:]
@@ -137,7 +139,9 @@ final class AnimatedImageSourceRegistry {
 /// アニメGIF/WebP/APNG用のフレームオンデマンド供給源。
 /// 全フレームを事前に decode せず、CGImageSource を保持して必要時に1フレームずつ取得する。
 /// これによりメモリ消費を frame data 1枚分に抑える。
-final class AnimatedImageSource {
+/// nonisolated: decode は background queue / concurrentPerform で実行する前提の
+/// background ワーカー。可変状態 (frameCache/sourcePool 等) は NSLock で保護済み。
+nonisolated final class AnimatedImageSource {
     let source: CGImageSource
     let frameCount: Int
     let frameDelays: [Double]  // 各フレーム遅延（秒）
@@ -522,7 +526,8 @@ final class AnimatedImageSource {
 }
 
 /// アニメ画像の判定ユーティリティ
-enum AnimatedImageDecoder {
+/// 純関数のみ → nonisolated (background の decode/判定経路から呼ばれる)。
+nonisolated enum AnimatedImageDecoder {
     /// CGImageSourceで2フレーム以上ならアニメ扱い
     static func isAnimated(data: Data) -> Bool {
         guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return false }

@@ -3,6 +3,7 @@ import Combine
 import SwiftUI
 
 /// ページ単位の画像ホルダー（@Publishedが独立しているので他ページの更新でre-renderされない）
+@MainActor
 final class PageImageHolder: ObservableObject {
     @Published var image: PlatformImage?
     @Published var isFailed = false

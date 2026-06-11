@@ -8,6 +8,7 @@ enum FavoritesSort: String, CaseIterable {
     case title = "タイトル順"
 }
 
+@MainActor
 class FavoritesViewModel: ObservableObject {
     @Published var galleries: [Gallery] = []
     @Published var isLoading = false
@@ -209,7 +210,9 @@ class FavoritesViewModel: ObservableObject {
         LogManager.shared.log("Download", "\(urls.count) thumbnails to prefetch")
 
         // セーフティ ON (default): 6 並列で保守的 / OFF: 15 並列 (旧 Extreme 相当)
-        let batchSize = SafetyMode.shared.isEnabled ? 6 : 15
+        // (isEnabled は @MainActor。暗黙時代もここで main へホップして読んでいたので await 明示)
+        let safetyOn = await SafetyMode.shared.isEnabled
+        let batchSize = safetyOn ? 6 : 15
         for batchStart in stride(from: 0, to: urls.count, by: batchSize) {
             let batchEnd = min(batchStart + batchSize, urls.count)
             let batch = Array(urls[batchStart..<batchEnd])

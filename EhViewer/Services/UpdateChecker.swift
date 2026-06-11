@@ -5,7 +5,8 @@ import UIKit
 
 /// アプリの現在リリース版。GitHub の release tag と一致させる。
 /// release-ios.sh が IPA ビルド時にこの値を当該タグへ自動同期する (手動更新不要)。
-enum AppVersion {
+/// 純定数 + 純関数のみ (可変状態なし) → nonisolated。
+nonisolated enum AppVersion {
     static let releaseTag = "v02a-f22"
     static var displayName: String {
         "Cort:EX " + releaseTag.replacingOccurrences(of: "v02a-f", with: "ver.02a f")
@@ -26,6 +27,7 @@ struct UpdateInfo {
 }
 
 /// GitHub Releases の最新版を確認する。プッシュ通知や常駐は使わない軽量ポーリング。
+@MainActor
 enum UpdateChecker {
     private static let disabledKey = "updateCheckDisabled"
     private static let skippedKey = "updateSkippedTag"

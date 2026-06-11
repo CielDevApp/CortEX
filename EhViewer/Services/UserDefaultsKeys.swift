@@ -4,7 +4,8 @@ import Foundation
 /// 文字列リテラル直書き 100 箇所超で同一キーが最大 8 ファイルに重複しており、
 /// タイポがコンパイルエラーにならない構造だった。キーの「値」は既存の永続データとの
 /// 互換のため絶対に変更しないこと (識別子名だけ Swift 風に整形)。
-enum UDKey {
+/// 純定数のみ → nonisolated (どのスレッドからでも参照可)。
+nonisolated enum UDKey {
     // MARK: - 読書 / 保存
     static let autoSaveOnRead = "autoSaveOnRead"
     static let readingOrder = "readingOrder"

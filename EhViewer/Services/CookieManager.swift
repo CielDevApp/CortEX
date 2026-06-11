@@ -1,6 +1,8 @@
 import Foundation
 
-enum CookieManager: Sendable {
+/// 可変状態なし (Keychain は thread-safe)。nonisolated な EhClient の同期経路から
+/// 呼ばれるため nonisolated (従来の暗黙 @MainActor 時代も呼び出し元スレッドで直接実行されていた)。
+nonisolated enum CookieManager: Sendable {
     struct Credentials: Sendable {
         let memberID: String
         let passHash: String

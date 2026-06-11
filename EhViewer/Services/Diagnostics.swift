@@ -14,6 +14,7 @@ import QuartzCore
 /// (Time Profiler 実測: スクロール 50 秒で main busy 0.25 秒なのに stall 90 件超)。
 /// CADisplayLink は common modes で毎フレーム発火するため、コールバック間隔の開き =
 /// 本当に描画フレームが落ちた証拠になる。
+@MainActor
 final class MainStallMonitor {
     static let shared = MainStallMonitor()
     #if canImport(UIKit)
@@ -51,10 +52,13 @@ final class MainStallMonitor {
 /// コールスタック (生アドレス + 画像名+オフセット) を採取する。CPU を使わない「待ち」
 /// ブロック (ロック/セマフォ/同期IPC) は Time Profiler に写らないため、この方式でのみ
 /// 特定できる。stall 1 回につき 1 サンプル、ログタグ [BlockSample]。
+@MainActor
 final class MainBlockSampler {
     static let shared = MainBlockSampler()
-    /// CADisplayLink (MainStallMonitor) が毎フレーム更新する最終 tick 時刻
-    static var lastFrameTick: CFAbsoluteTime = 0
+    /// CADisplayLink (MainStallMonitor) が毎フレーム更新する最終 tick 時刻。
+    /// main (書き) + sampler thread (読み) の cross-thread 参照のため nonisolated(unsafe)
+    /// (従来の暗黙時代と同じ無保護アクセス、診断専用値なので許容)。
+    nonisolated(unsafe) static var lastFrameTick: CFAbsoluteTime = 0
     private var mainThreadPort: thread_act_t = 0
     private var started = false
 
@@ -82,7 +86,8 @@ final class MainBlockSampler {
         }
     }
 
-    private static func sampleAndLog(port: thread_act_t, gapMs: Int) {
+    /// sampler thread から呼ばれる (main を suspend する側なので main では実行できない)
+    nonisolated private static func sampleAndLog(port: thread_act_t, gapMs: Int) {
         guard thread_suspend(port) == KERN_SUCCESS else { return }
         var addrs: [UInt64] = []
         var state = arm_thread_state64_t()

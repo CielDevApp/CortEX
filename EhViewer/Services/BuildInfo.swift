@@ -1,6 +1,7 @@
 import Foundation
 
 /// 自動生成: Scripts/update_build_info.sh によりビルド毎に上書きされる
-enum BuildInfo {
-    static let tag = "2026-06-10 22:49:55 cdddd7d+dirty \"fix(detail): 横長ページのサムネがセルからはみ出すのを修正\""
+/// 純定数のみ → nonisolated (nonisolated な LogManager.log からも参照される)。
+nonisolated enum BuildInfo {
+    static let tag = "2026-06-11 17:44:46 a865ccd+dirty \"fix(library): ライブラリのサムネがスクロールで戻るまで表示されないデグレを修正\""
 }

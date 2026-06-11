@@ -5,6 +5,7 @@ import SwiftUI
 /// リーダーのメインViewModel
 /// ページロード: ReaderViewModel+PageLoad.swift
 /// フィルタパイプライン: ReaderViewModel+FilterPipeline.swift
+@MainActor
 class ReaderViewModel: ObservableObject {
     @Published var currentIndex: Int = 0
     @Published var isLoading = false

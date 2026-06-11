@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import SwiftUI
 
+@MainActor
 class GalleryListViewModel: ObservableObject {
     @Published var galleries: [Gallery] = []
     @Published var isLoading = false
@@ -125,7 +126,8 @@ class GalleryListViewModel: ObservableObject {
         return "list_\(cat)_\(query)".replacingOccurrences(of: " ", with: "_")
     }
 
-    private static func cacheDir() -> URL {
+    /// 純関数 (FileManager は thread-safe)。detached 保存タスクからも呼ぶため nonisolated
+    nonisolated private static func cacheDir() -> URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let dir = docs.appendingPathComponent("EhViewer/listcache", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

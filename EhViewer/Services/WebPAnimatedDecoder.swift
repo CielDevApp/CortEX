@@ -7,7 +7,9 @@ import libwebp
 /// libwebp の WebPAnimDecoder を Swift で薄くラップ
 /// 目的: Apple ImageIO (CGImageSource) より高速な WebP アニメーション decode
 /// 制約: 順次アクセス専用（frame i へのランダムアクセス不可、reset で巻き戻し）
-final class WebPAnimatedDecoder: @unchecked Sendable {
+/// nonisolated: 呼び出し元 (nonisolated な WebPToMP4Converter) のスレッドで実行する
+/// background ワーカー。可変状態は単一コンシューマ前提 (順次アクセス契約) で保護。
+nonisolated final class WebPAnimatedDecoder: @unchecked Sendable {
     private var decoder: OpaquePointer?
     private var webpData = WebPData()
     private let fileBytes: UnsafeMutablePointer<UInt8>
@@ -127,7 +129,7 @@ final class WebPAnimatedDecoder: @unchecked Sendable {
 #endif
 
 /// libwebp モジュールが利用可能か
-enum WebPLibSupport {
+nonisolated enum WebPLibSupport {
     static var isAvailable: Bool {
         #if canImport(libwebp)
         return true
@@ -138,7 +140,8 @@ enum WebPLibSupport {
 }
 
 /// WebP ファイル検知（libwebp 不要、マジックバイトのみ）
-enum WebPFileDetector {
+/// 純関数のみ → nonisolated。
+nonisolated enum WebPFileDetector {
     /// アニメ WebP ファイルか（RIFF...WEBP + ANIM chunk を含む）
     static func isAnimatedWebP(url: URL) -> Bool {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return false }

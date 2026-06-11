@@ -7,7 +7,9 @@ extension Notification.Name {
 }
 
 /// nhentai用Cookie管理（E-Hentaiとは完全分離）
-enum NhentaiCookieManager: Sendable {
+/// 可変状態なし (Keychain / FileManager は thread-safe) → nonisolated
+/// (nonisolated な NhentaiClient から同期で呼ばれる)。
+nonisolated enum NhentaiCookieManager: Sendable {
     private static let service = "com.kanayayuutou.CortEX.nhentai"
 
     // MARK: - Keychain操作

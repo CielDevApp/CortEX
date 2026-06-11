@@ -3,6 +3,7 @@ import Security
 import Combine
 
 /// 4桁PINコードのKeychain管理+認証
+@MainActor
 final class PINManager: ObservableObject {
     static let shared = PINManager()
 

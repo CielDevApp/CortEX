@@ -2,6 +2,7 @@ import Foundation
 import LocalAuthentication
 import Combine
 
+@MainActor
 class BiometricAuth: ObservableObject {
     static let shared = BiometricAuth()
 

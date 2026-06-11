@@ -1,7 +1,9 @@
 import Foundation
 import Security
 
-enum KeychainService: Sendable {
+/// 可変状態なし (Security / FileManager は thread-safe)。主要メンバーは既に nonisolated
+/// だったため、残りの private ヘルパー含め enum 全体を nonisolated に統一。
+nonisolated enum KeychainService: Sendable {
     nonisolated(unsafe) private static let service = "com.kanayayuutou.EhViewer"
 
     /// Catalyst (ad-hoc 署名) では Keychain が -34018 で書けず、UserDefaults も
