@@ -11,6 +11,9 @@ struct NhentaiScrollList: View {
     @Binding var navPath: NavigationPath
     @State private var previewGallery: NhentaiClient.NhGallery?
     @State private var previewReaderRequest: NhentaiPreviewReaderRequest?
+    /// E-H 側 GalleryScrollList と同方式 (v02a-f13): 検索/更新でデータ総入れ替えした時に
+    /// 前のスクロール位置が残る問題対策。scrollResetToken 変化で先頭 id へ固定する。
+    @State private var scrollPosition: Int?
     var onScrollDown: (() -> Void)?
     var onScrollUp: (() -> Void)?
     @Environment(\.horizontalSizeClass) private var hSizeClass
@@ -101,6 +104,13 @@ struct NhentaiScrollList: View {
             let delta = newVal - oldVal
             if delta > 15 { onScrollDown?() } else if delta < -15 { onScrollUp?() }
         }
+        // Mac Catalyst は従来挙動を変えない (憲法: Mac は触らない)。iPhone/iPad のみ。
+        #if !targetEnvironment(macCatalyst)
+        .scrollPosition(id: $scrollPosition, anchor: .top)
+        .onChange(of: viewModel.scrollResetToken) {
+            scrollPosition = viewModel.galleries.first?.id
+        }
+        #endif
         .refreshable { await viewModel.refresh() }
         .overlay {
             if let nh = previewGallery {
@@ -176,6 +186,13 @@ struct NhentaiScrollList: View {
             if delta > 15 { onScrollDown?() }
             else if delta < -15 { onScrollUp?() }
         }
+        // Mac Catalyst は従来挙動を変えない (憲法: Mac は触らない)。iPhone/iPad のみ。
+        #if !targetEnvironment(macCatalyst)
+        .scrollPosition(id: $scrollPosition, anchor: .top)
+        .onChange(of: viewModel.scrollResetToken) {
+            scrollPosition = viewModel.galleries.first?.id
+        }
+        #endif
         .refreshable { await viewModel.refresh() }
         .overlay {
             if let nh = previewGallery {

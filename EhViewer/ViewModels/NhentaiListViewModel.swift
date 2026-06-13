@@ -16,6 +16,10 @@ class NhentaiListViewModel: ObservableObject {
     @Published var sortMode: NhSortMode = .recent
     /// 取得失敗時の UI 通知用 (catch でログのみだと田中に何も見えない)
     @Published var errorMessage: String?
+    /// E-H 側 (v02a-f13) と同方式: データ総入れ替え (検索/更新) のたび +1 し、
+    /// ScrollList 側がこれを監視して先頭へスクロール固定する (検索後に前の位置が残る問題対策)。
+    /// append ページングでは bump しない (途中までスクロールした位置を維持)。
+    @Published var scrollResetToken: Int = 0
 
     private var currentPage = 1
 
@@ -31,6 +35,7 @@ class NhentaiListViewModel: ObservableObject {
             galleries = result.result
             hasMore = result.num_pages > 1
             currentPage = 1
+            scrollResetToken += 1  // 総入れ替え → ScrollList を先頭へ固定
         } catch {
             LogManager.shared.log("nhentai", "load failed: \(error.localizedDescription)")
             errorMessage = error.localizedDescription
