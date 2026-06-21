@@ -48,14 +48,15 @@ struct GalleryGridCellView: View {
 
             Text(gallery.title)
                 .font(.caption2)
-                .lineLimit(2, reservesSpace: true)   // 常に2行分の高さを確保 → セル高均一化 (縦ずれ対策)
-                .multilineTextAlignment(.leading)
+                .lineLimit(2, reservesSpace: true)
+                .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 4) {
                 if let category = gallery.category {
-                    Text(category.rawValue)
+                    Text(category.rawValue == "Doujinshi" ? "Doujin" : category.rawValue)
                         .font(.system(size: 8, weight: .semibold))
+                        .lineLimit(1)
                         .padding(.horizontal, 4)
                         .padding(.vertical, 1)
                         .background(Color(hex: category.color))
@@ -78,6 +79,8 @@ struct GalleryGridCellView: View {
                     Text("\(gallery.pageCount)P")
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize()
                 }
             }
         }
@@ -109,8 +112,8 @@ struct NhentaiGridCellView: View {
 
             Text(gallery.displayTitle)
                 .font(.caption2)
-                .lineLimit(2, reservesSpace: true)   // 常に2行分の高さを確保 → セル高均一化 (縦ずれ対策)
-                .multilineTextAlignment(.leading)
+                .lineLimit(2, reservesSpace: true)
+                .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 4) {
