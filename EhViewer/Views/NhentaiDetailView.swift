@@ -668,6 +668,28 @@ struct NhTagSearchResultView: View {
     @State private var currentPage = 1
     @State private var previewGallery: NhentaiClient.NhGallery?
     @State private var previewReaderRequest: NhentaiPreviewReaderRequest?
+    // タグ飛び先の絞り込み (表示言語)。nh は評価★が無いので言語のみ (E-H TagSearchResultView から移植)。
+    @State private var showFilter = false
+    @State private var selectedLanguages: Set<String> = []
+
+    /// 選択言語を nh 検索構文の language トークンへ変換 (一覧の languageFilter と同方式)。
+    /// 日本語含む or 複数選択 → 選択外を除外、単独選択 → include。
+    private var languageQuery: String? {
+        guard !selectedLanguages.isEmpty else { return nil }
+        if selectedLanguages.contains("japanese") || selectedLanguages.count >= 2 {
+            let defined = Set(AdvancedSearchView.nhentaiLanguages.map { $0.code })
+            let toExclude = defined.subtracting(selectedLanguages)
+            return toExclude.map { "-language:\($0)" }.sorted().joined(separator: " ")
+        }
+        if let only = selectedLanguages.first { return "language:\(only)" }
+        return nil
+    }
+
+    /// タグクエリ + 言語フィルタを合成した実効クエリ。
+    private var effectiveQuery: String {
+        if let lq = languageQuery, !lq.isEmpty { return search.query + " " + lq }
+        return search.query
+    }
 
     var body: some View {
         ScrollView {
@@ -714,6 +736,67 @@ struct NhTagSearchResultView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showFilter = true
+                } label: {
+                    Image(systemName: selectedLanguages.isEmpty
+                          ? "line.3.horizontal.decrease.circle"
+                          : "line.3.horizontal.decrease.circle.fill")
+                }
+            }
+        }
+        .sheet(isPresented: $showFilter) {
+            NavigationStack {
+                Form {
+                    Section {
+                        ForEach(AdvancedSearchView.nhentaiLanguages, id: \.code) { lang in
+                            Button {
+                                if selectedLanguages.contains(lang.code) { selectedLanguages.remove(lang.code) }
+                                else { selectedLanguages.insert(lang.code) }
+                            } label: {
+                                HStack {
+                                    Text(lang.label).foregroundStyle(.primary)
+                                    Spacer()
+                                    if selectedLanguages.contains(lang.code) {
+                                        Image(systemName: "checkmark").foregroundStyle(.blue)
+                                    }
+                                }
+                                .contentShape(Rectangle())   // 行全体を当たり判定に
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        if !selectedLanguages.isEmpty {
+                            Button("クリア") { selectedLanguages.removeAll() }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                        }
+                    } header: {
+                        Text("表示する言語")
+                    } footer: {
+                        Text("選択した言語のみ表示（未選択なら全言語）。")
+                    }
+                }
+                .navigationTitle("絞り込み")
+                #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+                #endif
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("適用") {
+                            showFilter = false
+                            galleries = []
+                            Task { await loadFirst() }
+                        }
+                    }
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("閉じる") { showFilter = false }
+                    }
+                }
+            }
+            .presentationDetents([.medium])
+        }
         .overlay {
             if isLoading && galleries.isEmpty {
                 ProgressView("検索中...")
@@ -747,7 +830,7 @@ struct NhTagSearchResultView: View {
         isLoading = true
         currentPage = 1
         do {
-            let result = try await NhentaiClient.search(query: search.query, page: 1)
+            let result = try await NhentaiClient.search(query: effectiveQuery, page: 1)
             galleries = result.result
             hasMore = result.num_pages > 1
         } catch {
@@ -761,7 +844,7 @@ struct NhTagSearchResultView: View {
         isLoading = true
         currentPage += 1
         do {
-            let result = try await NhentaiClient.search(query: search.query, page: currentPage)
+            let result = try await NhentaiClient.search(query: effectiveQuery, page: currentPage)
             // 田中報告 2026-04-27 同型: append 時に同 id 重複除外 (LazyVGrid 空白行対策、B3 共通)
             galleries.appendDeduplicated(result.result)
             hasMore = currentPage < result.num_pages
