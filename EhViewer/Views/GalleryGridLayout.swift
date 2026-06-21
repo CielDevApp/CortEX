@@ -48,7 +48,7 @@ struct GalleryGridCellView: View {
 
             Text(gallery.title)
                 .font(.caption2)
-                .lineLimit(2)
+                .lineLimit(2, reservesSpace: true)   // 常に2行分の高さを確保 → セル高均一化 (縦ずれ対策)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -109,7 +109,7 @@ struct NhentaiGridCellView: View {
 
             Text(gallery.displayTitle)
                 .font(.caption2)
-                .lineLimit(2)
+                .lineLimit(2, reservesSpace: true)   // 常に2行分の高さを確保 → セル高均一化 (縦ずれ対策)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
