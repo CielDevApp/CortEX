@@ -1726,6 +1726,18 @@ class DownloadManager: ObservableObject {
         var urlResolveReleased = false
         defer { if !urlResolveReleased { urlResolveSemaphore.signal() } }
 
+        // 田中報告 2026-06-22: 「DL でページ解決中に止めたくても止められない」bug 対策。
+        // semaphore 取得待ちの間に中止された場合、disk scan / URL 解決に入る前に抜ける
+        // (defer が semaphore を解放する)。
+        if activeDownloads[gid]?.isCancelled == true {
+            LogManager.shared.log("Download", "gid=\(gid) URL解決 開始前に中止検知 → 終了")
+            await MainActor.run {
+                self.activeDownloads.removeValue(forKey: gid)
+                self.endLiveActivity(gid: gid, success: false)
+            }
+            return
+        }
+
         // URL 解決も disk 実体を見て必要分だけに限定:
         // ehentai の ?p=N は 1 ページ 20 thumbnail。N*20..(N+1)*20 の range が
         // 全部 disk にあれば URL fetch 自体 skip して placeholder URL を入れる。
@@ -1782,6 +1794,14 @@ class DownloadManager: ObservableObject {
         // 失敗は連続 10 回までは同じ page を retry (break せず続行)。
         var consecutiveFail = 0
         while true {
+            // 田中報告 2026-06-22: ページ(URL)解決中に中止しても止まらない bug の核心。
+            // この while はループ先頭で中止判定をしておらず、cancelDownload が isCancelled を
+            // 立てても解決が pageCount / safety limit まで走り切っていた (catch も cancel された
+            // fetch を「一時失敗」とみなし retry していた)。先頭で中止を見て即停止する。
+            if activeDownloads[gid]?.isCancelled == true {
+                LogManager.shared.log("Download", "gid=\(gid) URL解決 中止検知 → 即停止")
+                break
+            }
             // この URL fetch page が覆う image index の range
             let rangeStart = page * urlFetchPageSize
             let rangeEnd = pageCount > 0 ? min(rangeStart + urlFetchPageSize, pageCount) : rangeStart + urlFetchPageSize
@@ -1868,6 +1888,11 @@ class DownloadManager: ObservableObject {
                     LogManager.shared.log("Download", "page URL fetch give up after 10 consecutive fails page=\(page)")
                     break
                 }
+                // 中止されていれば retry せず即停止 (catch を中止の逃げ道にしない)
+                if activeDownloads[gid]?.isCancelled == true {
+                    LogManager.shared.log("Download", "gid=\(gid) URL解決 retry前に中止検知 → 停止")
+                    break
+                }
                 // 短 sleep で同じ page を再試行 (break せず続行)
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 continue
@@ -1875,6 +1900,16 @@ class DownloadManager: ObservableObject {
         }
 
         LogManager.shared.log("Download", "gid=\(gid) fetched \(allPageURLs.count) page URLs (expected: \(pageCount))")
+
+        // 中止検知: URL 解決を抜けた後も enqueue フェーズへ進ませない (defer が semaphore 解放)。
+        if activeDownloads[gid]?.isCancelled == true {
+            LogManager.shared.log("Download", "gid=\(gid) URL解決後に中止検知 → enqueue せず終了")
+            await MainActor.run {
+                self.activeDownloads.removeValue(forKey: gid)
+                self.endLiveActivity(gid: gid, success: false)
+            }
+            return
+        }
 
         // 【フォールバック】exhentai で 0件 = 未ログイン可能性。e-hentai (public) で再試行
         // user の cookie が URLSession に共有されてない/未ログインでも public gallery なら
@@ -1885,6 +1920,10 @@ class DownloadManager: ObservableObject {
             LogManager.shared.log("Download", "gid=\(gid) exhentai empty → fallback e-hentai: \(fallbackURL)")
             var page = 0
             while true {
+                if activeDownloads[gid]?.isCancelled == true {
+                    LogManager.shared.log("Download", "gid=\(gid) fallback URL解決 中止検知 → 停止")
+                    break
+                }
                 do {
                     let urlString = page > 0 ? fallbackURL + "?p=\(page)" : fallbackURL
                     let html = try await client.fetchHTML(urlString: urlString, host: .ehentai)
