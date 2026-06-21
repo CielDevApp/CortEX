@@ -1065,6 +1065,39 @@ struct DownloadsView: View {
     private var libraryGridContent: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
+                // 田中報告 2026-06-22: グリッド表示だと DL 進捗が見えない (list 表示には
+                // グリッド導入前から downloadingRow があった)。list と同じ進捗行をグリッドの
+                // 先頭にも出す。downloadingRow を流用 (第19条・車輪の再発明禁止)。
+                if !activeList.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(String(localized: "ダウンロード中 (\(activeList.count))"))
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 4)
+                        ForEach(activeList, id: \.gid) { item in
+                            downloadingRow(gid: item.gid, progress: item.progress)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    if let meta = manager.downloads[item.gid] {
+                                        liveReaderMeta = meta
+                                    }
+                                }
+                                .contextMenu {
+                                    Button {
+                                        manager.cancelDownload(gid: item.gid)
+                                    } label: {
+                                        Label("ダウンロード中止", systemImage: "stop.circle")
+                                    }
+                                    Button(role: .destructive) {
+                                        manager.cancelDownload(gid: item.gid)
+                                        manager.deleteDownload(gid: item.gid)
+                                    } label: {
+                                        Label("削除", systemImage: "trash")
+                                    }
+                                }
+                        }
+                    }
+                }
                 if !completedList.isEmpty {
                     libraryGridSection(
                         title: String(localized: "保存済み (\(completedList.count))"),
@@ -1089,7 +1122,7 @@ struct DownloadsView: View {
                         items: autoSavedList
                     )
                 }
-                if completedList.isEmpty && visibleSortedExternal.isEmpty && incompleteList.isEmpty && autoSavedList.isEmpty {
+                if activeList.isEmpty && completedList.isEmpty && visibleSortedExternal.isEmpty && incompleteList.isEmpty && autoSavedList.isEmpty {
                     ContentUnavailableView {
                         Label("保存済みギャラリーがありません", systemImage: "arrow.down.circle")
                     } description: {
