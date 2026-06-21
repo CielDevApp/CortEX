@@ -68,7 +68,10 @@ struct TagSearchResultView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button { showFilter = true } label: {
-                    Image(systemName: "slider.horizontal.3")
+                    // nh 側と統一 (逆輸入): 未選択=線アイコン / フィルタ有効時=塗り。
+                    Image(systemName: (minRating >= 2 || !selectedLanguages.isEmpty)
+                          ? "line.3.horizontal.decrease.circle.fill"
+                          : "line.3.horizontal.decrease.circle")
                 }
             }
         }
@@ -102,6 +105,7 @@ struct TagSearchResultView: View {
                                         Image(systemName: "checkmark").foregroundStyle(.blue)
                                     }
                                 }
+                                .contentShape(Rectangle())   // 行全体を当たり判定に (文字以外/余白タップでも反応)
                             }
                             .buttonStyle(.plain)
                         }
