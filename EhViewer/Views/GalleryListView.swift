@@ -430,6 +430,13 @@ struct GalleryScrollList: View {
     @ObservedObject var authVM: AuthViewModel
     @Binding var navPath: NavigationPath
     @State private var scrollPosition: Int?
+    // 田中報告 2026-06-21: 起動直後/左右スワイプで一覧トップにスキマが出て一瞬で張り付く。
+    // 真因 = 初回ロード (loadGalleries reset:true) も scrollResetToken を上げるため、既に
+    // 先頭にいる状態で .scrollPosition(anchor:.top) が programmatic アンカー跳躍を起こす。
+    // しかも scrollPosition が gid のまま居座り、ページ再レイアウト (TabView スワイプ) の度に
+    // 再アンカーしてスキマが再発する。→ 初回 reset はスキップし scrollPosition を nil のまま保つ。
+    // 2 回目以降 (プルダウン更新 / 検索) の総入れ替えだけ先頭固定する。
+    @State private var didInitialReset = false
     @State private var previewGallery: Gallery?
     @State private var previewReaderRequest: GalleryPreviewReaderRequest?
     var onScrollDown: (() -> Void)?
@@ -566,6 +573,8 @@ struct GalleryScrollList: View {
         .onChange(of: viewModel.scrollResetToken) {
             // 田中報告 2026-05-30: iPad グリッドでもプルダウン更新で新着が画面外(上)に隠れ、検索位置も残る。
             // データ総入れ替え時は新しい先頭 gid へスクロールを固定し一番上を表示する。
+            // ただし初回ロードは既に先頭表示なのでスキップ (起動時スキマ対策・上の didInitialReset 参照)。
+            guard didInitialReset else { didInitialReset = true; return }
             scrollPosition = viewModel.galleries.first?.gid
         }
         #endif
@@ -708,6 +717,8 @@ struct GalleryScrollList: View {
         // Mac Catalyst は従来挙動を一切変えない (憲法: Mac は触らない)。iPhone/iPad のみ適用。
         #if !targetEnvironment(macCatalyst)
         .onChange(of: viewModel.scrollResetToken) {
+            // 初回ロードは既に先頭表示なのでスキップ (起動時スキマ対策・didInitialReset 参照)。
+            guard didInitialReset else { didInitialReset = true; return }
             // 田中報告 2026-05-30: プルダウン更新で新着が先頭に差し込まれても .scrollPosition が
             // 旧トップ作品を .top に固定し直し、新着が画面外(上)に隠れて「更新されない」ように見える。
             // 検索時も前のスクロール位置が残る。データ総入れ替え時は新しい先頭 gid へ固定し一番上を表示。
