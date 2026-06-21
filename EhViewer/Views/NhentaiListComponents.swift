@@ -14,6 +14,9 @@ struct NhentaiScrollList: View {
     /// E-H 側 GalleryScrollList と同方式 (v02a-f13): 検索/更新でデータ総入れ替えした時に
     /// 前のスクロール位置が残る問題対策。scrollResetToken 変化で先頭 id へ固定する。
     @State private var scrollPosition: Int?
+    // 起動時スキマ対策 (E-H 側 GalleryScrollList と同方式・2026-06-21): 初回 reset は
+    // 既に先頭表示なのでスキップし、programmatic アンカー跳躍 (スキマ→張り付き) を防ぐ。
+    @State private var didInitialReset = false
     var onScrollDown: (() -> Void)?
     var onScrollUp: (() -> Void)?
     @Environment(\.horizontalSizeClass) private var hSizeClass
@@ -108,6 +111,7 @@ struct NhentaiScrollList: View {
         #if !targetEnvironment(macCatalyst)
         .scrollPosition(id: $scrollPosition, anchor: .top)
         .onChange(of: viewModel.scrollResetToken) {
+            guard didInitialReset else { didInitialReset = true; return }
             scrollPosition = viewModel.galleries.first?.id
         }
         #endif
@@ -190,6 +194,7 @@ struct NhentaiScrollList: View {
         #if !targetEnvironment(macCatalyst)
         .scrollPosition(id: $scrollPosition, anchor: .top)
         .onChange(of: viewModel.scrollResetToken) {
+            guard didInitialReset else { didInitialReset = true; return }
             scrollPosition = viewModel.galleries.first?.id
         }
         #endif
