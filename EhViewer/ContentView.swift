@@ -326,6 +326,9 @@ struct ContentView: View {
             WishlistView()
                 .tabItem { Label("ウィッシュリスト", systemImage: "bookmark.fill") }
                 .tag(7)
+            SubscriptionView()
+                .tabItem { Label("購読", systemImage: "bell.fill") }
+                .tag(8)
         }
         .sheet(isPresented: $authVM.showingLogin) {
             LoginView(authVM: authVM)

@@ -387,6 +387,23 @@ struct GalleryDetailView: View {
                                 .font(.caption)
                                 .foregroundStyle(.blue)
                         }
+                        // 長押しで投稿者を購読 (新作通知 Phase 3)。トグル式。
+                        .contextMenu {
+                            let subscribed = SubscriptionStore.shared.isSubscribed(kind: .uploader, value: uploader)
+                            Button {
+                                if subscribed {
+                                    SubscriptionStore.shared.remove(kind: .uploader, value: uploader)
+                                } else {
+                                    SubscriptionStore.shared.add(kind: .uploader, value: uploader)
+                                    #if canImport(UIKit)
+                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                    #endif
+                                }
+                            } label: {
+                                Label(subscribed ? "投稿者の購読を解除" : "この投稿者を購読",
+                                      systemImage: subscribed ? "bell.slash.fill" : "bell.fill")
+                            }
+                        }
                     }
                 }
                 if let language = detail.language { infoRow("言語", value: language) }
@@ -445,6 +462,24 @@ struct GalleryDetailView: View {
                                             .background(Color.blue.opacity(0.12))
                                             .foregroundStyle(.blue)
                                             .clipShape(RoundedRectangle(cornerRadius: 4))
+                                    }
+                                    // 長押しでタグを購読 (新作通知 Phase 3)。値は namespace:tag。
+                                    .contextMenu {
+                                        let tagValue = "\(namespace):\(tag)"
+                                        let subscribed = SubscriptionStore.shared.isSubscribed(kind: .tag, value: tagValue)
+                                        Button {
+                                            if subscribed {
+                                                SubscriptionStore.shared.remove(kind: .tag, value: tagValue)
+                                            } else {
+                                                SubscriptionStore.shared.add(kind: .tag, value: tagValue, label: tag)
+                                                #if canImport(UIKit)
+                                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                                #endif
+                                            }
+                                        } label: {
+                                            Label(subscribed ? "タグの購読を解除" : "このタグを購読",
+                                                  systemImage: subscribed ? "bell.slash.fill" : "bell.fill")
+                                        }
                                     }
 
                                     // CORTEX PROTOCOL: character tag age + search
