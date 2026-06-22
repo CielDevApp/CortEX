@@ -21,6 +21,9 @@ struct ContentView: View {
     @State private var lockScrollOffset: CGFloat = 0
     @StateObject private var lockDisplayLink = DisplayLinkDriver()
     @AppStorage(UDKey.appTheme) private var appTheme = 0
+    // 新作通知の購読機能は田中専用 (配布版は送信インフラが無く動かないため隠す)。
+    // CORTEX PROTOCOL 隠しモードオン時のみ購読タブを表示する。
+    @AppStorage(UDKey.cortexProtocolUnlocked) private var cortexUnlocked = false
     @ObservedObject private var safetyMode = SafetyMode.shared
     @ObservedObject private var ecoMode = EcoMode.shared
     @ObservedObject private var networkMonitor = NetworkMonitor.shared
@@ -326,9 +329,12 @@ struct ContentView: View {
             WishlistView()
                 .tabItem { Label("ウィッシュリスト", systemImage: "bookmark.fill") }
                 .tag(7)
-            SubscriptionView()
-                .tabItem { Label("購読", systemImage: "bell.fill") }
-                .tag(8)
+            // 購読タブは隠しモード (CORTEX PROTOCOL) オン時のみ。配布版では非表示。
+            if cortexUnlocked {
+                SubscriptionView()
+                    .tabItem { Label("購読", systemImage: "bell.fill") }
+                    .tag(8)
+            }
         }
         .sheet(isPresented: $authVM.showingLogin) {
             LoginView(authVM: authVM)
