@@ -102,6 +102,29 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
                      didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
         LogManager.shared.log("APNs", "device token: \(hex)")
+        // M2 ポーラーに token + 現在の購読を自動同期 (Phase 3.5)
+        Task { @MainActor in
+            SubscriptionSync.deviceToken = hex
+            SubscriptionSync.push()
+        }
+    }
+
+    // 通知タップ → 該当ギャラリーを開く (Phase 4)。push payload の gid/gtoken を使い、
+    // 既存の cortex:// online reader 機構 (CortexCommandBus) を流用する。
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        let info = response.notification.request.content.userInfo
+        let gid = (info["gid"] as? Int) ?? (info["gid"] as? NSNumber)?.intValue
+        let gtoken = info["gtoken"] as? String
+        if let gid, let gtoken, !gtoken.isEmpty {
+            let host = (info["host"] as? String) ?? "exhentai"
+            Task { @MainActor in
+                CortexCommandBus.shared.openOnlineReader =
+                    CortexOpenReaderRequest(gid: gid, token: gtoken, page: 0, hostName: host)
+            }
+        }
+        completionHandler()
     }
 
     func application(_ application: UIApplication,

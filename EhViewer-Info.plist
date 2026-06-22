@@ -73,5 +73,18 @@
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>ISBN/EANバーコードを読み取って書籍をウィッシュリストに追加するために使用します。</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>100.82.192.113</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<false/>
+			</dict>
+		</dict>
+	</dict>
 </dict>
 </plist>

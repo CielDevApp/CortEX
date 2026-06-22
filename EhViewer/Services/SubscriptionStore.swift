@@ -111,6 +111,7 @@ final class SubscriptionStore: ObservableObject {
     }
 
     private func save() {
+        SubscriptionSync.push()  // 購読変更を M2 ポーラーへ自動同期 (Phase 3.5)
         let snapshot = items
         let url = fileURL
         Task.detached(priority: .utility) {
