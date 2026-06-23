@@ -51,11 +51,10 @@ final class EhClient: Sendable {
             urlString += "?" + queryItems.joined(separator: "&")
         }
 
-        LogManager.shared.log("Reader", "fetchGalleryList URL: \(urlString)")
+        LogManager.shared.log("Search", "fetchGalleryList host=\(host) URL: \(urlString)")
 
-        let html = try await fetchHTML(urlString: urlString, host: host)
-        let galleries = HTMLParser.parseGalleryList(html: html)
-        let pageNumber = HTMLParser.parsePageNumber(html: html)
+        // 検索系の共通フォールバック経由で取得 (exhentai 空 → e-hentai)
+        let (galleries, pageNumber) = try await fetchListWithExhentaiFallback(urlString: urlString, host: host)
 
         if let first = galleries.first, let last = galleries.last {
             LogManager.shared.log("Reader", "  \(galleries.count)件 first=\(first.postedDate) last=\(last.postedDate) hasNext=\(pageNumber.hasNext)")
@@ -93,10 +92,56 @@ final class EhClient: Sendable {
 
     /// nextURLを使って次のページを取得（searchnavベースのページネーション用）
     nonisolated func fetchByURL(urlString: String, host: GalleryHost) async throws -> (galleries: [Gallery], pageNumber: PageNumber) {
-        let html = try await fetchHTML(urlString: urlString, host: host)
-        let galleries = HTMLParser.parseGalleryList(html: html)
-        let pageNumber = HTMLParser.parsePageNumber(html: html)
+        LogManager.shared.log("Search", "fetchByURL host=\(host) URL: \(urlString)")
+        // 検索結果のページ送りも同じ exhentai→e-hentai フォールバックを通す
+        let (galleries, pageNumber) = try await fetchListWithExhentaiFallback(urlString: urlString, host: host)
+        LogManager.shared.log("Search", "  fetchByURL \(galleries.count)件 hasNext=\(pageNumber.hasNext)")
         return (galleries, pageNumber)
+    }
+
+    /// 検索系の共通フォールバック。exhentai が結果を出せない場合 (200+0B / 未認証 /
+    /// SadPanda / Cloudflare 等) は、同一 URL のホストだけ e-hentai (public) に差し替えて
+    /// 再取得する。検索はログイン不要なので exhentai のログイン状態に関係なく結果を必ず出す保険。
+    /// 田中報告 2026-06-22 (bundle id を com.kanayayuutou.cortexapp に変更後、exhentai が
+    /// 200+0B body を返すようになった。原因未確定で今は追わない)。
+    ///
+    /// 重要: exhentai の 200+0B body は fetchHTML 内で trimmed.isEmpty 判定により
+    /// EhError.notLoggedIn を throw する (空配列を返すのではない)。よって「空配列なら
+    /// フォールバック」だけでは発火しない。throw 経路もここで捕捉して e-hentai へ回す。
+    /// fetchGalleryList / fetchByURL の両検索経路から共有する。
+    nonisolated private func fetchListWithExhentaiFallback(urlString: String, host: GalleryHost) async throws -> (galleries: [Gallery], pageNumber: PageNumber) {
+        // exhentai 以外 (e-hentai 直) はそのまま取得
+        guard host == .exhentai else {
+            let html = try await fetchHTML(urlString: urlString, host: host)
+            return (HTMLParser.parseGalleryList(html: html), HTMLParser.parsePageNumber(html: html))
+        }
+
+        // exhentai: まず通常取得を試みる。0件 or throw (200+0B / notLoggedIn / parseFailed 等) なら
+        // e-hentai にフォールバック。検索 cancel だけは尊重して rethrow する。
+        do {
+            let html = try await fetchHTML(urlString: urlString, host: .exhentai)
+            let galleries = HTMLParser.parseGalleryList(html: html)
+            if !galleries.isEmpty {
+                return (galleries, HTMLParser.parsePageNumber(html: html))
+            }
+            LogManager.shared.log("Search", "exhentai 200+\(html.count)B だが 0件 → e-hentai フォールバック")
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let e as URLError where e.code == .cancelled {
+            throw e
+        } catch {
+            LogManager.shared.log("Search", "exhentai 取得失敗(\(error)) → e-hentai フォールバック")
+        }
+
+        // フォールバック: URL のホストだけ e-hentai に差し替えて再取得
+        let ehURL = urlString.replacingOccurrences(
+            of: GalleryHost.exhentai.rawValue,
+            with: GalleryHost.ehentai.rawValue
+        )
+        let ehHtml = try await fetchHTML(urlString: ehURL, host: .ehentai)
+        let ehGalleries = HTMLParser.parseGalleryList(html: ehHtml)
+        LogManager.shared.log("Search", "  e-hentai フォールバック \(ehGalleries.count)件 (\(ehHtml.count)B) URL: \(ehURL)")
+        return (ehGalleries, HTMLParser.parsePageNumber(html: ehHtml))
     }
 
     // MARK: - Bulk Tag Fetch (E-Hentai API)
@@ -496,7 +541,32 @@ final class EhClient: Sendable {
 
     // MARK: - Networking
 
+    /// exhentai は igneous が stale になると 200+0B (or sad panda image / 302) を返す。
+    /// その時 fetchHTMLOnce が notLoggedIn を throw するので、1 回だけ igneous を自動 refresh
+    /// (member/pass は有効なので再ログイン不要) して retry する。
+    /// 田中報告 2026-06-22: bundle id 変更後 exhentai ログイン不可。真因は stale igneous +
+    /// アプリが Set-Cookie の新 igneous を破棄していたこと (cookie storage 無効化のため)。
+    /// 実測 (cookie 受理 jar で e-hentai→exhentai bounce) で新 igneous 取得 → exhentai が
+    /// 63829B 本文を返すことを確認済。refresh は同手順を URLSession で再現する。
     nonisolated func fetchHTML(urlString: String, host: GalleryHost) async throws -> String {
+        do {
+            return try await fetchHTMLOnce(urlString: urlString, host: host)
+        } catch EhError.notLoggedIn where host == .exhentai {
+            LogManager.shared.log("EhAuth", "exhentai notLoggedIn → igneous 自動 refresh 試行")
+            let refreshed = await Self.igneousRefresher.refresh {
+                await self.performIgneousRefresh()
+            }
+            guard refreshed else {
+                LogManager.shared.log("EhAuth", "igneous refresh 失敗 → notLoggedIn 継続")
+                throw EhError.notLoggedIn
+            }
+            LogManager.shared.log("EhAuth", "igneous refresh 成功 → 1 回だけ retry")
+            return try await fetchHTMLOnce(urlString: urlString, host: host)
+        }
+    }
+
+    /// 単発の HTML 取得 (refresh / retry なし)。
+    nonisolated private func fetchHTMLOnce(urlString: String, host: GalleryHost) async throws -> String {
         let t0 = CFAbsoluteTimeGetCurrent()
         guard let url = URL(string: urlString) else {
             throw EhError.invalidURL
@@ -506,9 +576,9 @@ final class EhClient: Sendable {
         request.setValue(Self.buildCookieHeader(for: host), forHTTPHeaderField: "Cookie")
 
         let (data, response) = try await session.data(for: request)
-        LogManager.shared.log("Perf", "fetchHTML: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms \(data.count)B \(urlString.suffix(60))")
         let httpResponse = response as? HTTPURLResponse
         let statusCode = httpResponse?.statusCode ?? 0
+        LogManager.shared.log("Perf", "fetchHTML: \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000))ms status=\(statusCode) \(data.count)B \(urlString.suffix(60))")
 
         // exhentai: SadPanda判定（画像レスポンスまたは302リダイレクト）
         if host == .exhentai {
@@ -582,6 +652,54 @@ final class EhClient: Sendable {
         } catch {
             return nil
         }
+    }
+
+    // MARK: - igneous 自動 refresh
+
+    /// stale な exhentai igneous を自動更新する単一フライト coordinator。
+    /// 並行リクエストが同時に notLoggedIn を踏んでも refresh は 1 本にまとめる。
+    static let igneousRefresher = IgneousRefresher()
+
+    /// 有効な member/pass を cookie 受理 jar に種付けし、e-hentai→exhentai を辿って
+    /// exhentai が Set-Cookie で発行する real igneous を回収・Keychain 保存する。
+    /// 成功 (real igneous 保存) で true。再ログイン不要 (member/pass は既に有効)。
+    nonisolated private func performIgneousRefresh() async -> Bool {
+        guard let memberID = KeychainService.load(key: "ipb_member_id"),
+              let passHash = KeychainService.load(key: "ipb_pass_hash"),
+              !memberID.isEmpty, !passHash.isEmpty else {
+            LogManager.shared.log("EhAuth", "refresh: member/pass 無し → 中止 (要ログイン)")
+            return false
+        }
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.httpCookieAcceptPolicy = .always
+        cfg.httpShouldSetCookies = true
+        let store = cfg.httpCookieStorage ?? HTTPCookieStorage.shared
+        for domain in [".e-hentai.org", ".exhentai.org"] {
+            for (n, v) in [("ipb_member_id", memberID), ("ipb_pass_hash", passHash)] {
+                if let c = HTTPCookie(properties: [.domain: domain, .path: "/", .name: n, .value: v, .secure: "TRUE"]) {
+                    store.setCookie(c)
+                }
+            }
+        }
+        let refreshSession = URLSession(configuration: cfg)
+        func get(_ urlStr: String) async {
+            guard let url = URL(string: urlStr) else { return }
+            var req = URLRequest(url: url)
+            req.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+            _ = try? await refreshSession.data(for: req)
+        }
+        // 実測で確認した正規 bounce: e-hentai でセッション確立 → exhentai で igneous 発行。
+        await get("https://e-hentai.org/")
+        await get("https://exhentai.org/")
+        guard let exURL = URL(string: "https://exhentai.org/"),
+              let ig = store.cookies(for: exURL)?.first(where: { $0.name == "igneous" })?.value,
+              !ig.isEmpty, ig != "mystery" else {
+            LogManager.shared.log("EhAuth", "refresh: real igneous 取れず (mystery/無し)")
+            return false
+        }
+        KeychainService.save(key: "igneous", value: ig)
+        LogManager.shared.log("EhAuth", "refresh: 新 igneous 保存 (len=\(ig.count))")
+        return true
     }
 
     // MARK: - Ban残り時間抽出
@@ -660,5 +778,30 @@ nonisolated final class ProgressReportThrottle: @unchecked Sendable {
         guard fraction >= 1.0 || fraction - last >= 0.02 else { return false }
         last = fraction
         return true
+    }
+}
+
+/// exhentai igneous の自動 refresh を単一フライト化 + スロットルする coordinator。
+/// 並列リクエスト (一覧 / サムネ / 画像) が同時に stale igneous を踏んでも、
+/// refresh bounce は 1 本だけ走らせ、他は同じ結果を待つ (thundering herd 防止)。
+actor IgneousRefresher {
+    private var inFlight: Task<Bool, Never>?
+    private var lastSuccess: CFAbsoluteTime = 0
+
+    /// 直近 30s 以内に成功済みなら即 true (Keychain に新 igneous 反映済とみなす)。
+    /// in-flight があれば相乗り、無ければ op を 1 本起動する。
+    func refresh(_ op: @escaping @Sendable () async -> Bool) async -> Bool {
+        if lastSuccess > 0, CFAbsoluteTimeGetCurrent() - lastSuccess < 30 {
+            return true
+        }
+        if let t = inFlight {
+            return await t.value
+        }
+        let task = Task { await op() }
+        inFlight = task
+        let ok = await task.value
+        inFlight = nil
+        if ok { lastSuccess = CFAbsoluteTimeGetCurrent() }
+        return ok
     }
 }
