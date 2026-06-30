@@ -46,3 +46,8 @@ Secrets.plist
 *.p8
 *.p12
 credentials.json
+
+# ローカル LLM (aider / OpenCode 等) のスクラッチ — 誤コミット防止 (第18条保険)
+.aider*
+.opencode/
+.ornith/
