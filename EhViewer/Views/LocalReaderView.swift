@@ -21,6 +21,18 @@ struct LocalReaderView: View {
     @State private var zoomImage: PlatformImage?
     @State private var sliderValue: Double
     @State private var isSliding = false
+    /// isSliding 固着対策 (2026-07-02, Day14 iPad スライダー追従不具合): スライダー最終活動時刻
+    @State private var lastSliderActivity = Date.distantPast
+
+    /// iPadOS 26 で Slider の onEditingChanged(false) 直後に幽霊 (true) が届いて
+    /// isSliding が固着する事象を実機ログで観測 (2026-07-02)。実ドラッグ中は
+    /// sliderValue 更新で lastSliderActivity が刷新され続けるため、2 秒以上静止した
+    /// ままスクロール由来のページ更新が来た場合のみ固着と判定し強制解除する。
+    private func healStuckSliderIfNeeded() {
+        guard isSliding, Date().timeIntervalSince(lastSliderActivity) > 2.0 else { return }
+        LogManager.shared.log("iPadScroll", "Local isSliding auto-heal: quiescent → false")
+        isSliding = false
+    }
     // Phase R-6: シーク時サムネプレビュー用キャッシュ (page → 240px サムネ)
     @State private var seekThumbs: [Int: PlatformImage] = [:]
     // Phase R-6: プレビューパネルの常駐表示 (左右タップ移動/外側タップで閉じる)
@@ -491,11 +503,13 @@ struct LocalReaderView: View {
         .ignoresSafeArea()
         .onChange(of: horizontalPage) { _, newPage in
             currentIndex = newPage
+            healStuckSliderIfNeeded()
             if !isSliding { sliderValue = Double(newPage) }
         }
         .onChange(of: Int(sliderValue)) {
             #if canImport(UIKit)
             if isSliding {
+                lastSliderActivity = Date()
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 horizontalPage = Int(sliderValue)
             }
@@ -602,6 +616,7 @@ struct LocalReaderView: View {
             }
             .onChange(of: currentIndex) { old, new in
                 LogManager.shared.log("iPadScroll", "currentIndex: \(old) → \(new) isSliding=\(isSliding)")
+                healStuckSliderIfNeeded()
                 if !isSliding {
                     sliderValue = Double(new)
                     // 自動栞 (Phase R-1): ライブラリ作品の最終閲覧ページを保存 (gid キー)
@@ -1061,6 +1076,9 @@ struct LocalReaderView: View {
                         in: 0...Double(max(meta.pageCount - 1, 1)),
                         step: 1
                     ) { editing in
+                        // 診断 2026-07-02: 幽霊 editing(true) の発火順序を実証するためのログ
+                        LogManager.shared.log("iPadScroll", "Local slider editing=\(editing)")
+                        lastSliderActivity = Date()
                         isSliding = editing
                         if editing {
                             withAnimation(.easeIn(duration: 0.15)) {
@@ -1086,7 +1104,10 @@ struct LocalReaderView: View {
                     .padding(.horizontal)
                     .environment(\.layoutDirection, readingOrder == 1 && isHorizontal ? .rightToLeft : .leftToRight)
                     .onChange(of: sliderValue) { _, nv in
-                        if isSliding { loadSeekThumbs(around: Int(nv)) }  // Phase R-6
+                        if isSliding {
+                            lastSliderActivity = Date()
+                            loadSeekThumbs(around: Int(nv))  // Phase R-6
+                        }
                     }
                 }
 
