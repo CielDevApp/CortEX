@@ -96,6 +96,37 @@ struct StarRatingBar: View {
     }
 }
 
+/// ローディング中ダミーの shimmer (キラキラ) 表現 (Phase 3, 田中要望 2026-07-03)。
+/// ぐるぐる/進捗バーではなく、ベース色の上を斜めのハイライトが周期的に流れる
+/// スケルトン UI。transform (offset) アニメーションのみなので GPU 合成で軽い。
+struct ShimmerPlaceholder: View {
+    var cornerRadius: CGFloat = CardDesign.cardCorner
+    @State private var phase: CGFloat = -0.8
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(Color.gray.opacity(0.18))
+            .overlay {
+                GeometryReader { geo in
+                    LinearGradient(
+                        colors: [.clear, .white.opacity(0.35), .clear],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .frame(width: geo.size.width * 0.7)
+                    .offset(x: geo.size.width * phase)
+                    .onAppear {
+                        // LazyVGrid で可視セルのみ materialize されるため常時多数は回らない
+                        withAnimation(.linear(duration: 1.3).repeatForever(autoreverses: false)) {
+                            phase = 1.5
+                        }
+                    }
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+}
+
 /// 詳細画面のセクションカード (GroupBox を Phase 1 のカード言語に統一、Phase 2)
 struct CardGroupBoxStyle: GroupBoxStyle {
     func makeBody(configuration: Configuration) -> some View {
