@@ -505,7 +505,11 @@ struct GalleryScrollList: View {
                 // 田中設計 (2026-04-27): real セルとダミーを統合 ForEach に。
                 // index < galleries.count → real cell、それ以上 → ダミー (常時 +80 slot 確保)。
                 // SwiftUI の自然な diff で「ダミー → real cell」置換が動く。
-                let totalSlotsEh = Array(0..<(viewModel.galleries.count + 80))
+                // 田中報告 2026-07-03: 検索結果が少ない時も +80 ダミーが並び、件数より下へ
+                // 無限にスクロールできてしまう。ダミーは「続きがある/読み込み中」の時だけ出す
+                // (viewport 空白対策という本来目的に限定)。
+                let dummyCountEh = (viewModel.hasMore || viewModel.isLoading) ? 80 : 0
+                let totalSlotsEh = Array(0..<(viewModel.galleries.count + dummyCountEh))
                 ForEach(totalSlotsEh, id: \.self) { index in
                     if index < viewModel.galleries.count {
                         let gallery = viewModel.galleries[index]

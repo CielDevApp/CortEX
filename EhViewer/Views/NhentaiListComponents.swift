@@ -62,7 +62,10 @@ struct NhentaiScrollList: View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 10) {
                 // 田中設計 (2026-04-27): real セルとダミーを統合 ForEach に。
-                let totalSlots = Array(0..<(viewModel.galleries.count + 80))
+                // 田中報告 2026-07-03: 検索結果が少ない時も +80 ダミーが並び、件数より下へ
+                // 無限にスクロールできてしまう。ダミーは「続きがある/読み込み中」の時だけ出す。
+                let dummyCount = (viewModel.hasMore || viewModel.isLoading) ? 80 : 0
+                let totalSlots = Array(0..<(viewModel.galleries.count + dummyCount))
                 ForEach(totalSlots, id: \.self) { index in
                     if index < viewModel.galleries.count {
                         let nh = viewModel.galleries[index]
