@@ -89,9 +89,8 @@ struct NhentaiScrollList: View {
                             }
                             .id(nh.id)
                     } else {
-                        // ダミーは実カード (カバー 2:3 + 情報ストリップ) の高さに近い比率で確保
-                        RoundedRectangle(cornerRadius: CardDesign.cardCorner, style: .continuous)
-                            .fill(Color.gray.opacity(0.18))
+                        // ダミーは実カード比率 + shimmer (Phase 3, キラキラ系ローディング表現)
+                        ShimmerPlaceholder()
                             .aspectRatio(0.56, contentMode: .fit)
                             .task { await viewModel.loadNextPage() }
                     }
