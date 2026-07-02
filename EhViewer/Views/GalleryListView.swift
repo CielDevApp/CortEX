@@ -234,22 +234,31 @@ struct GalleryListView: View {
     private var ehentaiContent: some View {
         VStack(spacing: 0) {
             if isSearchActive {
+                // UI 刷新 (2026-07-03): 全幅の「検索: / クリア」帯 → コンパクトな material チップ
                 HStack {
-                    Text("検索: \(currentVM.searchText)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Spacer()
-                    Button {
-                        clearSearch()
-                    } label: {
-                        Label("クリア", systemImage: "xmark.circle.fill")
+                    HStack(spacing: 5) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(currentVM.searchText)
                             .font(.caption)
+                            .lineLimit(1)
+                        Button {
+                            clearSearch()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
                     }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    Spacer()
                 }
                 .padding(.horizontal)
-                .padding(.vertical, 6)
-                .background(Color.blue.opacity(0.08))
+                .padding(.vertical, 4)
             }
 
             #if targetEnvironment(macCatalyst)
@@ -322,23 +331,32 @@ struct GalleryListView: View {
     private var nhentaiContent: some View {
         VStack(spacing: 0) {
             if nhVM.isSearchActive {
+                // UI 刷新 (2026-07-03): 全幅帯 → material チップ (E-H 側と同型)
                 HStack {
-                    Text("検索: \(nhVM.searchText)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Spacer()
-                    Button {
-                        searchText = ""
-                        nhVM.clearSearch()
-                    } label: {
-                        Label("クリア", systemImage: "xmark.circle.fill")
+                    HStack(spacing: 5) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(nhVM.searchText)
                             .font(.caption)
+                            .lineLimit(1)
+                        Button {
+                            searchText = ""
+                            nhVM.clearSearch()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
                     }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    Spacer()
                 }
                 .padding(.horizontal)
-                .padding(.vertical, 6)
-                .background(Color.orange.opacity(0.08))
+                .padding(.vertical, 4)
             }
 
             if !nhVM.isSearchActive {
@@ -615,7 +633,8 @@ struct GalleryScrollList: View {
             LazyVStack(spacing: 0) {
                 ForEach(Array(viewModel.galleries.enumerated()), id: \.element.gid) { index, gallery in
                     // onTapGesture + onLongPressGesture: 長押し発火時は tap を抑制するSwiftUI標準動作
-                    GalleryCardView(gallery: gallery)
+                    // UI 刷新 (2026-07-03): 行をカード化 (角丸 continuous + subtle shadow)
+                    CardDesign.cardChrome(GalleryCardView(gallery: gallery))
                         .padding(.horizontal)
                         .padding(.vertical, 4)
                         .contentShape(Rectangle())
@@ -671,9 +690,7 @@ struct GalleryScrollList: View {
                         }
                     }
 
-                    #if !targetEnvironment(macCatalyst)
-                    Divider().padding(.leading)
-                    #endif
+                    // UI 刷新 (2026-07-03): カード化に伴い区切り線は撤去 (カード間隔が分離を担う)
                 }
 
                 if viewModel.hasMore {
@@ -705,6 +722,7 @@ struct GalleryScrollList: View {
                 }
             }
         }
+        .background(CardDesign.listBackground)
         .onScrollGeometryChange(for: CGFloat.self) { geo in
             geo.contentOffset.y
         } action: { oldVal, newVal in

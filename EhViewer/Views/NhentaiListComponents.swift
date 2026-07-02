@@ -145,7 +145,8 @@ struct NhentaiScrollList: View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 ForEach(viewModel.galleries) { nh in
-                    NhentaiCardView(gallery: nh)
+                    // UI 刷新 (2026-07-03): 行をカード化 (E-H 側と同型)
+                    CardDesign.cardChrome(NhentaiCardView(gallery: nh))
                         .padding(.horizontal)
                         .padding(.vertical, 4)
                         .contentShape(Rectangle())
@@ -160,9 +161,7 @@ struct NhentaiScrollList: View {
                             previewGallery = nh
                         }
 
-                    #if !targetEnvironment(macCatalyst)
-                    Divider().padding(.leading)
-                    #endif
+                    // UI 刷新 (2026-07-03): カード化に伴い区切り線は撤去 (カード間隔が分離を担う)
                 }
 
                 if viewModel.hasMore {
@@ -183,6 +182,7 @@ struct NhentaiScrollList: View {
                 }
             }
         }
+        .background(CardDesign.listBackground)
         .onScrollGeometryChange(for: CGFloat.self) { geo in
             geo.contentOffset.y
         } action: { oldVal, newVal in
@@ -339,53 +339,53 @@ struct NhentaiCardView: View {
     }
 
     var body: some View {
-        HStack(spacing: 10) {
-            // カバー
-            if let img = coverImage {
-                Image(platformImage: img)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 80, height: 110)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-            } else {
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Color.gray.opacity(0.2))
-                    .frame(width: 80, height: 110)
-                    .overlay { Image(systemName: "photo").foregroundStyle(.secondary) }
-                    .onAppear { loadCover() }
+        HStack(alignment: .top, spacing: 12) {
+            // カバー (UI 刷新 2026-07-03: continuous 角丸 + P バッジをカバー上へ)
+            Group {
+                if let img = coverImage {
+                    Image(platformImage: img)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 80, height: 110)
+                } else {
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.2))
+                        .frame(width: 80, height: 110)
+                        .overlay { Image(systemName: "photo").foregroundStyle(.secondary) }
+                        .onAppear { loadCover() }
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: CardDesign.coverCorner, style: .continuous))
+            .overlay(alignment: .bottomTrailing) {
+                if gallery.num_pages > 0 {
+                    CoverPagesBadge(pages: gallery.num_pages)
+                }
             }
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(gallery.displayTitle)
-                    .font(.subheadline)
-                    .lineLimit(3)
+                    .font(.callout)
+                    .fontWeight(.semibold)
+                    .lineLimit(2)
                     .foregroundStyle(isReadDimmed ? Color.secondary : Color.primary)
 
-                HStack(spacing: 4) {
-                    Text("NH")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(.orange)
-                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                HStack(spacing: 6) {
+                    TintedBadge(text: "NH", color: .orange)
 
-                    if gallery.num_pages > 0 {
-                        Text("\(gallery.num_pages) ページ")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    if let tags = gallery.tags {
+                        let langTags = tags.filter { $0.type == "language" }.map(\.name)
+                        if !langTags.isEmpty {
+                            Text(langTags.joined(separator: ", "))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
                     }
                 }
 
-                if let tags = gallery.tags {
-                    let langTags = tags.filter { $0.type == "language" }.map(\.name)
-                    if !langTags.isEmpty {
-                        Text(langTags.joined(separator: ", "))
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                Spacer(minLength: 4)
             }
+            .frame(height: 110)
             Spacer()
         }
     }
