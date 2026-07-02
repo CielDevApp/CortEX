@@ -568,9 +568,8 @@ struct GalleryScrollList: View {
                             }
                             .id(gallery.gid)
                     } else {
-                        // ダミーは実カード比率 + shimmer (Phase 3, キラキラ系ローディング表現)
-                        ShimmerPlaceholder()
-                            .aspectRatio(0.56, contentMode: .fit)
+                        // ダミー = 実カード構造のスケルトン + shimmer (Phase 3 v2, 高級版)
+                        SkeletonCardPlaceholder()
                             .task { await viewModel.loadNextPage() }
                     }
                 }
