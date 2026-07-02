@@ -14,6 +14,104 @@ struct UploaderSearch: Hashable {
     var displayTitle: String { uploader }
 }
 
+// MARK: - UI 刷新 共有コンポーネント (2026-07-03, ui-modern-redesign 案A)
+// EhPanda (角丸15プレーン / カテゴリ色ベタ塗りラベル / 黄色星列) と被らない署名:
+// continuous 角丸 + tinted capsule バッジ + 連続塗り率星バー + カバー上マテリアル P バッジ
+
+enum CardDesign {
+    static let cardCorner: CGFloat = 12
+    static let coverCorner: CGFloat = 8
+
+    static var cardBackground: Color {
+        #if canImport(UIKit)
+        return Color(uiColor: .secondarySystemGroupedBackground)
+        #else
+        return Color(nsColor: .windowBackgroundColor)
+        #endif
+    }
+
+    static var listBackground: Color {
+        #if canImport(UIKit)
+        return Color(uiColor: .systemGroupedBackground)
+        #else
+        return Color(nsColor: .underPageBackgroundColor)
+        #endif
+    }
+
+    /// リスト行のカード化 (角丸 continuous + subtle shadow)
+    @ViewBuilder
+    static func cardChrome<V: View>(_ content: V) -> some View {
+        content
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: cardCorner, style: .continuous)
+                    .fill(cardBackground)
+                    .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
+            )
+    }
+}
+
+/// カテゴリ / NH バッジ: 色ベタ塗りから tinted capsule (背景 16% + 同色文字) へ
+struct TintedBadge: View {
+    let text: String
+    let color: Color
+    var font: Font = .caption2.weight(.semibold)
+
+    var body: some View {
+        Text(text)
+            .font(font)
+            .foregroundStyle(color)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.16), in: Capsule())
+    }
+}
+
+/// 連続塗り率の5星バー (半分星の段付き表現から脱却)
+struct StarRatingBar: View {
+    let rating: Double
+    var size: CGFloat = 10
+
+    private func stars(_ color: Color, filled: Bool) -> some View {
+        HStack(spacing: 1) {
+            ForEach(0..<5, id: \.self) { _ in
+                Image(systemName: filled ? "star.fill" : "star")
+                    .font(.system(size: size))
+                    .foregroundStyle(color)
+            }
+        }
+    }
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            stars(Color.secondary.opacity(0.35), filled: false)
+            stars(.yellow, filled: true)
+                .mask(
+                    GeometryReader { geo in
+                        Rectangle()
+                            .frame(width: geo.size.width * min(max(rating, 0), 5) / 5)
+                    }
+                )
+        }
+    }
+}
+
+/// カバー右下のページ数バッジ (マテリアル capsule)
+struct CoverPagesBadge: View {
+    let pages: Int
+    var fontSize: CGFloat = 9
+
+    var body: some View {
+        Text("\(pages)P")
+            .font(.system(size: fontSize, weight: .medium))
+            .monospacedDigit()
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(.ultraThinMaterial, in: Capsule())
+            .padding(4)
+    }
+}
+
 struct GalleryCardView: View {
     let gallery: Gallery
     @ObservedObject private var readHistory = ReadHistoryStore.shared
@@ -25,34 +123,30 @@ struct GalleryCardView: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(alignment: .top, spacing: 12) {
             CachedImageView(url: gallery.coverURL, host: .exhentai, gid: gallery.gid)
                 .frame(width: 80, height: 110)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: CardDesign.coverCorner, style: .continuous))
                 .background(
-                    RoundedRectangle(cornerRadius: 6)
+                    RoundedRectangle(cornerRadius: CardDesign.coverCorner, style: .continuous)
                         .fill(Color.gray.opacity(0.15))
                 )
+                .overlay(alignment: .bottomTrailing) {
+                    if gallery.pageCount > 0 {
+                        CoverPagesBadge(pages: gallery.pageCount)
+                    }
+                }
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(gallery.title)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .lineLimit(3)
+                    .font(.callout)
+                    .fontWeight(.semibold)
+                    .lineLimit(2)
                     .foregroundStyle(isReadDimmed ? Color.secondary : Color.primary)
-
-                Spacer()
 
                 HStack(spacing: 6) {
                     if let category = gallery.category {
-                        Text(category.rawValue)
-                            .font(.caption2)
-                            .fontWeight(.semibold)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color(hex: category.color))
-                            .foregroundStyle(.white)
-                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                        TintedBadge(text: category.rawValue, color: Color(hex: category.color))
                     }
 
                     if let uploader = gallery.uploader, !uploader.isEmpty {
@@ -65,38 +159,27 @@ struct GalleryCardView: View {
                     }
                 }
 
-                HStack(spacing: 8) {
+                Spacer(minLength: 4)
+
+                HStack(spacing: 6) {
                     if gallery.rating > 0 {
-                        ratingStars(gallery.rating)
+                        StarRatingBar(rating: gallery.rating)
+                        Text(String(format: "%.1f", gallery.rating))
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    if gallery.pageCount > 0 {
-                        Label("\(gallery.pageCount)P", systemImage: "doc")
+                    if !gallery.postedDate.isEmpty {
+                        Text(gallery.postedDate)
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
                 }
-
-                if !gallery.postedDate.isEmpty {
-                    Text(gallery.postedDate)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
             }
+            .frame(height: 110)
         }
         .padding(.vertical, 4)
-    }
-
-    @ViewBuilder
-    private func ratingStars(_ rating: Double) -> some View {
-        HStack(spacing: 1) {
-            ForEach(0..<5, id: \.self) { index in
-                let value = rating - Double(index)
-                Image(systemName: value >= 1 ? "star.fill" : value >= 0.5 ? "star.leadinghalf.filled" : "star")
-                    .font(.system(size: 8))
-                    .foregroundStyle(.orange)
-            }
-        }
     }
 }
 
