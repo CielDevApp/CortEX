@@ -27,7 +27,10 @@ struct HistoryView: View {
                     switch item {
                     case .eh(let entry):
                         let g = history.toGallery(entry)
-                        ehHistoryRow(entry: entry)
+                        // UI 刷新 Phase 1.9 (2026-07-03): カード化 (一覧と同型)
+                        CardDesign.cardChrome(ehHistoryRow(entry: entry))
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
                             .contentShape(Rectangle())
                             .onTapGesture { navPathBox.path.append(g) }
                             .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 15) {
@@ -37,7 +40,9 @@ struct HistoryView: View {
                                 previewEhGallery = g
                             }
                     case .nh(let entry):
-                        nhHistoryRow(entry: entry)
+                        CardDesign.cardChrome(nhHistoryRow(entry: entry))
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
                             .contentShape(Rectangle())
                             .onTapGesture { navPathBox.path.append(entry.gallery) }
                             .onLongPressGesture(minimumDuration: 0.4, maximumDistance: 15) {
@@ -50,6 +55,8 @@ struct HistoryView: View {
                 }
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(CardDesign.listBackground.ignoresSafeArea())
             .navigationTitle("履歴")
             .toolbar {
                 if !history.isEmpty {
@@ -131,29 +138,22 @@ struct HistoryView: View {
         HStack(spacing: 12) {
             CachedImageView(url: entry.coverURL, host: .exhentai, gid: entry.gid)
                 .frame(width: 80, height: 110)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: CardDesign.coverCorner, style: .continuous))
                 .background(
-                    RoundedRectangle(cornerRadius: 6)
+                    RoundedRectangle(cornerRadius: CardDesign.coverCorner, style: .continuous)
                         .fill(Color.gray.opacity(0.15))
                 )
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(entry.title)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .lineLimit(3)
+                    .font(.callout)
+                    .fontWeight(.semibold)
+                    .lineLimit(2)
 
                 Spacer()
 
                 if let catName = entry.category, let cat = GalleryCategory(rawValue: catName) {
-                    Text(cat.rawValue)
-                        .font(.caption2)
-                        .fontWeight(.semibold)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color(hex: cat.color))
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                    TintedBadge(text: cat.rawValue, color: Color(hex: cat.color))
                 }
 
                 HStack {
@@ -186,25 +186,18 @@ struct HistoryView: View {
             // NhentaiCardViewと同じcache優先 + v2 path対応
             NhentaiCoverView(gallery: entry.gallery)
                 .frame(width: 80, height: 110)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: CardDesign.coverCorner, style: .continuous))
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(entry.gallery.displayTitle)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .lineLimit(3)
+                    .font(.callout)
+                    .fontWeight(.semibold)
+                    .lineLimit(2)
 
                 Spacer()
 
                 // nhentaiバッジ
-                Text("nhentai")
-                    .font(.caption2)
-                    .fontWeight(.semibold)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.orange)
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                TintedBadge(text: "NH", color: .orange)
 
                 HStack {
                     if entry.lastReadPage > 0 {
