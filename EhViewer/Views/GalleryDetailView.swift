@@ -277,6 +277,8 @@ struct GalleryDetailView: View {
             }
         }
         .task {
+            // 詳細画面を開いた時点で既読確定 (田中要望 2026-07-02、リーダー起動から前倒し)
+            ReadHistoryStore.shared.markAsRead(site: .eh, gid: gallery.gid)
             await loadDetail()
         }
     }

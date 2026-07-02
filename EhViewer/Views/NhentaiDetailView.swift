@@ -70,6 +70,8 @@ struct NhentaiDetailView: View {
             Text("ローカルには追加済みです。Safari で手動完了するか、設定から nhentai に再認証してください。")
         }
         .task {
+            // 詳細画面を開いた時点で既読確定 (田中要望 2026-07-02、リーダー起動から前倒し)
+            ReadHistoryStore.shared.markAsRead(site: .nh, gid: initialGallery.id)
             await loadFullDetail()
             await loadCover()
         }
