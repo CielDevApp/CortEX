@@ -16,6 +16,13 @@ struct UploaderSearch: Hashable {
 
 struct GalleryCardView: View {
     let gallery: Gallery
+    @ObservedObject private var readHistory = ReadHistoryStore.shared
+    @AppStorage(UDKey.grayOutReadGalleries) private var grayOutReadGalleries = true
+
+    /// 既読グレー表示 (トグル OFF 中は抑制のみ、記録は残る)。判定は O(1)。
+    private var isReadDimmed: Bool {
+        grayOutReadGalleries && readHistory.isRead(site: .eh, gid: gallery.gid)
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -32,6 +39,7 @@ struct GalleryCardView: View {
                     .font(.subheadline)
                     .fontWeight(.medium)
                     .lineLimit(3)
+                    .foregroundStyle(isReadDimmed ? Color.secondary : Color.primary)
 
                 Spacer()
 

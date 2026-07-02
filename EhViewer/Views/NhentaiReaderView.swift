@@ -251,6 +251,9 @@ struct NhentaiReaderView: View {
             return .handled
         }
         .task {
+            // リーダー起動 = 既読確定 (詳細画面の閲覧では付かない)。再表示時は冪等。
+            ReadHistoryStore.shared.markAsRead(site: .nh, gid: gallery.id)
+
             // リーダー表示開始 → DL側に減速ヒント
             DownloadManager.setReaderActive(gid: -gallery.id, active: true)
             await resolveReaderMode()

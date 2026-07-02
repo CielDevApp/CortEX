@@ -58,6 +58,10 @@ nonisolated enum UDKey {
     static let gachaSkipEffect = "gachaSkipEffect"
     static let tipsShownOnce = "tipsShownOnce"
 
+    // MARK: - 既読管理
+    static let grayOutReadGalleries = "grayOutReadGalleries"
+    static let readHistoryKeys = "readHistory.v1"
+
     // MARK: - 省電力 / 診断
     static let ecoMode = "ecoMode"
     static let ecoLinkLowPower = "ecoLinkLowPower"
