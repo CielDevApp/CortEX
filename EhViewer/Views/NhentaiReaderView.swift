@@ -68,6 +68,19 @@ struct NhentaiReaderView: View {
     /// 動画 WebP モード解決後の有効方向。未解決時は黒画面で待機
     private var effectiveDirection: Int { resolvedDirection ?? userReaderDirection }
 
+    /// isSliding 固着対策 (2026-07-02, Day14 iPad スライダー追従不具合): スライダー最終活動時刻
+    @State private var lastSliderActivity = Date.distantPast
+
+    /// iPadOS 26 で Slider の onEditingChanged(false) 直後に幽霊 (true) が届いて
+    /// isSliding が固着する事象を実機ログで観測 (2026-07-02)。実ドラッグ中は
+    /// sliderValue 更新で lastSliderActivity が刷新され続けるため、2 秒以上静止した
+    /// ままスクロール由来のページ更新が来た場合のみ固着と判定し強制解除する。
+    private func healStuckSliderIfNeeded() {
+        guard isSliding, Date().timeIntervalSince(lastSliderActivity) > 2.0 else { return }
+        LogManager.shared.log("iPadScroll", "NH isSliding auto-heal: quiescent → false")
+        isSliding = false
+    }
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -580,6 +593,8 @@ struct NhentaiReaderView: View {
                             .id(index)
                             .frame(maxWidth: .infinity)
                             .onAppear {
+                                // 診断 2026-07-02: iPad スライダー追従不具合 (Day14) の切り分け用
+                                LogManager.shared.log("iPadScroll", "NH cell onAppear idx=\(index)")
                                 currentIndex = index
                                 loadPage(index)
                                 if !EcoMode.shared.isEnabled {
@@ -596,13 +611,17 @@ struct NhentaiReaderView: View {
             .onLongPressGesture(minimumDuration: 0.3) {
                 withAnimation(.easeInOut(duration: 0.2)) { showControls.toggle() }
             }
-            .onChange(of: currentIndex) { _, newIndex in
+            .onChange(of: currentIndex) { old, newIndex in
+                // 診断 2026-07-02: iPad スライダー追従不具合 (Day14) の切り分け用
+                LogManager.shared.log("iPadScroll", "NH currentIndex: \(old) → \(newIndex) isSliding=\(isSliding)")
+                healStuckSliderIfNeeded()
                 if !isSliding { sliderValue = Double(newIndex) }
                 HistoryManager.shared.updateLastPageNh(id: gallery.id, page: newIndex)
             }
             .onChange(of: Int(sliderValue)) {
                 #if canImport(UIKit)
                 if isSliding {
+                    lastSliderActivity = Date()
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 }
                 #endif
@@ -670,6 +689,7 @@ struct NhentaiReaderView: View {
         }
         .onChange(of: horizontalPage) { _, newPage in
             currentIndex = newPage
+            healStuckSliderIfNeeded()
             if !isSliding { sliderValue = Double(newPage) }
         }
         #else
@@ -1034,6 +1054,9 @@ struct NhentaiReaderView: View {
                         in: 0...Double(max(totalPages - 1, 1)),
                         step: 1
                     ) { editing in
+                        // 診断 2026-07-02: 幽霊 editing(true) の発火順序を実証するためのログ
+                        LogManager.shared.log("iPadScroll", "NH slider editing=\(editing)")
+                        lastSliderActivity = Date()
                         isSliding = editing
                         if editing {
                             withAnimation(.easeIn(duration: 0.15)) { showPageOverlay = true }

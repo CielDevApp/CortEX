@@ -67,6 +67,19 @@ struct GalleryReaderView: View {
     /// 動画 WebP モード解決後の有効方向。未解決時は userReaderDirection (一瞬黒画面)
     private var effectiveDirection: Int { resolvedDirection ?? userReaderDirection }
 
+    /// isSliding 固着対策 (2026-07-02, Day14 iPad スライダー追従不具合): スライダー最終活動時刻
+    @State private var lastSliderActivity = Date.distantPast
+
+    /// iPadOS 26 で Slider の onEditingChanged(false) 直後に幽霊 (true) が届いて
+    /// isSliding が固着する事象を実機ログで観測 (2026-07-02)。実ドラッグ中は
+    /// sliderValue 更新で lastSliderActivity が刷新され続けるため、2 秒以上静止した
+    /// ままスクロール由来のページ更新が来た場合のみ固着と判定し強制解除する。
+    private func healStuckSliderIfNeeded() {
+        guard isSliding, Date().timeIntervalSince(lastSliderActivity) > 2.0 else { return }
+        LogManager.shared.log("iPadScroll", "EH isSliding auto-heal: quiescent → false")
+        isSliding = false
+    }
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -467,16 +480,19 @@ struct GalleryReaderView: View {
             withAnimation(.easeInOut(duration: 0.2)) { showControls.toggle() }
         }
         .onChange(of: horizontalPage) { _, newPage in
+            healStuckSliderIfNeeded()
             if !isSliding { sliderValue = Double(newPage) }
         }
         .onChange(of: Int(sliderValue)) {
             #if canImport(UIKit)
             if isSliding {
+                lastSliderActivity = Date()
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
             }
             #endif
         }
         .onReceive(NotificationCenter.default.publisher(for: PagedReaderView.pageChangedNotification)) { notif in
+            healStuckSliderIfNeeded()
             guard !isSliding, let page = notif.userInfo?["page"] as? Int else { return }
             if horizontalPage != page { horizontalPage = page }
             if viewModel.currentIndex != page { viewModel.currentIndex = page }
@@ -496,7 +512,11 @@ struct GalleryReaderView: View {
                         pageCell(index: index)
                             .id(index)
                             .frame(maxWidth: .infinity)
-                            .onAppear { viewModel.onAppear(index: index) }
+                            .onAppear {
+                                // 診断 2026-07-02: iPad スライダー追従不具合 (Day14) の切り分け用
+                                LogManager.shared.log("iPadScroll", "EH cell onAppear idx=\(index)")
+                                viewModel.onAppear(index: index)
+                            }
                             .onDisappear { viewModel.onDisappear(index: index) }
                     }
                 }
@@ -517,7 +537,10 @@ struct GalleryReaderView: View {
                     scrollWithRetry(to: target, proxy: proxy, animatedFirst: true)
                 }
             }
-            .onChange(of: viewModel.currentIndex) { _, newIndex in
+            .onChange(of: viewModel.currentIndex) { old, newIndex in
+                // 診断 2026-07-02: iPad スライダー追従不具合 (Day14) の切り分け用
+                LogManager.shared.log("iPadScroll", "EH currentIndex: \(old) → \(newIndex) isSliding=\(isSliding)")
+                healStuckSliderIfNeeded()
                 if !isSliding {
                     sliderValue = Double(newIndex)
                     if effectiveDirection == 1 { horizontalPage = newIndex }
@@ -527,6 +550,7 @@ struct GalleryReaderView: View {
             .onChange(of: Int(sliderValue)) {
                 #if canImport(UIKit)
                 if isSliding {
+                    lastSliderActivity = Date()
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 }
                 #endif
@@ -907,6 +931,9 @@ struct GalleryReaderView: View {
                         in: 0...Double(max(viewModel.totalPages - 1, 1)),
                         step: 1
                     ) { editing in
+                        // 診断 2026-07-02: 幽霊 editing(true) の発火順序を実証するためのログ
+                        LogManager.shared.log("iPadScroll", "EH slider editing=\(editing)")
+                        lastSliderActivity = Date()
                         isSliding = editing
                         if editing {
                             withAnimation(.easeIn(duration: 0.15)) {
