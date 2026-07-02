@@ -60,7 +60,7 @@ struct NhentaiScrollList: View {
         #if canImport(UIKit)
         let columns = gridColumns
         ScrollView {
-            LazyVGrid(columns: columns, spacing: 8) {
+            LazyVGrid(columns: columns, spacing: 10) {
                 // 田中設計 (2026-04-27): real セルとダミーを統合 ForEach に。
                 let totalSlots = Array(0..<(viewModel.galleries.count + 80))
                 ForEach(totalSlots, id: \.self) { index in
@@ -86,9 +86,10 @@ struct NhentaiScrollList: View {
                             }
                             .id(nh.id)
                     } else {
-                        RoundedRectangle(cornerRadius: 6)
+                        // ダミーは実カード (カバー 2:3 + 情報ストリップ) の高さに近い比率で確保
+                        RoundedRectangle(cornerRadius: CardDesign.cardCorner, style: .continuous)
                             .fill(Color.gray.opacity(0.18))
-                            .aspectRatio(2.0/3.0, contentMode: .fit)
+                            .aspectRatio(0.56, contentMode: .fit)
                             .task { await viewModel.loadNextPage() }
                     }
                 }
@@ -103,6 +104,7 @@ struct NhentaiScrollList: View {
                 .padding(.top, 100)
             }
         }
+        .background(CardDesign.listBackground)
         .onScrollGeometryChange(for: CGFloat.self) { geo in geo.contentOffset.y } action: { oldVal, newVal in
             let delta = newVal - oldVal
             if delta > 15 { onScrollDown?() } else if delta < -15 { onScrollUp?() }
