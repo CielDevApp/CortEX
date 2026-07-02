@@ -27,6 +27,56 @@ class FavoritesViewModel: ObservableObject {
     private var nextPageURL: String?
     var allGalleries: [Gallery] = []
 
+    /// 直近ローカル登録 (gid → 登録時刻)。E-H はお気に入り POST 後の favorites.php 反映に
+    /// 数秒〜十数秒のラグがある (2026-07-02 実機ログで実測)。この間に refresh すると
+    /// 「サーバ1ページ目に無い」扱いで削除クリーンアップに食われるため、5 分間保護する。
+    private var recentLocalAdds: [Int: Date] = [:]
+    private var cacheChangeObserver: NSObjectProtocol?
+
+    init() {
+        // 詳細/リーダーのお気に入りトグルを表示中一覧へ即時反映 (2026-07-02)。
+        // 従来はファイル (FavoritesCache) だけ更新され、この VM のメモリ配列に反映されず、
+        // 次の refresh の cache.save(メモリ) でファイル側の追加が丸上書きで消えていた
+        // (lost update)。これが「iPad で登録したのに一覧に出ない/消える」の真因。
+        cacheChangeObserver = NotificationCenter.default.addObserver(
+            forName: .ehFavoritesCacheDidChange, object: nil, queue: .main
+        ) { [weak self] note in
+            let action = note.userInfo?["action"] as? String
+            let gid = note.userInfo?["gid"] as? Int
+            let gallery = note.userInfo?["gallery"] as? Gallery
+            Task { @MainActor in
+                self?.applyLocalCacheChange(action: action, gid: gid, gallery: gallery)
+            }
+        }
+    }
+
+    deinit {
+        if let o = cacheChangeObserver { NotificationCenter.default.removeObserver(o) }
+    }
+
+    private func applyLocalCacheChange(action: String?, gid: Int?, gallery: Gallery?) {
+        guard let action, let gid else { return }
+        switch action {
+        case "add":
+            recentLocalAdds[gid] = Date()
+            guard let gallery, !allGalleries.contains(where: { $0.gid == gid }) else { return }
+            allGalleries.insert(gallery, at: 0)
+        case "remove":
+            recentLocalAdds[gid] = nil
+            allGalleries.removeAll { $0.gid == gid }
+        default:
+            return
+        }
+        totalLoaded = allGalleries.count
+        galleries = displayGalleries
+    }
+
+    /// サーバ反映ラグ保護: 直近 5 分以内にローカル登録した gid は削除クリーンアップ対象外
+    private func isProtectedLocalAdd(_ gid: Int) -> Bool {
+        guard let t = recentLocalAdds[gid] else { return false }
+        return Date().timeIntervalSince(t) < 300
+    }
+
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd HH:mm"
@@ -107,7 +157,8 @@ class FavoritesViewModel: ObservableObject {
                 for (i, g) in merged.enumerated() {
                     if i < firstPageSize + newItems.count {
                         // 先頭エリア: サーバーにあるものだけ残す
-                        if serverGids.contains(g.gid) || i >= firstPageSize {
+                        // (直近ローカル登録はサーバ反映ラグで1ページ目に未出現でも消さない)
+                        if serverGids.contains(g.gid) || i >= firstPageSize || isProtectedLocalAdd(g.gid) {
                             cleaned.append(g)
                         }
                     } else {
@@ -116,6 +167,17 @@ class FavoritesViewModel: ObservableObject {
                     }
                 }
                 merged = cleaned
+            }
+
+            // ファイル側にしか無い gid (前回 save 以降に詳細/リーダーから登録された分) を
+            // cache.save(メモリ) の丸上書きで喪失させない (2026-07-02 lost-update 対策)。
+            // load はフルデコードで main を 100ms 級に塞ぐため detached で行う。
+            let fileList = await Task.detached { FavoritesCache.shared.load() }.value
+            let mergedGids = Set(merged.map { $0.gid })
+            let fileOnly = fileList.filter { !mergedGids.contains($0.gid) }
+            if !fileOnly.isEmpty {
+                merged.insert(contentsOf: fileOnly, at: 0)
+                LogManager.shared.log("Favorite", "refresh: file-only \(fileOnly.count) 件を復元 (lost-update 防止)")
             }
 
             allGalleries = merged
