@@ -99,32 +99,92 @@ struct StarRatingBar: View {
 /// ローディング中ダミーの shimmer (キラキラ) 表現 (Phase 3, 田中要望 2026-07-03)。
 /// ぐるぐる/進捗バーではなく、ベース色の上を斜めのハイライトが周期的に流れる
 /// スケルトン UI。transform (offset) アニメーションのみなので GPU 合成で軽い。
+/// shimmer 掃引オーバーレイ (高級版, 2026-07-03 v2)。
+/// - 幅広 (幅の1.6倍) + 多段ストップのソフトな光 (硬い縁を作らない)
+/// - 18° 傾けた帯 (単純な水平移動を避ける)
+/// - smoothstep 加減速 + サイクル後半 45% は休止 (常時ギラつかせない)
+/// - TimelineView 駆動: identity 再生成で死なず、全 shimmer が同位相で揃う
+struct ShimmerSweep: ViewModifier {
+    func body(content: Content) -> some View {
+        content.overlay {
+            GeometryReader { geo in
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                    let t = context.date.timeIntervalSinceReferenceDate
+                    let cycle = CGFloat(t.truncatingRemainder(dividingBy: 2.4) / 2.4)
+                    // 前半 55% で掃引、残りは画面外で休止
+                    let raw = min(cycle / 0.55, 1.0)
+                    let eased = raw * raw * (3 - 2 * raw)   // smoothstep
+                    let w = geo.size.width
+                    let h = geo.size.height
+                    let band = w * 1.6
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: .white.opacity(0.04), location: 0.30),
+                            .init(color: .white.opacity(0.28), location: 0.50),
+                            .init(color: .white.opacity(0.04), location: 0.70),
+                            .init(color: .clear, location: 1),
+                        ],
+                        startPoint: .leading, endPoint: .trailing
+                    )
+                    .frame(width: band, height: h * 2.6)
+                    .rotationEffect(.degrees(18))
+                    .offset(
+                        x: -band + (w + band * 2) * eased,
+                        y: -h * 0.8
+                    )
+                    .allowsHitTesting(false)
+                }
+            }
+            .clipped()
+        }
+    }
+}
+
+extension View {
+    func shimmerSweep() -> some View { modifier(ShimmerSweep()) }
+}
+
+/// 単純ブロック用 shimmer (詳細画面のサムネ等)
 struct ShimmerPlaceholder: View {
     var cornerRadius: CGFloat = CardDesign.cardCorner
 
     var body: some View {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .fill(Color.gray.opacity(0.18))
-            .overlay {
-                // TimelineView 駆動: 壁時計から位相を計算するので、LazyVGrid でセルの
-                // identity が入れ替わってもアニメが止まらない (withAnimation +
-                // repeatForever は identity 再生成で死ぬことがある = 初版の不具合)。
-                // 全 shimmer が同位相で流れるため見た目も揃う。30fps 上限で省電力。
-                GeometryReader { geo in
-                    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-                        let t = context.date.timeIntervalSinceReferenceDate
-                        let progress = CGFloat(t.truncatingRemainder(dividingBy: 1.3) / 1.3)
-                        LinearGradient(
-                            colors: [.clear, .white.opacity(0.35), .clear],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                        .frame(width: geo.size.width * 0.7)
-                        .offset(x: geo.size.width * (-0.8 + progress * 2.3))
-                    }
-                }
-            }
+            .fill(Color.gray.opacity(0.16))
+            .shimmerSweep()
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+}
+
+/// グリッドのダミー用スケルトンカード: 実カードと同じ構造 (カバー + タイトル2行 +
+/// バッジのモック) を同じカード chrome に載せ、shimmer を全体に掃引。
+/// 読み込み完了時にそのまま実カードへ「化ける」見え方になる。
+struct SkeletonCardPlaceholder: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Rectangle()
+                .fill(Color.gray.opacity(0.16))
+                .aspectRatio(2.0 / 3.0, contentMode: .fit)
+
+            VStack(alignment: .leading, spacing: 6) {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Color.gray.opacity(0.22))
+                    .frame(height: 9)
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Color.gray.opacity(0.22))
+                    .frame(height: 9)
+                    .padding(.trailing, 44)
+                Capsule()
+                    .fill(Color.gray.opacity(0.22))
+                    .frame(width: 52, height: 12)
+            }
+            .padding(8)
+        }
+        .background(CardDesign.cardBackground)
+        .shimmerSweep()
+        .clipShape(RoundedRectangle(cornerRadius: CardDesign.cardCorner, style: .continuous))
+        .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
     }
 }
 
