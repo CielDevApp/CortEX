@@ -9,6 +9,13 @@ import Combine
 /// (cachedList/cachedGids) が無保護で、暗黙 @MainActor 前提が崩れた瞬間に COW 配列の
 /// データ競合 (SIGSEGV 級) になり得た。NSLock で状態を保護し全メソッドを nonisolated 化、
 /// どのスレッドから呼んでも安全にする。@Published version の更新だけ main へホップ。
+extension Notification.Name {
+    /// お気に入りキャッシュのローカル変更 (詳細/リーダーのトグル由来)。
+    /// userInfo: "action" = "add"/"remove"、"gid" = Int、add 時のみ "gallery" = Gallery。
+    /// FavoritesViewModel が購読して表示中一覧へ即時反映する (2026-07-02 iPad お気に入り消失対策)。
+    static let ehFavoritesCacheDidChange = Notification.Name("ehFavoritesCacheDidChange")
+}
+
 final class FavoritesCache: ObservableObject, @unchecked Sendable {
     static let shared = FavoritesCache()
 
@@ -127,6 +134,10 @@ final class FavoritesCache: ObservableObject, @unchecked Sendable {
             save(list)
             LogManager.shared.log("Favorite", "cache: added gid=\(gallery.gid), total=\(list.count)")
         }
+        NotificationCenter.default.post(
+            name: .ehFavoritesCacheDidChange, object: nil,
+            userInfo: ["action": "add", "gid": gallery.gid, "gallery": gallery]
+        )
     }
 
     /// お気に入りから削除（キャッシュ更新）
@@ -135,5 +146,9 @@ final class FavoritesCache: ObservableObject, @unchecked Sendable {
         list.removeAll { $0.gid == gid }
         save(list)
         LogManager.shared.log("Favorite", "cache: removed gid=\(gid), total=\(list.count)")
+        NotificationCenter.default.post(
+            name: .ehFavoritesCacheDidChange, object: nil,
+            userInfo: ["action": "remove", "gid": gid]
+        )
     }
 }
