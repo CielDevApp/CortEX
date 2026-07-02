@@ -37,6 +37,8 @@ struct SettingsView: View {
     @State private var showFullReset = false
     @State private var showFullRefresh = false
     @State private var showAnimationModeResetConfirm = false
+    @State private var showReadHistoryClearConfirm = false
+    @AppStorage(UDKey.grayOutReadGalleries) private var grayOutReadGalleries = true
     @State private var showPINSetup = false
     @State private var isPINChange = false
     @AppStorage(UDKey.useMetalPipeline) private var useMetalPipeline = false
@@ -267,6 +269,17 @@ struct SettingsView: View {
                     }
                     .foregroundStyle(.orange)
                     Text("動画 WebP を含むギャラリー毎に保存した「横/縦」選択を全て消去します。")
+                        .font(.caption2).foregroundStyle(.secondary)
+
+                    Toggle("既読作品をグレー表示", isOn: $grayOutReadGalleries)
+                    Text("リーダーで開いた作品のタイトルを一覧でグレー表示します。OFF にしても既読の記録は消えません。")
+                        .font(.caption2).foregroundStyle(.secondary)
+
+                    Button("既読履歴を全消去") {
+                        showReadHistoryClearConfirm = true
+                    }
+                    .foregroundStyle(.red)
+                    Text("リーダーで開いた作品の既読記録を全て削除し、未読表示に戻します。")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
 
@@ -695,6 +708,14 @@ struct SettingsView: View {
                 Button("キャンセル", role: .cancel) {}
             } message: {
                 Text("動画 WebP を含む全ギャラリーで保存した「横/縦」選択を削除します。次回 Reader 起動時に再度ダイアログが表示されます。")
+            }
+            .alert("既読履歴を全消去", isPresented: $showReadHistoryClearConfirm) {
+                Button("全消去", role: .destructive) {
+                    ReadHistoryStore.shared.clearAll()
+                }
+                Button("キャンセル", role: .cancel) {}
+            } message: {
+                Text("既読記録 \(ReadHistoryStore.shared.count) 件を削除して全て未読表示に戻します。この操作は取り消せません。")
             }
             .alert("セーフティモードを OFF にしますか？", isPresented: $showDisableSafetyConfirm) {
                 Button("OFF にする (自己責任)", role: .destructive) {
