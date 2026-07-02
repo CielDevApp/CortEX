@@ -251,7 +251,7 @@ struct NhentaiReaderView: View {
             return .handled
         }
         .task {
-            // リーダー起動 = 既読確定 (詳細画面の閲覧では付かない)。再表示時は冪等。
+            // 既読確定の保険 (主フックは詳細画面。プレビュー等リーダー直行経路用)。冪等。
             ReadHistoryStore.shared.markAsRead(site: .nh, gid: gallery.id)
 
             // リーダー表示開始 → DL側に減速ヒント
