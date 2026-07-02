@@ -276,6 +276,9 @@ struct GalleryDetailView: View {
                 }
             }
         }
+        // UI 刷新 Phase 2 (2026-07-03): 全 GroupBox をカード化 + グループ背景 (表層のみ)
+        .groupBoxStyle(CardGroupBoxStyle())
+        .background(CardDesign.listBackground.ignoresSafeArea())
         .task {
             // 詳細画面を開いた時点で既読確定 (田中要望 2026-07-02、リーダー起動から前倒し)
             ReadHistoryStore.shared.markAsRead(site: .eh, gid: gallery.gid)
@@ -301,7 +304,7 @@ struct GalleryDetailView: View {
         HStack(alignment: .top, spacing: 16) {
             CachedImageView(url: detail.gallery.coverURL, host: host, gid: detail.gallery.gid)
                 .frame(width: 140, height: 200)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .overlay(alignment: .bottomTrailing) {
                     if isAnim {
                         Image(systemName: "play.circle.fill")
@@ -348,25 +351,14 @@ struct GalleryDetailView: View {
                 Spacer()
 
                 if let category = detail.gallery.category {
-                    Text(category.rawValue)
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Color(hex: category.color))
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                    TintedBadge(text: category.rawValue, color: Color(hex: category.color), font: .caption.weight(.semibold))
                 }
 
-                HStack(spacing: 2) {
-                    ForEach(0..<5, id: \.self) { i in
-                        let v = detail.gallery.rating - Double(i)
-                        Image(systemName: v >= 1 ? "star.fill" : v >= 0.5 ? "star.leadinghalf.filled" : "star")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.orange)
-                    }
+                HStack(spacing: 6) {
+                    StarRatingBar(rating: detail.gallery.rating, size: 12)
                     Text(String(format: "%.1f", detail.gallery.rating))
                         .font(.caption)
+                        .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
             }
@@ -462,11 +454,10 @@ struct GalleryDetailView: View {
                                     NavigationLink(value: TagSearch(namespace: namespace, tag: tag)) {
                                         Text(tag)
                                             .font(.caption2)
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 2)
-                                            .background(Color.blue.opacity(0.12))
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 3)
+                                            .background(Color.blue.opacity(0.12), in: Capsule())
                                             .foregroundStyle(.blue)
-                                            .clipShape(RoundedRectangle(cornerRadius: 4))
                                     }
                                     // 長押しでタグを購読 (新作通知 Phase 3)。値は namespace:tag。
                                     .contextMenu {
@@ -646,9 +637,8 @@ struct GalleryDetailView: View {
             Label("最初から読む", systemImage: "book.fill")
                 .frame(maxWidth: .infinity)
                 .padding()
-                .background(.blue)
+                .background(.blue.gradient, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .foregroundStyle(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
                 .bold()
         }
     }
@@ -664,9 +654,8 @@ struct GalleryDetailView: View {
             Label("ダウンロード済み", systemImage: "checkmark.circle.fill")
                 .frame(maxWidth: .infinity)
                 .padding()
-                .background(.green.opacity(0.15))
+                .background(.green.opacity(0.15), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .foregroundStyle(.green)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
         } else if let progress = dm.activeDownloads[gid] {
             VStack(spacing: 6) {
                 HStack {
@@ -684,8 +673,7 @@ struct GalleryDetailView: View {
                     .tint(.blue)
             }
             .padding()
-            .background(Color.gray.opacity(0.1))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .background(CardDesign.cardBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         } else {
             Button {
                 // 画面数 = ceil(pageCount / 20)。70 画面 = 1400p で警告。
@@ -700,9 +688,8 @@ struct GalleryDetailView: View {
                 Label("ダウンロード", systemImage: "arrow.down.circle.fill")
                     .frame(maxWidth: .infinity)
                     .padding()
-                    .background(.orange)
+                    .background(.orange.gradient, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
                     .bold()
             }
             .alert("大規模 DL の確認", isPresented: $showLargeDLWarning) {
