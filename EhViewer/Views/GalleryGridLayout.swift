@@ -33,6 +33,13 @@ enum GalleryGridColumns {
 /// 既存 GalleryCardView (横並び List 用) には触らない。
 struct GalleryGridCellView: View {
     let gallery: Gallery
+    @ObservedObject private var readHistory = ReadHistoryStore.shared
+    @AppStorage(UDKey.grayOutReadGalleries) private var grayOutReadGalleries = true
+
+    /// 既読グレー表示 (トグル OFF 中は抑制のみ、記録は残る)。判定は O(1)。
+    private var isReadDimmed: Bool {
+        grayOutReadGalleries && readHistory.isRead(site: .eh, gid: gallery.gid)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -50,6 +57,7 @@ struct GalleryGridCellView: View {
                 .font(.caption2)
                 .lineLimit(2, reservesSpace: true)
                 .truncationMode(.tail)
+                .foregroundStyle(isReadDimmed ? Color.secondary : Color.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 4) {
@@ -92,6 +100,13 @@ struct GalleryGridCellView: View {
 struct NhentaiGridCellView: View {
     let gallery: NhentaiClient.NhGallery
     @State private var coverImage: PlatformImage?
+    @ObservedObject private var readHistory = ReadHistoryStore.shared
+    @AppStorage(UDKey.grayOutReadGalleries) private var grayOutReadGalleries = true
+
+    /// 既読グレー表示 (トグル OFF 中は抑制のみ、記録は残る)。判定は O(1)。
+    private var isReadDimmed: Bool {
+        grayOutReadGalleries && readHistory.isRead(site: .nh, gid: gallery.id)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -114,6 +129,7 @@ struct NhentaiGridCellView: View {
                 .font(.caption2)
                 .lineLimit(2, reservesSpace: true)
                 .truncationMode(.tail)
+                .foregroundStyle(isReadDimmed ? Color.secondary : Color.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 4) {

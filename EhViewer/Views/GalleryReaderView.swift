@@ -188,6 +188,9 @@ struct GalleryReaderView: View {
             }
         }
         .task {
+            // リーダー起動 = 既読確定 (詳細画面の閲覧では付かない)。再表示時は冪等。
+            ReadHistoryStore.shared.markAsRead(site: .eh, gid: gallery.gid)
+
             // 再表示時 (onDisappear → 再 onAppear) に閉鎖フラグを解除。
             // これが無いと releaseAllForClose 後の再表示で全ロードが止まったままになる。
             viewModel.reopenForDisplay()

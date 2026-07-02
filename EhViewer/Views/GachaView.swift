@@ -71,6 +71,9 @@ struct GachaView: View {
     @State private var resultDragOffset: CGFloat = 0
     // 田中要望 2026-06-08: 演出スキップ。ON なら tile 演出を飛ばして即結果表示。
     @AppStorage(UDKey.gachaSkipEffect) private var gachaSkipEffect = false
+    // 既読グレー表示 (黒背景の演出画面なので secondary でなく gray 系で落とす)
+    @ObservedObject private var readHistory = ReadHistoryStore.shared
+    @AppStorage(UDKey.grayOutReadGalleries) private var grayOutReadGalleries = true
     // 画面サイズ
     @State private var screenSize: CGSize = .zero
     // 田中報告 2026-05-16: ガチャ結果詳細→タグ→検索結果→作品タップが無反応だった。
@@ -291,7 +294,8 @@ struct GachaView: View {
 
             Text(gallery.title).font(.subheadline).fontWeight(.medium)
                 .lineLimit(3).multilineTextAlignment(.center)
-                .foregroundStyle(.white).opacity(titleOpacity)
+                .foregroundStyle(grayOutReadGalleries && readHistory.isRead(site: .eh, gid: gallery.gid) ? Color.gray : Color.white)
+                .opacity(titleOpacity)
 
             if gallery.rating > 0 {
                 HStack(spacing: 2) {
