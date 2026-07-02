@@ -99,7 +99,10 @@ struct FavoritesView: View {
                 // ギャラリーリスト
                 List {
                     ForEach(viewModel.galleries) { gallery in
-                        GalleryCardView(gallery: gallery)
+                        // UI 刷新 Phase 1.9 (2026-07-03): カード化 (一覧と同型)
+                        CardDesign.cardChrome(GalleryCardView(gallery: gallery))
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 navPathBox.path.append(gallery)
@@ -137,6 +140,8 @@ struct FavoritesView: View {
                     }
                 }
                 .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .background(CardDesign.listBackground.ignoresSafeArea())
                 .refreshable {
                     await viewModel.refreshFromServer()
                 }
@@ -373,7 +378,10 @@ struct FavoritesView: View {
             } else {
                 List {
                     ForEach(filteredNhFavorites) { nh in
-                        NhentaiCardView(gallery: nh)
+                        // UI 刷新 Phase 1.9 (2026-07-03): カード化 (一覧と同型)
+                        CardDesign.cardChrome(NhentaiCardView(gallery: nh))
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
                             .overlay(alignment: .topTrailing) {
                                 if nhSyncedIds.contains(nh.id) {
                                     Image(systemName: "checkmark.circle.fill")
@@ -397,6 +405,8 @@ struct FavoritesView: View {
                 #if os(iOS)
                 .listStyle(.insetGrouped)
                 #endif
+                .scrollContentBackground(.hidden)
+                .background(CardDesign.listBackground.ignoresSafeArea())
                 .refreshable { await syncNhFavorites() }
                 .onScrollGeometryChange(for: CGFloat.self) { geo in
                     geo.contentOffset.y
