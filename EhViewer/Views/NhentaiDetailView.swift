@@ -69,6 +69,9 @@ struct NhentaiDetailView: View {
         } message: {
             Text("ローカルには追加済みです。Safari で手動完了するか、設定から nhentai に再認証してください。")
         }
+        // UI 刷新 Phase 2 (2026-07-03): 全 GroupBox をカード化 + グループ背景 (表層のみ)
+        .groupBoxStyle(CardGroupBoxStyle())
+        .background(CardDesign.listBackground.ignoresSafeArea())
         .task {
             // 詳細画面を開いた時点で既読確定 (田中要望 2026-07-02、リーダー起動から前倒し)
             ReadHistoryStore.shared.markAsRead(site: .nh, gid: initialGallery.id)
@@ -88,13 +91,13 @@ struct NhentaiDetailView: View {
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                 } else {
-                    RoundedRectangle(cornerRadius: 8)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(Color.gray.opacity(0.2))
                         .overlay { ProgressView() }
                 }
             }
             .frame(width: 120, height: 170)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
             VStack(alignment: .leading, spacing: 6) {
                 // タイトル
@@ -248,11 +251,10 @@ struct NhentaiDetailView: View {
                                     NavigationLink(value: NhTagSearch(type: type, name: tag.name)) {
                                         Text(tag.name)
                                             .font(.caption2)
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 2)
-                                            .background(tagColor(for: type).opacity(0.12))
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 3)
+                                            .background(tagColor(for: type).opacity(0.12), in: Capsule())
                                             .foregroundStyle(tagColor(for: type))
-                                            .clipShape(RoundedRectangle(cornerRadius: 4))
                                     }
 
                                     if cortexUnlocked && type == "character" {
@@ -314,9 +316,8 @@ struct NhentaiDetailView: View {
                 Label("最初から読む", systemImage: "book.fill")
                     .frame(maxWidth: .infinity)
                     .padding()
-                    .background(.blue)
+                    .background(.blue.gradient, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
                     .bold()
             }
 
@@ -333,9 +334,8 @@ struct NhentaiDetailView: View {
             Label("ダウンロード済み", systemImage: "checkmark.circle.fill")
                 .frame(maxWidth: .infinity)
                 .padding()
-                .background(.green.opacity(0.15))
+                .background(.green.opacity(0.15), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .foregroundStyle(.green)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
         } else if let progress = downloadManager.activeDownloads[gid] {
             VStack(spacing: 6) {
                 HStack {
@@ -351,8 +351,7 @@ struct NhentaiDetailView: View {
                     .tint(.orange)
             }
             .padding()
-            .background(Color.gray.opacity(0.1))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .background(CardDesign.cardBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         } else {
             Button {
                 downloadManager.startNhentaiDownload(gallery: gallery)
@@ -361,9 +360,8 @@ struct NhentaiDetailView: View {
                 Label("ダウンロード", systemImage: "arrow.down.circle.fill")
                     .frame(maxWidth: .infinity)
                     .padding()
-                    .background(.orange)
+                    .background(.orange.gradient, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
                     .bold()
             }
         }

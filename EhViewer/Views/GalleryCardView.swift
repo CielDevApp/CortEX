@@ -96,6 +96,25 @@ struct StarRatingBar: View {
     }
 }
 
+/// 詳細画面のセクションカード (GroupBox を Phase 1 のカード言語に統一、Phase 2)
+struct CardGroupBoxStyle: GroupBoxStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            configuration.label
+                .font(.subheadline)
+                .fontWeight(.semibold)
+            configuration.content
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: CardDesign.cardCorner, style: .continuous)
+                .fill(CardDesign.cardBackground)
+                .shadow(color: .black.opacity(0.05), radius: 6, y: 2)
+        )
+    }
+}
+
 /// カバー右下のページ数バッジ (マテリアル capsule)
 struct CoverPagesBadge: View {
     let pages: Int
