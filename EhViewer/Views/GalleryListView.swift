@@ -94,6 +94,10 @@ struct GalleryListView: View {
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 #endif
             }
+            // 田中報告 2026-07-03: ScrollView 側の ignoresSafeArea は TabView(.page) 境界で
+            // 下端まで届かず、iPad でも最下部に白帯が残った。画面全体のコンテナに背景を
+            // 当てて貫通させる (セグメント帯も含め全面グループ背景で統一)。
+            .background(CardDesign.listBackground.ignoresSafeArea())
             .navigationTitle("Cort:EX")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
