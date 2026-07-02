@@ -178,6 +178,9 @@ struct GalleryListView: View {
             .animation(.spring(response: 0.32, dampingFraction: 0.85), value: showAdvancedSearch)
             #endif
         }
+        // 田中報告 2026-07-03 (2回目): VStack 層の背景でも iPad 起動直後から最下部に白帯。
+        // NavigationStack の外側 = タブコンテンツ全面にも背景を張って物理的に塗り切る。
+        .background(CardDesign.listBackground.ignoresSafeArea())
         .environment(\.navPathBox, navPathBox)
     }
 

@@ -1206,14 +1206,15 @@ struct DownloadsView: View {
         Button {
             startPreCacheAndOpenReader(meta: meta, count: meta.source == "external_zip" ? 3 : 0)
         } label: {
-            VStack(alignment: .leading, spacing: 4) {
+            // UI 刷新 Phase 1.9 (2026-07-03): 一覧グリッドと同じカバー主役カード型
+            VStack(alignment: .leading, spacing: 0) {
                 Color.gray.opacity(0.15)
                     .aspectRatio(2.0/3.0, contentMode: .fit)
                     .overlay {
                         AsyncCoverThumbnailFlexible(gid: meta.gid)
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .overlay(alignment: .bottomTrailing) {
+                    .clipped()
+                    .overlay(alignment: .topTrailing) {
                         if meta.isAnimatedGallery {
                             Image(systemName: "play.fill")
                                 .font(.system(size: 10))
@@ -1221,30 +1222,34 @@ struct DownloadsView: View {
                                 .padding(4)
                                 .background(.black.opacity(0.65))
                                 .clipShape(Circle())
-                                .padding(2)
+                                .padding(4)
                         }
                     }
-                Text(meta.title)
-                    .font(.caption2)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 4) {
-                    Text("\(meta.pageCount)P")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.secondary)
-                    if meta.isNhentai {
-                        Text("NH")
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(.orange)
-                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    .overlay(alignment: .bottomTrailing) {
+                        if meta.pageCount > 0 {
+                            CoverPagesBadge(pages: meta.pageCount, fontSize: 8)
+                        }
                     }
-                    Spacer()
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(meta.title)
+                        .font(.caption2)
+                        .fontWeight(.medium)
+                        .lineLimit(2, reservesSpace: true)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if meta.isNhentai {
+                        HStack(spacing: 4) {
+                            TintedBadge(text: "NH", color: .orange, font: .system(size: 8, weight: .semibold))
+                            Spacer(minLength: 0)
+                        }
+                    }
                 }
+                .padding(8)
             }
+            .background(CardDesign.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: CardDesign.cardCorner, style: .continuous))
+            .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
