@@ -51,7 +51,13 @@ struct GalleryGridCellView: View {
                     CachedImageView(url: gallery.coverURL, host: .exhentai, gid: gallery.gid)
                         .aspectRatio(contentMode: .fill)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: CardDesign.coverCorner, style: .continuous))
+                .overlay(alignment: .bottomTrailing) {
+                    // UI 刷新 (2026-07-03): ページ数はカバー上のマテリアルバッジへ移設
+                    if gallery.pageCount > 0 {
+                        CoverPagesBadge(pages: gallery.pageCount, fontSize: 8)
+                    }
+                }
 
             Text(gallery.title)
                 .font(.caption2)
@@ -62,34 +68,17 @@ struct GalleryGridCellView: View {
 
             HStack(spacing: 4) {
                 if let category = gallery.category {
-                    Text(category.rawValue == "Doujinshi" ? "Doujin" : category.rawValue)
-                        .font(.system(size: 8, weight: .semibold))
-                        .lineLimit(1)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(Color(hex: category.color))
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                    TintedBadge(
+                        text: category.rawValue == "Doujinshi" ? "Doujin" : category.rawValue,
+                        color: Color(hex: category.color),
+                        font: .system(size: 8, weight: .semibold)
+                    )
                 }
-                // レーティング星 (ジャンルアイコン隣)。満/半/空で表現。未評価(0)は非表示。
+                // レーティング (連続塗り率バー)。未評価(0)は非表示。
                 if gallery.rating > 0 {
-                    HStack(spacing: 0.5) {
-                        ForEach(0..<5, id: \.self) { i in
-                            let r = gallery.rating - Double(i)
-                            Image(systemName: r >= 0.75 ? "star.fill" : (r >= 0.25 ? "star.leadinghalf.filled" : "star"))
-                                .font(.system(size: 7))
-                                .foregroundStyle(.yellow)
-                        }
-                    }
+                    StarRatingBar(rating: gallery.rating, size: 7)
                 }
                 Spacer()
-                if gallery.pageCount > 0 {
-                    Text("\(gallery.pageCount)P")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .fixedSize()
-                }
             }
         }
         .contentShape(Rectangle())
@@ -122,7 +111,13 @@ struct NhentaiGridCellView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: CardDesign.coverCorner, style: .continuous))
+                .overlay(alignment: .bottomTrailing) {
+                    // UI 刷新 (2026-07-03): ページ数はカバー上のマテリアルバッジへ移設
+                    if gallery.num_pages > 0 {
+                        CoverPagesBadge(pages: gallery.num_pages, fontSize: 8)
+                    }
+                }
                 .onAppear { loadCoverIfNeeded() }
 
             Text(gallery.displayTitle)
@@ -133,19 +128,8 @@ struct NhentaiGridCellView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 4) {
-                Text("NH")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(.orange)
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                TintedBadge(text: "NH", color: .orange, font: .system(size: 8, weight: .semibold))
                 Spacer()
-                if gallery.num_pages > 0 {
-                    Text("\(gallery.num_pages)P")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.secondary)
-                }
             }
         }
         .contentShape(Rectangle())
