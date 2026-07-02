@@ -383,14 +383,9 @@ struct DownloadsView: View {
             .toolbar(tabBarHidden ? .hidden : .visible, for: .tabBar)
             .animation(.smooth(duration: 0.25), value: tabBarHidden)
             #endif
-            .onScrollGeometryChange(for: CGFloat.self) { geo in
-                geo.contentOffset.y
-            } action: { oldVal, newVal in
-                let delta = newVal - oldVal
-                if abs(delta) > 100 { return }
-                if delta > 8 { tabBarHidden = true }
-                else if delta < -5 { tabBarHidden = false }
-            }
+            .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }, action: handleListScrollDelta)
+            // レイアウト切替時は必ずタブバーを復帰 (空ライブラリでスクロール不能 = 詰み対策)
+            .onChange(of: isLibraryGrid, resetTabBarOnLayoutToggle)
             .toolbar {
                 // 田中要望 2026-04-28: NAS 転送中の mini indicator (バックグラウンド時のみ表示)。
                 // タップで overlay 再表示。転送自体は overlay 表示と無関係に進行する。
@@ -1135,6 +1130,29 @@ struct DownloadsView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 12)
         }
+        // グリッド専用のタブバー隠しハンドラ (外側の List 用ハンドラはグリッド中 no-op)。
+        // overlay 方式で ScrollView が2つ並存するため、混線しないよう自分の分だけ担当する。
+        .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }, action: applyScrollDelta)
+    }
+
+    /// タブバー隠し共通ロジック (delta > 8 で隠す / delta < -5 で出す)
+    private func applyScrollDelta(_ oldVal: CGFloat, _ newVal: CGFloat) {
+        let delta = newVal - oldVal
+        if abs(delta) > 100 { return }
+        if delta > 8 { tabBarHidden = true }
+        else if delta < -5 { tabBarHidden = false }
+    }
+
+    /// List 用ハンドラ。田中報告 2026-07-02: グリッド表示中は overlay 側 ScrollView と
+    /// List のオフセットがこの1個のハンドラに混線し、タブバー (iPadOS 26 は上部表示) が
+    /// 隠れたまま復帰しない。グリッド中は overlay 側の専用ハンドラに任せて no-op にする。
+    private func handleListScrollDelta(_ oldVal: CGFloat, _ newVal: CGFloat) {
+        guard !isLibraryGrid else { return }
+        applyScrollDelta(oldVal, newVal)
+    }
+
+    private func resetTabBarOnLayoutToggle() {
+        tabBarHidden = false
     }
 
     @ViewBuilder
