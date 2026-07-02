@@ -110,9 +110,10 @@ struct ShimmerSweep: ViewModifier {
             GeometryReader { geo in
                 TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
                     let t = context.date.timeIntervalSinceReferenceDate
-                    let cycle = CGFloat(t.truncatingRemainder(dividingBy: 2.4) / 2.4)
-                    // 前半 55% で掃引、残りは画面外で休止
-                    let raw = min(cycle / 0.55, 1.0)
+                    // 田中調整 2026-07-03: 1.6s 周期・休止 30% (旧 2.4s/45% は発動が遅く、
+                    // 高速回線だとプレースホルダが消えるまでに光が拝めなかった)
+                    let cycle = CGFloat(t.truncatingRemainder(dividingBy: 1.6) / 1.6)
+                    let raw = min(cycle / 0.7, 1.0)
                     let eased = raw * raw * (3 - 2 * raw)   // smoothstep
                     let w = geo.size.width
                     let h = geo.size.height
@@ -120,9 +121,9 @@ struct ShimmerSweep: ViewModifier {
                     LinearGradient(
                         stops: [
                             .init(color: .clear, location: 0),
-                            .init(color: .white.opacity(0.04), location: 0.30),
-                            .init(color: .white.opacity(0.28), location: 0.50),
-                            .init(color: .white.opacity(0.04), location: 0.70),
+                            .init(color: .white.opacity(0.08), location: 0.30),
+                            .init(color: .white.opacity(0.45), location: 0.50),
+                            .init(color: .white.opacity(0.08), location: 0.70),
                             .init(color: .clear, location: 1),
                         ],
                         startPoint: .leading, endPoint: .trailing
