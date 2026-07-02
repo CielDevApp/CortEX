@@ -32,6 +32,9 @@ struct ThumbnailCellView: View {
                     Image(platformImage: coverImg)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
+                } else {
+                    // UI 刷新 Phase 3 (2026-07-03): ロード中サムネは shimmer
+                    ShimmerPlaceholder(cornerRadius: 6)
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 6))
