@@ -12,13 +12,14 @@ import UIKit
 #if canImport(UIKit)
 enum GalleryGridColumns {
     /// iPad: 4 列固定 (横向きでも縦向きでも 4)。田中確定 2026-04-27 (当初 regular=6/compact=4 から変更)。
+    /// spacing 10: カード化 (Phase 1.5) の影が呼吸できる間隔。
     static func iPadColumns(horizontalSizeClass: UserInterfaceSizeClass?) -> [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: 8), count: 4)
+        Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
     }
 
     /// iPhone: 固定 3 列 (Amazon Prime Video iOS と同じ感覚)。田中確定 2026-04-27。
     static func iPhoneColumns() -> [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
+        Array(repeating: GridItem(.flexible(), spacing: 10), count: 3)
     }
 
     /// Mac Catalyst: ウィンドウ幅に応じて自動で列数調整 (最小 180pt)。
@@ -42,7 +43,9 @@ struct GalleryGridCellView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        // UI 刷新 Phase 1.5 (2026-07-03): カバー主役のカード型。カバーがカード上面いっぱいに
+        // 広がり、下の情報ストリップと一体で 1 枚のカードになる (App Store 風)。
+        VStack(alignment: .leading, spacing: 0) {
             // セル幅に対し常に 2:3 比の枠を確保し、内部の画像は fill + clip で統一サイズに揃える。
             // 直接 .aspectRatio(.fill) を CachedImageView に付けるだけだとバラつく。
             Color.gray.opacity(0.15)
@@ -51,36 +54,42 @@ struct GalleryGridCellView: View {
                     CachedImageView(url: gallery.coverURL, host: .exhentai, gid: gallery.gid)
                         .aspectRatio(contentMode: .fill)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: CardDesign.coverCorner, style: .continuous))
+                .clipped()
                 .overlay(alignment: .bottomTrailing) {
-                    // UI 刷新 (2026-07-03): ページ数はカバー上のマテリアルバッジへ移設
                     if gallery.pageCount > 0 {
                         CoverPagesBadge(pages: gallery.pageCount, fontSize: 8)
                     }
                 }
 
-            Text(gallery.title)
-                .font(.caption2)
-                .lineLimit(2, reservesSpace: true)
-                .truncationMode(.tail)
-                .foregroundStyle(isReadDimmed ? Color.secondary : Color.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(gallery.title)
+                    .font(.caption2)
+                    .fontWeight(.medium)
+                    .lineLimit(2, reservesSpace: true)
+                    .truncationMode(.tail)
+                    .foregroundStyle(isReadDimmed ? Color.secondary : Color.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-            HStack(spacing: 4) {
-                if let category = gallery.category {
-                    TintedBadge(
-                        text: category.rawValue == "Doujinshi" ? "Doujin" : category.rawValue,
-                        color: Color(hex: category.color),
-                        font: .system(size: 8, weight: .semibold)
-                    )
+                HStack(spacing: 4) {
+                    if let category = gallery.category {
+                        TintedBadge(
+                            text: category.rawValue == "Doujinshi" ? "Doujin" : category.rawValue,
+                            color: Color(hex: category.color),
+                            font: .system(size: 8, weight: .semibold)
+                        )
+                    }
+                    // レーティング (連続塗り率バー)。未評価(0)は非表示。
+                    if gallery.rating > 0 {
+                        StarRatingBar(rating: gallery.rating, size: 7)
+                    }
+                    Spacer(minLength: 0)
                 }
-                // レーティング (連続塗り率バー)。未評価(0)は非表示。
-                if gallery.rating > 0 {
-                    StarRatingBar(rating: gallery.rating, size: 7)
-                }
-                Spacer()
             }
+            .padding(8)
         }
+        .background(CardDesign.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: CardDesign.cardCorner, style: .continuous))
+        .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
         .contentShape(Rectangle())
     }
 }
@@ -98,7 +107,8 @@ struct NhentaiGridCellView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        // UI 刷新 Phase 1.5 (2026-07-03): カバー主役のカード型 (E-H 側と同型)
+        VStack(alignment: .leading, spacing: 0) {
             Color.gray.opacity(0.15)
                 .aspectRatio(2.0/3.0, contentMode: .fit)
                 .overlay {
@@ -111,27 +121,33 @@ struct NhentaiGridCellView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: CardDesign.coverCorner, style: .continuous))
+                .clipped()
                 .overlay(alignment: .bottomTrailing) {
-                    // UI 刷新 (2026-07-03): ページ数はカバー上のマテリアルバッジへ移設
                     if gallery.num_pages > 0 {
                         CoverPagesBadge(pages: gallery.num_pages, fontSize: 8)
                     }
                 }
                 .onAppear { loadCoverIfNeeded() }
 
-            Text(gallery.displayTitle)
-                .font(.caption2)
-                .lineLimit(2, reservesSpace: true)
-                .truncationMode(.tail)
-                .foregroundStyle(isReadDimmed ? Color.secondary : Color.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(gallery.displayTitle)
+                    .font(.caption2)
+                    .fontWeight(.medium)
+                    .lineLimit(2, reservesSpace: true)
+                    .truncationMode(.tail)
+                    .foregroundStyle(isReadDimmed ? Color.secondary : Color.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-            HStack(spacing: 4) {
-                TintedBadge(text: "NH", color: .orange, font: .system(size: 8, weight: .semibold))
-                Spacer()
+                HStack(spacing: 4) {
+                    TintedBadge(text: "NH", color: .orange, font: .system(size: 8, weight: .semibold))
+                    Spacer(minLength: 0)
+                }
             }
+            .padding(8)
         }
+        .background(CardDesign.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: CardDesign.cardCorner, style: .continuous))
+        .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
         .contentShape(Rectangle())
     }
 
