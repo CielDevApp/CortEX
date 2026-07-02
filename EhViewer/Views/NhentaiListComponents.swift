@@ -100,6 +100,16 @@ struct NhentaiScrollList: View {
             .padding(.horizontal, 8)
             .padding(.top, 8)
 
+            // 田中要望 2026-07-03: 一覧の終端に件数フッターを表示
+            if !viewModel.hasMore && !viewModel.galleries.isEmpty {
+                Text(viewModel.isSearchActive
+                     ? "\(viewModel.galleries.count) 件見つかりました"
+                     : "全 \(viewModel.galleries.count) 件")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 16)
+            }
+
             if viewModel.galleries.isEmpty && !viewModel.isLoading {
                 ContentUnavailableView {
                     Label("ギャラリーがありません", systemImage: "photo.on.rectangle.angled")
@@ -107,7 +117,7 @@ struct NhentaiScrollList: View {
                 .padding(.top, 100)
             }
         }
-        .background(CardDesign.listBackground)
+        .background(CardDesign.listBackground.ignoresSafeArea())
         .onScrollGeometryChange(for: CGFloat.self) { geo in geo.contentOffset.y } action: { oldVal, newVal in
             let delta = newVal - oldVal
             if delta > 15 { onScrollDown?() } else if delta < -15 { onScrollUp?() }
@@ -179,6 +189,17 @@ struct NhentaiScrollList: View {
                     }
                 }
 
+                // 田中要望 2026-07-03: 一覧の終端に件数フッターを表示
+                if !viewModel.hasMore && !viewModel.galleries.isEmpty {
+                    Text(viewModel.isSearchActive
+                         ? "\(viewModel.galleries.count) 件見つかりました"
+                         : "全 \(viewModel.galleries.count) 件")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                }
+
                 if viewModel.galleries.isEmpty && !viewModel.isLoading {
                     ContentUnavailableView {
                         Label("ギャラリーがありません", systemImage: "photo.on.rectangle.angled")
@@ -187,7 +208,7 @@ struct NhentaiScrollList: View {
                 }
             }
         }
-        .background(CardDesign.listBackground)
+        .background(CardDesign.listBackground.ignoresSafeArea())
         .onScrollGeometryChange(for: CGFloat.self) { geo in
             geo.contentOffset.y
         } action: { oldVal, newVal in

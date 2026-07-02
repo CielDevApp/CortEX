@@ -571,6 +571,16 @@ struct GalleryScrollList: View {
             }
             .padding(8)
 
+            // 田中要望 2026-07-03: 一覧の終端に件数フッターを表示
+            if !viewModel.hasMore && !viewModel.galleries.isEmpty {
+                Text(viewModel.searchText.isEmpty
+                     ? "全 \(viewModel.galleries.count) 件"
+                     : "\(viewModel.galleries.count) 件見つかりました")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 16)
+            }
+
             if viewModel.galleries.isEmpty && !viewModel.isLoading {
                 ContentUnavailableView {
                     Label(
@@ -585,7 +595,7 @@ struct GalleryScrollList: View {
                 .padding(.top, 100)
             }
         }
-        .background(CardDesign.listBackground)
+        .background(CardDesign.listBackground.ignoresSafeArea())
         .onScrollGeometryChange(for: CGFloat.self) { geo in geo.contentOffset.y } action: { oldVal, newVal in
             let delta = newVal - oldVal
             if abs(delta) > 100 { return }
@@ -709,6 +719,17 @@ struct GalleryScrollList: View {
                     }
                 }
 
+                // 田中要望 2026-07-03: 一覧の終端に件数フッターを表示
+                if !viewModel.hasMore && !viewModel.galleries.isEmpty {
+                    Text(viewModel.searchText.isEmpty
+                         ? "全 \(viewModel.galleries.count) 件"
+                         : "\(viewModel.galleries.count) 件見つかりました")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                }
+
                 if viewModel.galleries.isEmpty && !viewModel.isLoading {
                     ContentUnavailableView {
                         Label(
@@ -728,7 +749,7 @@ struct GalleryScrollList: View {
                 }
             }
         }
-        .background(CardDesign.listBackground)
+        .background(CardDesign.listBackground.ignoresSafeArea())
         .onScrollGeometryChange(for: CGFloat.self) { geo in
             geo.contentOffset.y
         } action: { oldVal, newVal in
