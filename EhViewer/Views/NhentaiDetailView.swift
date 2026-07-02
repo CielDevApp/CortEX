@@ -569,9 +569,9 @@ struct NhThumbCell: View {
                                 .foregroundStyle(.secondary)
                         }
                 } else {
-                    Color.gray.opacity(0.1)
+                    // UI 刷新 Phase 3 (2026-07-03): ロード中サムネは shimmer (ぐるぐる廃止)
+                    ShimmerPlaceholder(cornerRadius: 4)
                         .frame(height: 150)
-                        .overlay { ProgressView().scaleEffect(0.6) }
                 }
             }
         }

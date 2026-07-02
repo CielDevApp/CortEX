@@ -101,25 +101,26 @@ struct StarRatingBar: View {
 /// スケルトン UI。transform (offset) アニメーションのみなので GPU 合成で軽い。
 struct ShimmerPlaceholder: View {
     var cornerRadius: CGFloat = CardDesign.cardCorner
-    @State private var phase: CGFloat = -0.8
 
     var body: some View {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             .fill(Color.gray.opacity(0.18))
             .overlay {
+                // TimelineView 駆動: 壁時計から位相を計算するので、LazyVGrid でセルの
+                // identity が入れ替わってもアニメが止まらない (withAnimation +
+                // repeatForever は identity 再生成で死ぬことがある = 初版の不具合)。
+                // 全 shimmer が同位相で流れるため見た目も揃う。30fps 上限で省電力。
                 GeometryReader { geo in
-                    LinearGradient(
-                        colors: [.clear, .white.opacity(0.35), .clear],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                    .frame(width: geo.size.width * 0.7)
-                    .offset(x: geo.size.width * phase)
-                    .onAppear {
-                        // LazyVGrid で可視セルのみ materialize されるため常時多数は回らない
-                        withAnimation(.linear(duration: 1.3).repeatForever(autoreverses: false)) {
-                            phase = 1.5
-                        }
+                    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                        let t = context.date.timeIntervalSinceReferenceDate
+                        let progress = CGFloat(t.truncatingRemainder(dividingBy: 1.3) / 1.3)
+                        LinearGradient(
+                            colors: [.clear, .white.opacity(0.35), .clear],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                        .frame(width: geo.size.width * 0.7)
+                        .offset(x: geo.size.width * (-0.8 + progress * 2.3))
                     }
                 }
             }
