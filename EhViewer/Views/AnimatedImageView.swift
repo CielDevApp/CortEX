@@ -89,7 +89,8 @@ final class AnimatedSourceImageView: UIImageView {
         // ライブで UserDefaults を読むため、ここでは初回 first frame SYNC 用にのみスナップ。
         currentConfig = AnimEnhanceConfig.fromDefaults()
 
-        LogManager.shared.log("Anim", "setSource frames=\(source.frameCount) active=\(isActive) dur=\(String(format: "%.2f", source.totalDuration))s maxDim=\(Int(maxDim)) config=\(currentConfig)")
+        let freeMB = Int(os_proc_available_memory()) / 1_048_576
+        LogManager.shared.log("Anim", "setSource frames=\(source.frameCount) active=\(isActive) dur=\(String(format: "%.2f", source.totalDuration))s maxDim=\(Int(maxDim)) config=\(currentConfig) free=\(freeMB)MB")
 
         // first frame SYNC (黒画面回避)
         let t0 = CFAbsoluteTimeGetCurrent()
@@ -667,7 +668,10 @@ struct BoomerangWebPView: View {
                 guard coordinator.isPlaying(pageKey) else { return }
                 await loadSource()
             } else {
-                if self.source != nil {
+                if let s = self.source {
+                    // 非再生に遷移: frameCache (~230MB) を即解放。強参照 cache には source 本体を
+                    // 残す (再タップ時 demux スキップ) が全フレームは抱えさせない (2026-07-11 OOM 対策)。
+                    s.dropFrameCache()
                     self.source = nil
                     LogManager.shared.log("Boomerang", "source released (not playing) key=\(readerID)#\(pageIndex)")
                 }
