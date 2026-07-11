@@ -88,6 +88,7 @@ struct AdvancedSearchView: View {
         ("italian", "イタリア語"),
         ("portuguese", "ポルトガル語"),
         ("russian", "ロシア語"),
+        ("ukrainian", "ウクライナ語"),
         ("spanish", "スペイン語"),
     ]
 

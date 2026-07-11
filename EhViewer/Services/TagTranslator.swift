@@ -156,6 +156,7 @@ nonisolated enum TagTranslator {
         "英語": "language:english$",
         "中国語": "language:chinese$",
         "韓国語": "language:korean$",
+        "ウクライナ語": "language:ukrainian$",
         "翻訳": "language:translated$",
 
         // パロディ
