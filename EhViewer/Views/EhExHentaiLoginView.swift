@@ -188,11 +188,12 @@ struct EhExHentaiLoginView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             Button {
-                webViewHolder.webView?.load(URLRequest(url: URL(string: "https://e-hentai.org/bounce_login.php")!))
-                phase = .login
-                statusText = "e-hentai.org にログインしてください"
+                // ipb cookie は有効なままなので exhentai bounce だけやり直す。
+                // (旧実装の bounce_login 再ロードは hasTriggeredExBounce が true のまま
+                //  なので EX に再遷移せず、実質死にボタンだった)
+                webViewHolder.coordinator?.restartIgneousBounce()
             } label: {
-                Label("もう一度ログイン", systemImage: "arrow.clockwise")
+                Label("もう一度取得", systemImage: "arrow.clockwise")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
@@ -253,6 +254,7 @@ struct EhExHentaiLoginView: View {
 @MainActor
 final class WebViewHolder {
     var webView: WKWebView?
+    weak var coordinator: EhExHentaiWebView.Coordinator?
 }
 
 /// E-Hentai / EXhentai 用 WKWebView wrapper。
@@ -281,6 +283,7 @@ struct EhExHentaiWebView: UIViewRepresentable {
         // KVO で goBack/goForward 状態を反映
         context.coordinator.observe(webView: webView)
         holder.webView = webView
+        holder.coordinator = context.coordinator
 
         let url = URL(string: "https://e-hentai.org/bounce_login.php")!
         webView.load(URLRequest(url: url))
@@ -295,6 +298,8 @@ struct EhExHentaiWebView: UIViewRepresentable {
         var parent: EhExHentaiWebView
         private var hasTriggeredExBounce = false
         private var hasCapturedAll = false
+        private var igneousRetryCount = 0
+        private let igneousMaxRetries = 3
         private var observers: [NSKeyValueObservation] = []
 
         init(_ parent: EhExHentaiWebView) {
@@ -419,13 +424,17 @@ struct EhExHentaiWebView: UIViewRepresentable {
             }
         }
 
-        /// 2 回目 sheet (relaunch 後) の exhentai.org 到達後、3 秒待機して 3 cookie を抽出。
-        /// 田中 testimony 2026-04-27: relaunch 後の操作なら igneous は即取得できる。
-        /// 万が一取れなかった場合は .igneousFailed で手動再試行を誘導。
+        /// 2 回目 sheet (relaunch 後) の exhentai.org 到達後、待機して 3 cookie を抽出。
+        /// igneous 未発行 (または placeholder "mystery") なら exhentai.org を再ロードして
+        /// 最大 igneousMaxRetries 回まで自動リトライ (scheduleIgneousRetry 相当のサイクル)。
+        /// 田中 testimony 2026-07-11: 新規 ipb cookie での exhentai 初回リクエストは igneous が
+        /// 発行されないことがあり、2 回目のリクエストで来る。ログインし直しは不要。
         private func extractAllCookiesAndFinish(from webView: WKWebView) {
             guard !hasCapturedAll else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
-                guard let self else { return }
+            // 初回は relaunch 直後の発行待ちで 3 秒 (2026-04-27 testimony)、リトライ後は 1.5 秒
+            let delay = igneousRetryCount == 0 ? 3.0 : 1.5
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak webView] in
+                guard let self, let webView else { return }
                 guard !self.hasCapturedAll else { return }
                 webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
                     let ehCookies = cookies.filter { $0.domain.contains("e-hentai.org") || $0.domain.contains("exhentai.org") }
@@ -438,20 +447,42 @@ struct EhExHentaiWebView: UIViewRepresentable {
                         return
                     }
 
-                    if let igneous, !igneous.isEmpty {
+                    // "mystery" は EX 側が本発行前に返す placeholder。有効値扱いしない。
+                    if let igneous, !igneous.isEmpty, igneous != "mystery" {
                         self.hasCapturedAll = true
-                        LogManager.shared.log("EhAuth", "igneous captured on relaunched exhentai bounce")
+                        LogManager.shared.log("EhAuth", "igneous captured (attempt \(self.igneousRetryCount + 1))")
                         self.parent.onCookiesCaptured(memberID, passHash, igneous)
                         return
                     }
 
-                    LogManager.shared.log("EhAuth", "igneous not issued even after relaunch, prompting manual retry")
+                    guard self.igneousRetryCount < self.igneousMaxRetries else {
+                        LogManager.shared.log("EhAuth", "igneous not issued after \(self.igneousMaxRetries + 1) attempts, prompting manual retry")
+                        Task { @MainActor in
+                            self.parent.phase = .igneousFailed
+                            self.parent.statusText = "igneous が発行されませんでした。もう一度試してください"
+                        }
+                        return
+                    }
+
+                    self.igneousRetryCount += 1
+                    LogManager.shared.log("EhAuth", "igneous 未発行 → exhentai.org 再ロード (retry \(self.igneousRetryCount)/\(self.igneousMaxRetries))")
                     Task { @MainActor in
-                        self.parent.phase = .igneousFailed
-                        self.parent.statusText = "igneous が発行されませんでした。もう一度試してください"
+                        self.parent.statusText = "igneous 再取得中... (\(self.igneousRetryCount)/\(self.igneousMaxRetries))"
+                        webView.load(URLRequest(url: URL(string: "https://exhentai.org/")!))
                     }
                 }
             }
+        }
+
+        /// .igneousFailed overlay の再試行ボタンから呼ばれる。retry カウンタを戻して
+        /// exhentai.org bounce をやり直す (ipb cookie は有効なままなのでログイン不要)。
+        @MainActor
+        func restartIgneousBounce() {
+            igneousRetryCount = 0
+            hasCapturedAll = false
+            parent.phase = .bouncing
+            parent.statusText = "exhentai.org に再アクセス中 (igneous 発行)"
+            parent.holder.webView?.load(URLRequest(url: URL(string: "https://exhentai.org/")!))
         }
 
         deinit {
