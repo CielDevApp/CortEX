@@ -7,7 +7,7 @@ import UIKit
 /// release-ios.sh が IPA ビルド時にこの値を当該タグへ自動同期する (手動更新不要)。
 /// 純定数 + 純関数のみ (可変状態なし) → nonisolated。
 nonisolated enum AppVersion {
-    static let releaseTag = "v02a-f31"
+    static let releaseTag = "v02a-f32"
     static var displayName: String {
         "Cort:EX " + releaseTag.replacingOccurrences(of: "v02a-f", with: "ver.02a f")
     }
