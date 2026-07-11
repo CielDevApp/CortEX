@@ -60,6 +60,10 @@ struct TintedBadge: View {
     var body: some View {
         Text(text)
             .font(font)
+            // iOS 26 は幅が詰まると "Western" 等を中折りして 2 行化し、カード高さが
+            // バラける (2026-07-11 田中報告、17e/iOS 26.5 で再発)。1 行固定 + 縮小で吸収。
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
             .foregroundStyle(color)
             .padding(.horizontal, 7)
             .padding(.vertical, 2)
