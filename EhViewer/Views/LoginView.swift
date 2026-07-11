@@ -1,10 +1,14 @@
 import SwiftUI
+#if canImport(UIKit)
+import WebKit
+#endif
 
 struct LoginView: View {
     @ObservedObject var authVM: AuthViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var showHelp = false
     @State private var showWebLogin = false
+    @State private var cookieClearStatus: String?
     /// 田中要望 2026-04-27: 1 回目フォーラム到達後の「閉じて再起動」シミュレート用。
     /// hasRelaunchedWebLogin: 次回 sheet 提示時 isRelaunched で渡す値 (= 「2 回目モーダル」を意味)
     /// isRelaunchPending: onDismiss が「閉じて再起動」由来か「手動 ×」由来か区別するフラグ
@@ -88,6 +92,14 @@ struct LoginView: View {
                             .frame(maxWidth: .infinity)
                     }
                     .foregroundStyle(.orange)
+
+                    Button(role: .destructive) {
+                        clearBrowserEhCookies()
+                    } label: {
+                        Label(cookieClearStatus ?? "ブラウザの EH cookie をクリア", systemImage: "trash")
+                            .frame(maxWidth: .infinity)
+                            .font(.caption)
+                    }
                     #endif
                 }
             }
@@ -139,6 +151,30 @@ struct LoginView: View {
             #endif
         }
     }
+
+    #if canImport(UIKit)
+    /// ブラウザログイン sheet を開かずに、共有 WKWebsiteDataStore の EH cookie を消す。
+    /// sheet 内のクリアメニューは cookie 残存時に自動フローが完走して sheet が閉じてしまい
+    /// 押せない (2026-07-11 田中報告) ため、sheet の外に配置。
+    private func clearBrowserEhCookies() {
+        let store = WKWebsiteDataStore.default().httpCookieStore
+        store.getAllCookies { cookies in
+            let targets = cookies.filter { $0.domain.contains("e-hentai.org") || $0.domain.contains("exhentai.org") }
+            LogManager.shared.log("EhAuth", "clearing \(targets.count) eh/exh cookies from LoginView")
+            let group = DispatchGroup()
+            for c in targets {
+                group.enter()
+                store.delete(c) { group.leave() }
+            }
+            group.notify(queue: .main) {
+                cookieClearStatus = "クリア完了 (\(targets.count)件)"
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                    cookieClearStatus = nil
+                }
+            }
+        }
+    }
+    #endif
 }
 
 // MARK: - ログインヘルプ
