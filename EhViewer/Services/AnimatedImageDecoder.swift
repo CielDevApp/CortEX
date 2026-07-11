@@ -19,7 +19,14 @@ final class AnimatedImageSourceCache {
     static let shared = AnimatedImageSourceCache()
     private init() {}
 
+    // 強参照で保持する source 数。各 source は非再生でも frameCache を抱え得るため、
+    // メモリに余裕のない iPhone/iPad は 2 に絞る (2026-07-11 iPad mini jetsam 対策)。
+    // Mac Catalyst はメモリ潤沢なので従来通り 3。
+    #if targetEnvironment(macCatalyst)
     private let capacity: Int = 3
+    #else
+    private let capacity: Int = 2
+    #endif
     private var order: [String] = []
     private var items: [String: AnimatedImageSource] = [:]
 

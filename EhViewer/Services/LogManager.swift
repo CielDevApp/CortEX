@@ -42,8 +42,13 @@ final class LogManager: ObservableObject {
     private lazy var logFileURL: URL = {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let url = docs.appendingPathComponent("ehviewer.log")
-        // 起動時に前回ログをクリア（太りすぎ防止）
-        try? FileManager.default.removeItem(at: url)
+        // 起動時: 前回ログを prev へ退避してから新規開始（太りすぎ防止 + クラッシュ後の証拠保全）。
+        // OOM/jetsam で落ちると直前セッションのログが唯一の手掛かりになるため、削除せず 1 世代残す。
+        let prev = docs.appendingPathComponent("ehviewer.prev.log")
+        if FileManager.default.fileExists(atPath: url.path) {
+            try? FileManager.default.removeItem(at: prev)
+            try? FileManager.default.moveItem(at: url, to: prev)
+        }
         FileManager.default.createFile(atPath: url.path, contents: nil)
         return url
     }()
