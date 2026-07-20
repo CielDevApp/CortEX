@@ -57,6 +57,8 @@ struct LibraryCardView<Cover: View>: View {
     /// 小ジャケットタップ → ページ詳細 (2026-07-20 田中要望: リスト表示でページ詳細の導線が薄い)。
     /// nil なら従来通りタップ不可 (外部参照の旧 .cortex 等、詳細に行けない作品)。
     var onCover: (() -> Void)? = nil
+    /// 監査B3: タイル → リーダーの zoom 遷移 namespace。nil なら zoom なし (既定遷移)。
+    var zoomNamespace: Namespace.ID? = nil
     /// 上段ジャケット (既存 AsyncCoverThumbnail を親から注入して cover 経路を一本化)
     @ViewBuilder let cover: () -> Cover
     /// 「読む」ボタン (p1 から / 既存の続きから再開挙動は親側実装を踏襲)
@@ -74,7 +76,8 @@ struct LibraryCardView<Cover: View>: View {
                 .padding(12)
 
             if tileCount > 0 {
-                CardTileGrid(meta: meta, tileCount: tileCount, onTapPage: onTapPage)
+                CardTileGrid(meta: meta, tileCount: tileCount, onTapPage: onTapPage,
+                             zoomNamespace: zoomNamespace)
                     .padding(.horizontal, 12)
             }
 
@@ -172,6 +175,7 @@ struct CardTileGrid: View {
     let meta: DownloadedGallery
     let tileCount: Int
     let onTapPage: (Int) -> Void
+    var zoomNamespace: Namespace.ID? = nil
 
     private var columns: [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: 6), count: LibraryCardConfig.tileColumns)
@@ -180,7 +184,7 @@ struct CardTileGrid: View {
     var body: some View {
         LazyVGrid(columns: columns, spacing: 6) {
             ForEach(0..<tileCount, id: \.self) { index in
-                CardTile(gid: meta.gid, index: index) {
+                CardTile(gid: meta.gid, index: index, zoomNamespace: zoomNamespace) {
                     onTapPage(index)
                 }
             }
@@ -193,6 +197,7 @@ struct CardTileGrid: View {
 struct CardTile: View {
     let gid: Int
     let index: Int
+    var zoomNamespace: Namespace.ID? = nil
     let onTap: () -> Void
 
     @State private var image: PlatformImage?
@@ -229,6 +234,8 @@ struct CardTile: View {
             }
         }
         .buttonStyle(.pressable)
+        // B3: zoom 遷移の source。sourceID は DownloadsView 側の "gid-p<page>" と一致させる。
+        .modifier(ZoomSourceModifier(namespace: zoomNamespace, id: "\(gid)-p\(index)"))
         .onAppear { startLoad() }
         .onDisappear {
             loadTask?.cancel()
@@ -254,6 +261,21 @@ struct CardTile: View {
                     withAnimation(.easeOut(duration: 0.15)) { self.shown = true }
                 }
             }
+        }
+    }
+}
+
+/// zoom 遷移の source を条件付きで付ける (namespace が無ければ no-op)。
+/// matchedTransitionSource は iOS 18+ (本 target は 18.0)。
+struct ZoomSourceModifier: ViewModifier {
+    let namespace: Namespace.ID?
+    let id: String
+
+    func body(content: Content) -> some View {
+        if let namespace {
+            content.matchedTransitionSource(id: id, in: namespace)
+        } else {
+            content
         }
     }
 }

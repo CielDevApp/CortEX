@@ -49,6 +49,12 @@ struct DownloadsView: View {
     @AppStorage(UDKey.libraryListLayout) private var libraryListLayout: String = "list"
     private var isLibraryGrid: Bool { libraryListLayout == "grid" }
 
+    /// 監査B3 (apple-design §7 空間的一貫性): タイル → リーダーの zoom 遷移。
+    /// タップしたタイルの位置から画像が拡大して開き、閉じると同じ場所へ縮む。
+    @Namespace private var zoomNS
+    /// 直近タップの source id ("gid-p<page>")。「読む」経由や不一致時は空 = 既定遷移。
+    @State private var zoomSourceKey: String = ""
+
     /// ライブラリ内検索 (2026-07-20 田中要望)。タイトル部分一致 (大小無視)。
     /// 4セクション全部の computed prop 側で絞るので、件数表示も検索結果の数になる。
     @State private var librarySearchText = ""
@@ -464,6 +470,8 @@ struct DownloadsView: View {
             #if os(iOS)
             .fullScreenCover(item: $readerMeta, onDismiss: { readerInitialPage = 0 }) { meta in
                 LocalReaderView(meta: meta, initialPage: readerInitialPage)
+                    // B3: タップしたタイルから zoom。source 不一致時は既定遷移に自然フォールバック。
+                    .navigationTransition(.zoom(sourceID: zoomSourceKey, in: zoomNS))
             }
             .fullScreenCover(item: $liveReaderMeta) { meta in
                 LocalReaderView(meta: meta, isLiveDownload: true)
@@ -776,14 +784,16 @@ struct DownloadsView: View {
     // 旧クラシック行 (小サムネ + タイトル密行) は田中確定で廃止、設定トグルも作らない。
     private func completedRow(meta: DownloadedGallery) -> some View {
         let isHighlighted = highlightedGid == meta.gid
-        LibraryCardView(meta: meta, onCover: { detailMeta = meta }) {
+        LibraryCardView(meta: meta, onCover: { detailMeta = meta }, zoomNamespace: zoomNS) {
             coverThumbnail(gid: meta.gid)
         } onRead: {
             // 田中要望 2026-04-26: internal DL も pre-cache 経路に統一、ensureAnimatedWebpScanned
             // を background 完了させてから Reader 起動 (1000+ ページ初回 scan の freeze 回避)。
+            zoomSourceKey = ""   // 読むは既定遷移 (B3: zoom はタイル経路のみ)
             startPreCacheAndOpenReader(meta: meta, count: 0)
         } onTapPage: { page in
             // タイルタップ → リーダーで該当ページ直接 (ワープ)。戻るはリストへ (fullScreenCover dismiss)
+            zoomSourceKey = "\(meta.gid)-p\(page)"   // B3: このタイルから zoom
             readerInitialPage = page
             startPreCacheAndOpenReader(meta: meta, count: 0)
         } onMore: {
@@ -830,12 +840,15 @@ struct DownloadsView: View {
         // SMB 未 materialize のタイルは placeholder のまま (Transport-Agnostic、指示書 共通条件4)。
         // ジャケットタップの詳細遷移は originalGid がある作品のみ (旧 .cortex は contextMenu と同じく不可)
         LibraryCardView(meta: meta, showExtBadge: true,
-                        onCover: meta.originalGid != nil ? { detailMeta = meta } : nil) {
+                        onCover: meta.originalGid != nil ? { detailMeta = meta } : nil,
+                        zoomNamespace: zoomNS) {
             // 田中要望 2026-04-26: サムネ表示 (cover.* or page_0001 を ZIP から materialize)
             coverThumbnail(gid: meta.gid)
         } onRead: {
+            zoomSourceKey = ""
             startPreCacheAndOpenReader(meta: meta, count: 3)
         } onTapPage: { page in
+            zoomSourceKey = "\(meta.gid)-p\(page)"
             readerInitialPage = page
             startPreCacheAndOpenReader(meta: meta, count: 3)
         } onMore: {
