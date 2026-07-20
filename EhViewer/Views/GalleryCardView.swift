@@ -109,7 +109,19 @@ struct StarRatingBar: View {
 /// - smoothstep 加減速 + サイクル後半 45% は休止 (常時ギラつかせない)
 /// - TimelineView 駆動: identity 再生成で死なず、全 shimmer が同位相で揃う
 struct ShimmerSweep: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     func body(content: Content) -> some View {
+        // 監査C4 (HIG「モーションは任意化」/ apple-design §14): Reduce Motion 時は
+        // 掃引アニメを畳み、静的なプレースホルダのまま (装飾モーションのみ除去)。
+        if reduceMotion {
+            content
+        } else {
+            sweeping(content)
+        }
+    }
+
+    private func sweeping(_ content: Content) -> some View {
         content.overlay {
             GeometryReader { geo in
                 TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
