@@ -27,33 +27,3 @@ extension ButtonStyle where Self == PressableStyle {
     /// 沈み込み量指定版
     static func pressable(scale: CGFloat) -> PressableStyle { PressableStyle(scale: scale) }
 }
-
-// MARK: - 非Button要素用の加算式押下フィードバック (オンライン一覧カードへの B1 移植, 2026-07-21)
-//
-// オンライン一覧のカードは Button ではなく onTapGesture + 長押しの繊細な組合せ
-// (2026-05-16 hit 吸収バグ修正の経緯)。ButtonStyle を当てられないので、既存 gesture を
-// 一切奪わない simultaneousGesture で press 状態だけ拾って scale する。
-// スクロール開始 (移動 > 10pt) では pressed を落とし、スクロール中にカードが縮むのを防ぐ。
-struct PressFeedback: ViewModifier {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @GestureState private var pressed = false
-    var scale: CGFloat = 0.97
-
-    func body(content: Content) -> some View {
-        content
-            .scaleEffect(reduceMotion ? 1.0 : (pressed ? scale : 1.0))
-            .animation(.easeOut(duration: 0.12), value: pressed)
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 0)
-                    .updating($pressed) { value, state, _ in
-                        // 指を置いた瞬間 = press。10pt 超動いたらスクロール扱いで解除。
-                        state = abs(value.translation.width) < 10 && abs(value.translation.height) < 10
-                    }
-            )
-    }
-}
-
-extension View {
-    /// 非Button要素 (onTapGesture カード等) の押下沈み込み。既存 tap/長押しを奪わない。
-    func pressFeedback(scale: CGFloat = 0.97) -> some View { modifier(PressFeedback(scale: scale)) }
-}

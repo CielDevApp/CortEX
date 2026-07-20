@@ -521,7 +521,6 @@ struct GalleryScrollList: View {
                     if index < viewModel.galleries.count {
                         let gallery = viewModel.galleries[index]
                         GalleryGridCellView(gallery: gallery)
-                            .pressFeedback(scale: 0.97)   // B1 オンライン移植 (2026-07-21)
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 // 田中報告 2026-05-02: 別作品を開いて戻ると前の作品の詳細が出る問題対応。
@@ -657,7 +656,6 @@ struct GalleryScrollList: View {
                     // onTapGesture + onLongPressGesture: 長押し発火時は tap を抑制するSwiftUI標準動作
                     // UI 刷新 (2026-07-03): 行をカード化 (角丸 continuous + subtle shadow)
                     CardDesign.cardChrome(GalleryCardView(gallery: gallery))
-                        .pressFeedback(scale: 0.98)   // B1 オンライン移植 (2026-07-21)
                         .padding(.horizontal)
                         .padding(.vertical, 4)
                         .contentShape(Rectangle())

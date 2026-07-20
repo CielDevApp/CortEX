@@ -70,7 +70,6 @@ struct NhentaiScrollList: View {
                     if index < viewModel.galleries.count {
                         let nh = viewModel.galleries[index]
                         NhentaiGridCellView(gallery: nh)
-                            .pressFeedback(scale: 0.97)   // B1 オンライン移植 (2026-07-21)
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 navPath = NavigationPath()
@@ -161,7 +160,6 @@ struct NhentaiScrollList: View {
                 ForEach(viewModel.galleries) { nh in
                     // UI 刷新 (2026-07-03): 行をカード化 (E-H 側と同型)
                     CardDesign.cardChrome(NhentaiCardView(gallery: nh))
-                        .pressFeedback(scale: 0.98)   // B1 オンライン移植 (2026-07-21)
                         .padding(.horizontal)
                         .padding(.vertical, 4)
                         .contentShape(Rectangle())
