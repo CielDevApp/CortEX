@@ -1229,6 +1229,7 @@ struct DownloadsView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.pressable(scale: 0.98))   // 大きめセルは浅い沈み込み (監査 B1)
+        .scrubPressEffect(gid: meta.gid)        // スクラブ発動時の沈み込み (監査 A2)
         // スクラブプレビュー: 指下セル特定用に window 座標の frame を常時登録 (機能A A-6)
         .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { rect in
             ScrubPreviewController.shared.updateCell(gid: meta.gid, pageCount: meta.pageCount, frame: rect)
