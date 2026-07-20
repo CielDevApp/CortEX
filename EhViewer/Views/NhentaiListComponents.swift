@@ -9,6 +9,7 @@ import TipKit
 struct NhentaiScrollList: View {
     @ObservedObject var viewModel: NhentaiListViewModel
     @Binding var navPath: NavigationPath
+    var zoomNamespace: Namespace.ID   // B3 online: 親 GalleryListView の zoom namespace
     @State private var previewGallery: NhentaiClient.NhGallery?
     @State private var previewReaderRequest: NhentaiPreviewReaderRequest?
     /// E-H 側 GalleryScrollList と同方式 (v02a-f13): 検索/更新でデータ総入れ替えした時に
@@ -70,6 +71,7 @@ struct NhentaiScrollList: View {
                     if index < viewModel.galleries.count {
                         let nh = viewModel.galleries[index]
                         NhentaiGridCellView(gallery: nh)
+                            .matchedTransitionSource(id: "nh-\(nh.id)", in: zoomNamespace)   // B3 online
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 navPath = NavigationPath()
@@ -160,6 +162,7 @@ struct NhentaiScrollList: View {
                 ForEach(viewModel.galleries) { nh in
                     // UI 刷新 (2026-07-03): 行をカード化 (E-H 側と同型)
                     CardDesign.cardChrome(NhentaiCardView(gallery: nh))
+                        .matchedTransitionSource(id: "nh-\(nh.id)", in: zoomNamespace)   // B3 online
                         .padding(.horizontal)
                         .padding(.vertical, 4)
                         .contentShape(Rectangle())

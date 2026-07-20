@@ -42,6 +42,9 @@ struct GalleryListView: View {
     @State private var searchText = ""
     @State private var tabBarHidden = false
     @StateObject private var navPathBox = NavigationPathBox()
+    /// B3 オンライン移植 (2026-07-21 再挑戦): カード → 詳細画面 push の zoom 遷移。
+    /// NavigationStack push は iOS 18 zoom transition の本来の想定用途。gesture は奪わない。
+    @Namespace private var listZoomNS
     @AppStorage(UDKey.galleryListLayout) private var galleryListLayout: String = "grid"
     /// 田中要望 2026-04-30: iOS の `.searchable` (日本語有利 baseQuery 込み) を撤回し、
     /// 検索ボタン → AdvancedSearchView sheet で全カテゴリ + 言語を任意指定する新 UX。
@@ -110,9 +113,11 @@ struct GalleryListView: View {
             #endif
             .navigationDestination(for: Gallery.self) { gallery in
                 GalleryDetailView(gallery: gallery, host: currentHost)
+                    .navigationTransition(.zoom(sourceID: gallery.gid, in: listZoomNS))   // B3 online
             }
             .navigationDestination(for: NhentaiClient.NhGallery.self) { nh in
                 NhentaiDetailView(gallery: nh)
+                    .navigationTransition(.zoom(sourceID: "nh-\(nh.id)", in: listZoomNS))   // B3 online
             }
             .navigationDestination(for: TagSearch.self) { search in
                 TagSearchResultView(searchQuery: search.query, host: currentHost, title: search.displayTitle)
@@ -289,11 +294,11 @@ struct GalleryListView: View {
 
             switch selectedTab {
             case .all:
-                GalleryScrollList(viewModel: allVM, authVM: authVM, navPath: $navPathBox.path, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
+                GalleryScrollList(viewModel: allVM, authVM: authVM, navPath: $navPathBox.path, zoomNamespace: listZoomNS, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
             case .doujinshi:
-                GalleryScrollList(viewModel: doujinshiVM, authVM: authVM, navPath: $navPathBox.path, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
+                GalleryScrollList(viewModel: doujinshiVM, authVM: authVM, navPath: $navPathBox.path, zoomNamespace: listZoomNS, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
             case .manga:
-                GalleryScrollList(viewModel: mangaVM, authVM: authVM, navPath: $navPathBox.path, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
+                GalleryScrollList(viewModel: mangaVM, authVM: authVM, navPath: $navPathBox.path, zoomNamespace: listZoomNS, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
             }
         }
         .overlay {
@@ -383,7 +388,7 @@ struct GalleryListView: View {
             TipView(NhentaiSearchTip(), arrowEdge: .top)
                 .padding(.horizontal)
 
-            NhentaiScrollList(viewModel: nhVM, navPath: $navPathBox.path, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
+            NhentaiScrollList(viewModel: nhVM, navPath: $navPathBox.path, zoomNamespace: listZoomNS, onScrollDown: { tabBarHidden = true }, onScrollUp: { tabBarHidden = false })
         }
         .overlay {
             if nhVM.isLoading && nhVM.galleries.isEmpty {
@@ -458,6 +463,7 @@ struct GalleryScrollList: View {
     @ObservedObject var viewModel: GalleryListViewModel
     @ObservedObject var authVM: AuthViewModel
     @Binding var navPath: NavigationPath
+    var zoomNamespace: Namespace.ID   // B3 online: 親 GalleryListView の zoom namespace
     @State private var scrollPosition: Int?
     // 田中報告 2026-06-21: 起動直後/左右スワイプで一覧トップにスキマが出て一瞬で張り付く。
     // 真因 = 初回ロード (loadGalleries reset:true) も scrollResetToken を上げるため、既に
@@ -525,6 +531,7 @@ struct GalleryScrollList: View {
                     if index < viewModel.galleries.count {
                         let gallery = viewModel.galleries[index]
                         GalleryGridCellView(gallery: gallery)
+                            .matchedTransitionSource(id: gallery.gid, in: zoomNamespace)   // B3 online
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 // 田中報告 2026-05-02: 別作品を開いて戻ると前の作品の詳細が出る問題対応。
@@ -660,6 +667,7 @@ struct GalleryScrollList: View {
                     // onTapGesture + onLongPressGesture: 長押し発火時は tap を抑制するSwiftUI標準動作
                     // UI 刷新 (2026-07-03): 行をカード化 (角丸 continuous + subtle shadow)
                     CardDesign.cardChrome(GalleryCardView(gallery: gallery))
+                        .matchedTransitionSource(id: gallery.gid, in: zoomNamespace)   // B3 online
                         .padding(.horizontal)
                         .padding(.vertical, 4)
                         .contentShape(Rectangle())
