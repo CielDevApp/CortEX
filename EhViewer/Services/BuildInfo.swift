@@ -2,5 +2,5 @@ import Foundation
 
 /// 自動生成: Scripts/update_build_info.sh によりビルド毎に上書きされる
 nonisolated enum BuildInfo {
-    static let tag = "2026-06-22 04:36:33 aba8b10 \"fix(library): グリッド表示でDL進捗が表示されない不具合を修正\""
+    static let tag = "2026-07-20 21:24:09 996ee2b+dirty \"guard(18条): 配布物ゲートを release-ios.sh に機械組込 — 私設IP/個人情報/credentials/APNs を strings \""
 }

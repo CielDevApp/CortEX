@@ -48,6 +48,15 @@ struct DownloadsView: View {
     /// 田中要望 2026-05-01: ライブラリのグリッド/リスト切替 (ギャラリーリストと同じ仕様)。
     @AppStorage(UDKey.libraryListLayout) private var libraryListLayout: String = "list"
     private var isLibraryGrid: Bool { libraryListLayout == "grid" }
+
+    /// ライブラリ内検索 (2026-07-20 田中要望)。タイトル部分一致 (大小無視)。
+    /// 4セクション全部の computed prop 側で絞るので、件数表示も検索結果の数になる。
+    @State private var librarySearchText = ""
+    private func searchFiltered(_ items: [DownloadedGallery]) -> [DownloadedGallery] {
+        let q = librarySearchText.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return items }
+        return items.filter { $0.title.localizedCaseInsensitiveContains(q) }
+    }
     private var completedSortOrder: ExternalFolderManager.ExternalSortOrder {
         get { ExternalFolderManager.ExternalSortOrder(rawValue: completedSortOrderRaw) ?? .dateAdded }
     }
@@ -62,7 +71,7 @@ struct DownloadsView: View {
     private var visibleSortedExternal: [DownloadedGallery] {
         let visible = externalFolders.externalGalleries
             .filter { !externalFolders.hiddenExternalGids.contains($0.gid) }
-        let deduped = Self.dedupeByTitle(visible)
+        let deduped = searchFiltered(Self.dedupeByTitle(visible))
         switch externalFolders.externalSortOrder {
         case .dateAdded:
             return deduped.sorted { $0.downloadDate > $1.downloadDate }
@@ -100,7 +109,7 @@ struct DownloadsView: View {
         #endif
         // 田中要望 2026-04-30: 同名作品が大量に並ぶ問題に対し title ベース dedup (downloadDate 最新を残す)。
         // 田中要望 2026-06-10: 自動保存由来 (DL 意思なし) は「自動保存」セクションへ分離
-        let filtered = Self.dedupeByTitle(manager.downloads.values.filter { $0.isComplete && $0.autoSaveOnly != true })
+        let filtered = searchFiltered(Self.dedupeByTitle(manager.downloads.values.filter { $0.isComplete && $0.autoSaveOnly != true }))
         switch completedSortOrder {
         case .dateAdded:
             return filtered.sorted { $0.downloadDate > $1.downloadDate }
@@ -112,17 +121,17 @@ struct DownloadsView: View {
     }
 
     private var incompleteList: [DownloadedGallery] {
-        manager.downloads.values
+        searchFiltered(manager.downloads.values
             .filter { !$0.isComplete && manager.activeDownloads[$0.gid] == nil && $0.autoSaveOnly != true }
-            .sorted(by: { $0.downloadDate > $1.downloadDate })
+            .sorted(by: { $0.downloadDate > $1.downloadDate }))
     }
 
     /// 自動保存由来 (DL 意思なし) の作品。完了/未完了問わずここに分離して、
     /// 意図的な DL と混ざらないようにする (田中要望 2026-06-10)。
     private var autoSavedList: [DownloadedGallery] {
-        manager.downloads.values
+        searchFiltered(manager.downloads.values
             .filter { $0.autoSaveOnly == true && manager.activeDownloads[$0.gid] == nil }
-            .sorted(by: { $0.downloadDate > $1.downloadDate })
+            .sorted(by: { $0.downloadDate > $1.downloadDate }))
     }
 
     /// 「自動保存」セクション (List 用)。body 直書きだと type-check タイムアウトするため分離。
@@ -378,6 +387,7 @@ struct DownloadsView: View {
                 await externalFolders.rescanAll()
             }
             .navigationTitle("ライブラリ")
+            .searchable(text: $librarySearchText, prompt: "タイトルで検索")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(tabBarHidden ? .hidden : .visible, for: .tabBar)
@@ -762,64 +772,40 @@ struct DownloadsView: View {
     // MARK: - 完了済みの行
 
     @ViewBuilder
+    // 統合指示書 v2 機能B (2026-07-20): App Store 風カードに完全置換。
+    // 旧クラシック行 (小サムネ + タイトル密行) は田中確定で廃止、設定トグルも作らない。
     private func completedRow(meta: DownloadedGallery) -> some View {
         let isHighlighted = highlightedGid == meta.gid
-        Button {
+        LibraryCardView(meta: meta, onCover: { detailMeta = meta }) {
+            coverThumbnail(gid: meta.gid)
+        } onRead: {
             // 田中要望 2026-04-26: internal DL も pre-cache 経路に統一、ensureAnimatedWebpScanned
             // を background 完了させてから Reader 起動 (1000+ ページ初回 scan の freeze 回避)。
             startPreCacheAndOpenReader(meta: meta, count: 0)
-        } label: {
-            HStack(spacing: 10) {
-                coverThumbnail(gid: meta.gid)
-                    .overlay(alignment: .bottomTrailing) {
-                        if meta.isAnimatedGallery {
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 10))
-                                .foregroundStyle(.white)
-                                .padding(4)
-                                .background(.black.opacity(0.65))
-                                .clipShape(Circle())
-                                .padding(2)
-                        }
-                    }
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(meta.title)
-                            .font(.subheadline)
-                            .lineLimit(2)
-                        if isHighlighted {
-                            Text("NEW")
-                                .font(.caption2.bold())
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(.green)
-                                .clipShape(Capsule())
-                        }
-                    }
-                    HStack(spacing: 4) {
-                        Text("\(meta.pageCount) ページ")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        if meta.isNhentai {
-                            Text("NH")
-                                .font(.system(size: 9, weight: .bold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 1)
-                                .background(.orange)
-                                .clipShape(RoundedRectangle(cornerRadius: 3))
-                        }
-                    }
-                    Text(meta.downloadDate, style: .date)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+        } onTapPage: { page in
+            // タイルタップ → リーダーで該当ページ直接 (ワープ)。戻るはリストへ (fullScreenCover dismiss)
+            readerInitialPage = page
+            startPreCacheAndOpenReader(meta: meta, count: 0)
+        } onMore: {
+            // 続きを見る → 既存ページ詳細 (LocalPreviewOverlay)
+            previewMeta = meta
+        }
+        .overlay(alignment: .topTrailing) {
+            if isHighlighted {
+                Text("NEW")
+                    .font(.caption2.bold())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.green)
+                    .clipShape(Capsule())
+                    .padding(8)
             }
         }
-        .padding(.vertical, 4)
+        .listRowSeparator(.hidden)
+        .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
         .listRowBackground(
-            isHighlighted ? Color.green.opacity(0.12) : nil
+            isHighlighted ? Color.green.opacity(0.12) : Color.clear
         )
         .onAppear {
             // 未 scan で、かつタグからも動画判定できない作品のみバックグラウンド scan。
@@ -838,38 +824,26 @@ struct DownloadsView: View {
 
     @ViewBuilder
     private func externalRow(meta: DownloadedGallery) -> some View {
-        Button {
-            // Phase E1.B 後追加 (2026-04-26、田中指示): 外部参照 ZIP は最初の N ページを
-            // background pre-cache してから Reader を開く (main thread freeze 回避)。
-            // pre-cache 済 = imageFilePath が cache hit を返す → Reader 内 SMB IO 無し。
+        // 統合指示書 v2 機能B (2026-07-20): App Store 風カードに置換。
+        // Phase E1.B (2026-04-26): 外部参照 ZIP は最初の N ページを background pre-cache
+        // してから Reader を開く (main thread freeze 回避) — カードの onRead/onTapPage も同経路。
+        // SMB 未 materialize のタイルは placeholder のまま (Transport-Agnostic、指示書 共通条件4)。
+        // ジャケットタップの詳細遷移は originalGid がある作品のみ (旧 .cortex は contextMenu と同じく不可)
+        LibraryCardView(meta: meta, showExtBadge: true,
+                        onCover: meta.originalGid != nil ? { detailMeta = meta } : nil) {
+            // 田中要望 2026-04-26: サムネ表示 (cover.* or page_0001 を ZIP から materialize)
+            coverThumbnail(gid: meta.gid)
+        } onRead: {
             startPreCacheAndOpenReader(meta: meta, count: 3)
-        } label: {
-            HStack(spacing: 10) {
-                // 田中要望 2026-04-26: サムネ表示 (cover.* or page_0001 を ZIP から materialize)
-                coverThumbnail(gid: meta.gid)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(meta.title)
-                        .font(.subheadline)
-                        .lineLimit(2)
-                    HStack(spacing: 4) {
-                        Text("\(meta.pageCount) ページ")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text("EXT")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(.purple)
-                            .clipShape(RoundedRectangle(cornerRadius: 3))
-                    }
-                    Text(meta.downloadDate, style: .date)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
+        } onTapPage: { page in
+            readerInitialPage = page
+            startPreCacheAndOpenReader(meta: meta, count: 3)
+        } onMore: {
+            previewMeta = meta
         }
-        .padding(.vertical, 4)
+        .listRowSeparator(.hidden)
+        .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+        .listRowBackground(Color.clear)
         // 田中要望 2026-04-26: 長押し (Mac 右クリック) で プレビュー / 詳細 / 一覧から削除
         // 詳細は originalGid (元 server gid) があれば有効、無ければ disabled (旧 .cortex)
         .contextMenu {
@@ -1133,6 +1107,9 @@ struct DownloadsView: View {
         // グリッド専用のタブバー隠しハンドラ (外側の List 用ハンドラはグリッド中 no-op)。
         // overlay 方式で ScrollView が2つ並存するため、混線しないよう自分の分だけ担当する。
         .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }, action: applyScrollDelta)
+        // スクラブプレビュー (機能A): 透明1枚 + 指座標追跡。hitTest 常時 nil なので
+        // スクロール/タップ/長押しは構造的に阻害しない。ライブラリ (保存済み) グリッド限定。
+        .overlay { ScrubTouchOverlay().allowsHitTesting(false) }
     }
 
     /// タブバー隠し共通ロジック (delta > 8 で隠す / delta < -5 で出す)
@@ -1204,6 +1181,8 @@ struct DownloadsView: View {
     @ViewBuilder
     private func libraryGridCell(meta: DownloadedGallery) -> some View {
         Button {
+            // プレビュー発動後の指離しはタップ扱いにしない (機能A A-3)
+            guard !ScrubPreviewController.shared.consumeSwallowTap() else { return }
             startPreCacheAndOpenReader(meta: meta, count: meta.source == "external_zip" ? 3 : 0)
         } label: {
             // UI 刷新 Phase 1.9 (2026-07-03): 一覧グリッドと同じカバー主役カード型
@@ -1230,6 +1209,8 @@ struct DownloadsView: View {
                             CoverPagesBadge(pages: meta.pageCount, fontSize: 8)
                         }
                     }
+                    // スクラブプレビューのコマ表示 (frame=nil の間は透過でカバーが見える)
+                    .overlay { ScrubFrameView(gid: meta.gid) }
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(meta.title)
@@ -1238,12 +1219,7 @@ struct DownloadsView: View {
                         .lineLimit(2, reservesSpace: true)
                         .multilineTextAlignment(.leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    if meta.isNhentai {
-                        HStack(spacing: 4) {
-                            TintedBadge(text: "NH", color: .orange, font: .system(size: 8, weight: .semibold))
-                            Spacer(minLength: 0)
-                        }
-                    }
+                    // NH バッジは 2026-07-20 田中指示で削除 (セル高さが不揃いになるため)
                 }
                 .padding(8)
             }
@@ -1253,6 +1229,11 @@ struct DownloadsView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // スクラブプレビュー: 指下セル特定用に window 座標の frame を常時登録 (機能A A-6)
+        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { rect in
+            ScrubPreviewController.shared.updateCell(gid: meta.gid, pageCount: meta.pageCount, frame: rect)
+        }
+        .onDisappear { ScrubPreviewController.shared.cellGone(meta.gid) }
     }
 
     private var exportProgressOverlay: some View {
