@@ -157,6 +157,10 @@ struct LibraryCardView<Cover: View>: View {
                     .padding(.vertical, 6)
                     .background(Color.blue.opacity(0.15), in: Capsule())
                     .foregroundStyle(.blue)
+                    // 監査B5 (HIG: ヒット領域 ≥44×44pt)。カプセルの見た目は据え置き、
+                    // タップ可能領域だけ 44pt へ拡張。
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.pressable)
         }
