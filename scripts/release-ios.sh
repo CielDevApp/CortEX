@@ -50,6 +50,13 @@ xcodebuild -exportArchive \
 
 [[ -f "$EXPORT_DIR/EhViewer.ipa" ]] || { echo "ERROR: IPA not found"; exit 1; }
 
+echo "==> [2.5/3] 憲法第18条 配布物ゲート (私設IP/個人情報/credentials/APNs スキャン)"
+GATE_TMP="$BUILD_DIR/gate-check"
+rm -rf "$GATE_TMP"
+mkdir -p "$GATE_TMP"
+unzip -oq "$EXPORT_DIR/EhViewer.ipa" -d "$GATE_TMP"
+"$ROOT/scripts/check-distribution.sh" "$GATE_TMP/Payload/EhViewer.app"
+
 echo "==> [3/3] Rename IPA with version tag"
 cp "$EXPORT_DIR/EhViewer.ipa" "$IPA_FINAL"
 
