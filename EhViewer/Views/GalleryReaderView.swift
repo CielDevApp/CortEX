@@ -24,6 +24,7 @@ struct GalleryReaderView: View {
     @AppStorage(UDKey.aiImageProcessing) private var aiImageProcessing = false
     @AppStorage(UDKey.denoiseEnabled) private var denoiseEnabled = false
     @AppStorage(UDKey.noFilterMode) private var noFilterMode = false
+    @AppStorage(UDKey.boomerangMode) private var boomerangMode = true
     @AppStorage(UDKey.translationMode) private var translationMode = false
     @AppStorage(UDKey.translationLang) private var translationLang = "ja"
     @AppStorage(UDKey.translationSourceLang) private var translationSourceLang = "auto"
@@ -748,6 +749,11 @@ struct GalleryReaderView: View {
                     .font(.subheadline)
                     .tint(.blue)
             } // end if !noFilterMode
+
+            // 田中要望 2026-07-11: アプリ設定から移設。再生挙動なので無補正モードとは独立。
+            Toggle("繰り返し再生 (Boomerang)", isOn: $boomerangMode)
+                .font(.subheadline)
+                .tint(.purple)
 
             Divider().overlay(.gray.opacity(0.5))
 

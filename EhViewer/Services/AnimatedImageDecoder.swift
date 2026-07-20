@@ -139,6 +139,9 @@ nonisolated final class AnimatedImageSourceRegistry {
         lock.unlock()
         LogManager.shared.log("Mem", "dropAllCaches alive=\(snapshot.count)")
         for s in snapshot { s.dropFrameCache() }
+        // CIContext は補正チェーンの中間テクスチャを内部キャッシュする。
+        // pressure 時はここも掃除しないと free が回復しない (2026-07-11 OOM 追跡)。
+        LanczosUpscaler.shared.clearContextCaches()
     }
 }
 #endif

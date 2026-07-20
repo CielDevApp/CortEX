@@ -21,6 +21,12 @@ final class LanczosUpscaler: ImageUpscaler, @unchecked Sendable {
     /// CIContext はスレッドセーフ (Apple ドキュメント明記)。複数スレッドから共有可。
     private let context = CIContext(options: [.useSoftwareRenderer: false])
 
+    /// メモリ pressure 時に CIContext の内部キャッシュ (中間テクスチャ等) を解放する。
+    /// 呼び出し元: AnimatedImageSourceCache.dropAllCaches (2026-07-11 OOM 追跡)。
+    nonisolated func clearContextCaches() {
+        context.clearCaches()
+    }
+
     nonisolated init() {}
 
     // MARK: - モード1用: サムネアップスケール
@@ -158,10 +164,24 @@ final class LanczosUpscaler: ImageUpscaler, @unchecked Sendable {
     /// - マスク空 / 検出失敗時は nil を返す (呼び出し側で元画像 fallback を判断)
     /// - Vision VNGeneratePersonSegmentationRequest (qualityLevel=.fast) は NE 直列化されるため、
     ///   並列呼び出ししても効率上がらない。呼び出し側は 1 本の serial queue 推奨。
+    /// personSeg 共有 Vision request + 直列化ロック。
+    /// 毎フレーム request/handler を新規生成すると Vision 内部の pixelBuffer プールが
+    /// 積み上がり OOM を招く (2026-07-11 17e jetsam 追跡)。NE 実行はどのみち直列なので、
+    /// 共有 request + lock で呼び出し自体を直列化する (上記コメントの serial queue 推奨を
+    /// 呼び出し側任せにせず関数内で強制)。result は次の perform で上書きされるため
+    /// mask 消費までロック内で完結させる。
+    nonisolated private static let personSegLock = NSLock()
+    nonisolated private static let personSegRequest: VNGeneratePersonSegmentationRequest = {
+        let r = VNGeneratePersonSegmentationRequest()
+        r.qualityLevel = .fast
+        return r
+    }()
+
     nonisolated static func applyPersonSegmentationCG(_ cgImage: CGImage) -> CGImage? {
         autoreleasepool {
-            let request = VNGeneratePersonSegmentationRequest()
-            request.qualityLevel = .fast
+            personSegLock.lock()
+            defer { personSegLock.unlock() }
+            let request = personSegRequest
             let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
             try? handler.perform([request])
 

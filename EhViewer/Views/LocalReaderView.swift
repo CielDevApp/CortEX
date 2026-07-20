@@ -51,6 +51,7 @@ struct LocalReaderView: View {
     @AppStorage(UDKey.aiImageProcessing) private var storedAI = false
     @AppStorage(UDKey.denoiseEnabled) private var storedDenoise = false
     @AppStorage(UDKey.noFilterMode) private var storedNoFilter = false
+    @AppStorage(UDKey.boomerangMode) private var boomerangMode = true
     @AppStorage(UDKey.readerDirection) private var readerDirection = 0
     @AppStorage(UDKey.readingOrder) private var readingOrder = 1
     @AppStorage(UDKey.animPlaybackMode) private var animPlaybackMode = "webp"
@@ -1005,6 +1006,11 @@ struct LocalReaderView: View {
                     .font(.subheadline)
                     .tint(.blue)
             }
+
+            // 田中要望 2026-07-11: アプリ設定から移設。再生挙動なので無補正モードとは独立。
+            Toggle("繰り返し再生 (Boomerang)", isOn: $boomerangMode)
+                .font(.subheadline)
+                .tint(.purple)
         }
         .padding()
         .background(.ultraThinMaterial)
