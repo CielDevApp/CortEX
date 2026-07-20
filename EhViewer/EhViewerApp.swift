@@ -184,7 +184,6 @@ struct EhViewerApp: App {
             UDKey.downloadQualityMode: 2,
             UDKey.noFilterMode: false,
             // アニメ per-frame NE 人物セグメンテーション (本命機能、デフォルト ON)
-            UDKey.animatedPersonSegmentation: true,
             // プリロード再生 (default ON)。SwiftUI @AppStorage の default は読み出し時にしか効かず、
             // ユーザがトグル操作するまで UserDefaults 本体には書き込まれない。
             // UIImageView 側 (UIKit) から `bool(forKey:)` で読むと未登録 → false が返り、

@@ -15,7 +15,6 @@ struct SettingsView: View {
     @AppStorage(UDKey.imageEnhanceFilter) private var imageEnhanceFilter = false
     /// Boomerang Mode (β) default は true。EhViewerApp.swift register defaults と一致させる
     /// (両者で default 不一致だと「register が効かない条件下で OFF 表示」になる混乱の元、2026-04-25)。
-    @AppStorage(UDKey.boomerangMode) private var boomerangMode = true
     /// アニメ再生方式: "webp" (WebP 原本 CGImageSource + CADisplayLink 逐次 decode) /
     ///              "mp4"  (旧来の HEVC MP4 変換経由 AVPlayer)。default=webp。
     @AppStorage(UDKey.animPlaybackMode) private var animPlaybackMode = "webp"
@@ -24,7 +23,6 @@ struct SettingsView: View {
     @AppStorage(UDKey.preloadPlayback) private var preloadPlayback = true
     /// アニメ per-frame に NE 人物セグメンテーションを適用。人物領域のみ CISharpenLuminance + CIVibrance
     /// でブースト。静画の「通常モード NE シャープ化」を動画にも適用する本命機能。default=true。
-    @AppStorage(UDKey.animatedPersonSegmentation) private var animatedPersonSegmentation = true
     @AppStorage(UDKey.translationMode) private var translationMode = false
     @AppStorage(UDKey.translationLang) private var translationLang = "ja"
     @AppStorage(UDKey.translationSourceLang) private var translationSourceLang = "auto"
@@ -121,16 +119,11 @@ struct SettingsView: View {
             Text("WebP: 変換せず CGImageSource で逐次 decode。Boomerang 対応、ストレージ節約。\nMP4: HEVC MP4 に事前変換、AVPlayer で安定ループ。HDR は AVVideoComposition で全域適用。")
                 .font(.caption2).foregroundStyle(.secondary)
 
-            Toggle("Boomerang Mode (β)", isOn: $boomerangMode)
-            Text("末端で折り返す ping-pong ループでシームを消します。WebP 再生方式のみ適用。HDR と併用可能。フレーム数制限なし (rolling cache により任意長対応)。")
-                .font(.caption2).foregroundStyle(.secondary)
-
             Toggle("プリロード再生", isOn: $preloadPlayback)
             Text("▶ タップ後、全 frame を並列デコードし終えてから再生開始。初動チェース無しで最初からぬるぬる再生。プリロード中はプログレス表示 + キャンセル可能。OFF にすると即時再生 (初動 ~5 秒チェース)。")
                 .font(.caption2).foregroundStyle(.secondary)
 
-            Toggle("人物部分をシャープ化 (NE)", isOn: $animatedPersonSegmentation)
-            Text("Vision フレームワークの人物セグメンテーションをアニメ各フレームに適用し、人物領域のみシャープ+彩度を強化。Neural Engine 使用。アニメ系キャラでは検出失敗することがあり、そのフレームはスキップされる。")
+            Text("繰り返し再生 (Boomerang) はリーダー内の画質設定に移動しました。動画の NPU 補正はリーダーの「無補正モード」OFF で常時適用されます。")
                 .font(.caption2).foregroundStyle(.secondary)
         }
     }

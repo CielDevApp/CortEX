@@ -26,7 +26,6 @@ nonisolated enum UDKey {
     // MARK: - アニメ再生
     static let animPlaybackMode = "animPlaybackMode"
     static let animMaxConcurrentPlay = "animMaxConcurrentPlay"
-    static let animatedPersonSegmentation = "animatedPersonSegmentation"
     static let animationDialogDontAskDefault = "animationDialogDontAskDefault"
     static let preloadPlayback = "preloadPlayback"
     static let boomerangMode = "boomerangMode"

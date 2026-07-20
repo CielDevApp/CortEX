@@ -11,18 +11,22 @@ fileprivate struct AnimEnhanceConfig: Hashable {
     let enhanceFilter: Bool
     let denoise: Bool
     let hdr: Bool
-    /// NE 人物セグメンテーション。`animatedPersonSegmentation` UserDefaults (default true) で制御。
-    /// 「通常モードの NE 人物シャープ化をアニメにも当てる」= 田中本命機能。Vision framework が NE 経路で
-    /// マスク生成 → 人物領域のみシャープ+彩度ブースト。静画 applyPersonSegmentation とは異なり
-    /// 背景側を触らない (per-frame では denoise / enhanceFilter 段に任せる)。
+    /// NE 人物セグメンテーション。「通常モードの NE 人物シャープ化をアニメにも当てる」= 田中本命機能。
+    /// Vision framework が NE 経路でマスク生成 → 人物領域のみシャープ+彩度ブースト。
+    /// 静画 applyPersonSegmentation とは異なり背景側を触らない (per-frame では denoise / enhanceFilter 段に任せる)。
     let personSeg: Bool
     var hasAny: Bool { enhanceFilter || denoise || hdr || personSeg }
     static func fromDefaults() -> AnimEnhanceConfig {
+        // 田中決裁 2026-07-11: 動画補正はリーダーの「無補正モード」に統合。
+        // 無補正 ON → 全補正 OFF / 無補正 OFF → NPU 補正 (personSeg) 常時 ON。
+        // 独立トグル (animatedPersonSegmentation) は廃止。
+        if UserDefaults.standard.bool(forKey: UDKey.noFilterMode) {
+            return AnimEnhanceConfig(enhanceFilter: false, denoise: false, hdr: false, personSeg: false)
+        }
         let enh = UserDefaults.standard.bool(forKey: UDKey.imageEnhanceFilter)
         let den = UserDefaults.standard.bool(forKey: UDKey.denoiseEnabled)
         let hdrRaw = UserDefaults.standard.bool(forKey: UDKey.hdrEnhancement)
-        let seg = UserDefaults.standard.bool(forKey: UDKey.animatedPersonSegmentation)
-        return AnimEnhanceConfig(enhanceFilter: enh, denoise: den, hdr: hdrRaw && !enh, personSeg: seg)
+        return AnimEnhanceConfig(enhanceFilter: enh, denoise: den, hdr: hdrRaw && !enh, personSeg: true)
     }
 }
 
