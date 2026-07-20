@@ -193,17 +193,21 @@ struct CardTile: View {
 
     @State private var image: PlatformImage?
     @State private var loadTask: Task<Void, Never>?
+    @State private var shown = false   // 監査B2: decode 完了後の fade-in 用
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Button(action: onTap) {
             ZStack(alignment: .bottomTrailing) {
-                Group {
+                ZStack {
+                    // プレースホルダは常設。画像は上に重ねて opacity で出す
+                    // (emil「無から出現」禁止 — 空白→パッと出現を避ける)
+                    Color.gray.opacity(0.15)
                     if let image {
                         Image(platformImage: image)
                             .resizable()
                             .aspectRatio(contentMode: .fill)
-                    } else {
-                        Color.gray.opacity(0.15)
+                            .opacity(shown ? 1 : 0)
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -226,6 +230,7 @@ struct CardTile: View {
             loadTask?.cancel()
             loadTask = nil
             image = nil
+            shown = false   // 再表示時に再度 fade-in させる
         }
     }
 
@@ -238,6 +243,12 @@ struct CardTile: View {
             await MainActor.run {
                 self.image = decoded
                 self.loadTask = nil
+                // B2: decode 完了で fade-in (150ms ease-out)。ReduceMotion 時は即表示。
+                if reduceMotion {
+                    self.shown = true
+                } else {
+                    withAnimation(.easeOut(duration: 0.15)) { self.shown = true }
+                }
             }
         }
     }
