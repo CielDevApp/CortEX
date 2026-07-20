@@ -34,6 +34,8 @@ enum ScrubPreviewConfig {
 final class ScrubPreviewHolder: ObservableObject {
     @Published var frame: UIImage?      // nil = カバー表示 (既存ビューのまま)
     @Published var pageLabel: String?   // "p.12 / 1193"、カバー中は nil
+    /// 監査A2: 発動中セルの沈み込み (1.0 = 通常, 0.96 = 掴んでいる)。端点だけ物理を効かせる。
+    @Published var pressScale: CGFloat = 1.0
 }
 
 @MainActor
@@ -53,6 +55,18 @@ final class ScrubPreviewController: ObservableObject {
     private var touchStart: CGPoint?
     private var swallowTapUntil: Date = .distantPast
     private let haptic = UIImpactFeedbackGenerator(style: .light)
+
+    /// 監査A2/A3: 端点の物理。掴んだ瞬間だけ沈める (critically damped、bounce なし)。
+    /// 指離し/セル跨ぎの復帰は spring で 1.0 へ。旧セルの復帰は即時ではなく短い spring で
+    /// 「離した」実感を残す (A3: 旧復帰と新沈み込みの非対称は復帰側を軽くする形で実現)。
+    private let pressDownScale: CGFloat = 0.96
+    private func animatePress(_ gid: Int, to target: CGFloat, snappy: Bool) {
+        let h = holder(for: gid)
+        withAnimation(snappy ? .spring(response: 0.22, dampingFraction: 0.7)
+                             : .spring(response: 0.32, dampingFraction: 1.0)) {
+            h.pressScale = target
+        }
+    }
 
     // MARK: セル登録 (グリッドセルの onGeometryChange / onDisappear から)
 
@@ -129,6 +143,8 @@ final class ScrubPreviewController: ObservableObject {
         guard let cell = cells[gid], cell.pageCount >= ScrubPreviewConfig.minPagesToActivate else { return }
         activeGID = gid
         haptic.impactOccurred()
+        // A2: 掴んだ瞬間に沈む (haptic と同フレーム = apple-design §13 harmony)
+        animatePress(gid, to: pressDownScale, snappy: true)
 
         let total = cell.pageCount
         let samples = min(total, ScrubPreviewConfig.maxSamples)
@@ -186,7 +202,11 @@ final class ScrubPreviewController: ObservableObject {
     func reset() {
         playTask?.cancel(); playTask = nil
         prefetchTask?.cancel(); prefetchTask = nil
-        if let g = activeGID, let h = holders[g] { h.frame = nil; h.pageLabel = nil }
+        if let g = activeGID, let h = holders[g] {
+            h.frame = nil
+            h.pageLabel = nil
+            animatePress(g, to: 1.0, snappy: false)   // A2/A3: カバーへ spring 復帰
+        }
         frames.removeAll()       // 即解放 — 排他制約がそのままメモリ上限 (A-5)
         sequence.removeAll()
         activeGID = nil
@@ -195,6 +215,23 @@ final class ScrubPreviewController: ObservableObject {
 }
 
 // MARK: - セル側の表示 (カバーの上にコマを重ねる)
+
+/// グリッドセルに付ける沈み込み modifier。holder.pressScale を監視してセル全体を scale する。
+/// A2: 発動中セルだけ沈む。Reduce Motion 時は沈まない (apple-design §14)。
+struct ScrubPressEffect: ViewModifier {
+    @ObservedObject private var holder: ScrubPreviewHolder
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(gid: Int) { holder = ScrubPreviewController.shared.holder(for: gid) }
+
+    func body(content: Content) -> some View {
+        content.scaleEffect(reduceMotion ? 1.0 : holder.pressScale)
+    }
+}
+
+extension View {
+    func scrubPressEffect(gid: Int) -> some View { modifier(ScrubPressEffect(gid: gid)) }
+}
 
 struct ScrubFrameView: View {
     @ObservedObject private var holder: ScrubPreviewHolder
