@@ -1228,7 +1228,7 @@ struct DownloadsView: View {
             .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable(scale: 0.98))   // 大きめセルは浅い沈み込み (監査 B1)
         // スクラブプレビュー: 指下セル特定用に window 座標の frame を常時登録 (機能A A-6)
         .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { rect in
             ScrubPreviewController.shared.updateCell(gid: meta.gid, pageCount: meta.pageCount, frame: rect)

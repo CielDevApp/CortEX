@@ -92,7 +92,7 @@ struct LibraryCardView<Cover: View>: View {
                     }
                     .padding(.vertical, 10)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.pressable)
                 .foregroundStyle(.blue)
             } else {
                 Spacer().frame(height: 12)
@@ -124,7 +124,7 @@ struct LibraryCardView<Cover: View>: View {
         HStack(spacing: 12) {
             if let onCover {
                 Button(action: onCover) { coverBlock() }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.pressable)
             } else {
                 coverBlock()
             }
@@ -158,7 +158,7 @@ struct LibraryCardView<Cover: View>: View {
                     .background(Color.blue.opacity(0.15), in: Capsule())
                     .foregroundStyle(.blue)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.pressable)
         }
     }
 }
@@ -220,7 +220,7 @@ struct CardTile: View {
                     .padding(3)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)
         .onAppear { startLoad() }
         .onDisappear {
             loadTask?.cancel()
