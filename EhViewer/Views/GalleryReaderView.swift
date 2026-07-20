@@ -163,10 +163,12 @@ struct GalleryReaderView: View {
                                 }
                             }
                             .onEnded { value in
-                                if value.translation.width > 120 {
+                                // 監査C1 (apple-design §6 / HIG): 位置でなく運動量の投射で判定。
+                                // 速いフリックは 120pt 未満でも閉じる。戻りは中断可能な spring。
+                                if value.predictedEndTranslation.width > 220 || value.translation.width > 120 {
                                     handleDismiss()
                                 } else {
-                                    withAnimation(.easeOut(duration: 0.2)) {
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 1.0)) {
                                         dragOffset = 0
                                     }
                                 }
@@ -419,7 +421,12 @@ struct GalleryReaderView: View {
             // 全ページ保存済み → そのまま閉じる
             dismiss()
         } else if info.saved > 0 {
-            // 一部保存済み → 確認ダイアログ
+            // 一部保存済み → 確認ダイアログ。エッジスワイプ経由の場合は画面を定位置へ
+            // 戻してから出す (引きずり位置のままダイアログが出ると宙吊りに見える — HIG:
+            // ジェスチャが成立しない時はそれを示す)
+            withAnimation(.spring(response: 0.3, dampingFraction: 1.0)) {
+                dragOffset = 0
+            }
             autoSaveInfo = info
             showAutoSavePrompt = true
         } else {
