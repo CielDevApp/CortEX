@@ -31,11 +31,16 @@ struct DownloadsView: View {
     @State private var externalCortexReadyCounter: Int = 0
     /// プレビューからリーダー起動する時の初期ページ（通常起動では 0）
     @State private var readerInitialPage: Int = 0
-    /// 田中要望 2026-07-21: タイル起動は左右モード。onDismiss で nil に戻す。
+    /// タイル起動=左右モード (forcedDirection=1) は 2026-07-21 深夜に田中裁定で撤回:
+    /// 「静止画をリストのサムネから開くと縦設定なのに横で開く」= 設定より強制が勝つのは誤り。
+    /// タイル起動も readerDirection 設定に従う。forcedDirection の配管は残すが常に nil。
     @State private var readerForcedDirection: Int? = nil
+    /// タイルタップ = 明示ページ指定の印 (ページ0タイルでも再開プロンプトを出さないため)。
+    @State private var readerExplicitPage = false
     @ViewBuilder
     private func readerCover(_ meta: DownloadedGallery) -> some View {
-        LocalReaderView(meta: meta, initialPage: readerInitialPage, forcedDirection: readerForcedDirection, route: .libraryCardTile)
+        LocalReaderView(meta: meta, initialPage: readerInitialPage, forcedDirection: readerForcedDirection,
+                        explicitPageLaunch: readerExplicitPage, route: .libraryCardTile)
             // B3: タップしたタイルから zoom。source 不一致時は既定遷移に自然フォールバック。
             .navigationTransition(.zoom(sourceID: zoomSourceKey, in: zoomNS))
     }
@@ -43,6 +48,7 @@ struct DownloadsView: View {
     private func resetReaderLaunchState() {
         readerInitialPage = 0
         readerForcedDirection = nil
+        readerExplicitPage = false
     }
     /// エクスポート進行フェーズ（nil = idle）。
     /// - processing: ZIP streaming 中、進捗バー表示
@@ -509,7 +515,7 @@ struct DownloadsView: View {
                             // ensureAnimatedWebpScanned 等の主処理を background 完了させて Reader 起動。
                             readerInitialPage = page
 
-                            readerForcedDirection = 1   // タイル起動=左右モード
+                            readerExplicitPage = true   // 明示ページ指定 (横強制は2026-07-21撤回、設定に従う)
                             previewMeta = nil
                             startPreCacheAndOpenReader(meta: m, count: 0)
                         }
@@ -806,13 +812,14 @@ struct DownloadsView: View {
             // onDismiss リセット頼みをやめ、起動サイトごとに launch 状態を毎回明示する。
             readerInitialPage = 0
             readerForcedDirection = nil
+            readerExplicitPage = false
             startPreCacheAndOpenReader(meta: meta, count: 0)
         } onTapPage: { page in
             // タイルタップ → リーダーで該当ページ直接 (ワープ)。戻るはリストへ (fullScreenCover dismiss)
             zoomSourceKey = "\(meta.gid)-p\(page)"   // B3: このタイルから zoom
             readerInitialPage = page
 
-            readerForcedDirection = 1   // タイル起動=左右モード
+            readerExplicitPage = true   // 明示ページ指定 (横強制は2026-07-21撤回、設定に従う)
             startPreCacheAndOpenReader(meta: meta, count: 0)
         } onMore: {
             // 続きを見る → 既存ページ詳細 (LocalPreviewOverlay)
@@ -867,12 +874,13 @@ struct DownloadsView: View {
             // 田中報告 2026-07-21: 残留 forced 対策 (completedRow 側と同じ)
             readerInitialPage = 0
             readerForcedDirection = nil
+            readerExplicitPage = false
             startPreCacheAndOpenReader(meta: meta, count: 3)
         } onTapPage: { page in
             zoomSourceKey = "\(meta.gid)-p\(page)"
             readerInitialPage = page
 
-            readerForcedDirection = 1   // タイル起動=左右モード
+            readerExplicitPage = true   // 明示ページ指定 (横強制は2026-07-21撤回、設定に従う)
             startPreCacheAndOpenReader(meta: meta, count: 3)
         } onMore: {
             previewMeta = meta

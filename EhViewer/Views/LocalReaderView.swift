@@ -6,9 +6,12 @@ struct LocalReaderView: View {
     let meta: DownloadedGallery
     var isLiveDownload: Bool = false
     let initialPage: Int
-    /// 田中要望 2026-07-21: ライブラリのカードタイルから起動した時は左右モードで開く。
-    /// nil = 従来通り設定/override から解決。
+    /// 方向の強制指定。nil = 設定/override から解決。
+    /// 「タイル起動=左右」は 2026-07-21 深夜に田中裁定で撤回 (縦設定を無視して横で開くのは誤り)。
+    /// 現在 nil 以外を渡す呼び出し元は無い (配管のみ残置)。
     var forcedDirection: Int? = nil
+    /// タイルタップ等の明示ページ指定で起動したか (真なら再開プロンプトを出さない)。
+    var explicitPageLaunch: Bool = false
     /// 起動経路ラベル (2026-07-21 第21条: 経路を機械が記録する)
     let route: LaunchRoute
 
@@ -198,11 +201,12 @@ struct LocalReaderView: View {
     @State private var externalCortexReadyCounter: Int = 0
 
     init(meta: DownloadedGallery, isLiveDownload: Bool = false, initialPage: Int = 0,
-         forcedDirection: Int? = nil, route: LaunchRoute) {
+         forcedDirection: Int? = nil, explicitPageLaunch: Bool = false, route: LaunchRoute) {
         self.meta = meta
         self.isLiveDownload = isLiveDownload
         self.initialPage = initialPage
         self.forcedDirection = forcedDirection
+        self.explicitPageLaunch = explicitPageLaunch
         self.route = route
         self._currentIndex = State(initialValue: initialPage)
         self._sliderValue = State(initialValue: Double(initialPage))
@@ -354,9 +358,10 @@ struct LocalReaderView: View {
                 startPageCheckTimer()
             }
             // 自動栞 (Phase R-1): 明示ページ未指定 & 非ライブ & 栞あり → 続き/最初 選択ダイアログ
-            // 田中報告 2026-07-21: タイル起動 (forcedDirection 指定) はページ 0 タイルでも
-            // 明示ページ指定なので再開プロンプトを出さない
-            if initialPage == 0 && forcedDirection == nil && !isLiveDownload && !didOfferResume {
+            // 田中報告 2026-07-21: タイルタップはページ 0 タイルでも明示ページ指定なので
+            // 再開プロンプトを出さない (explicitPageLaunch)。forced 指定時も同様。
+            if initialPage == 0 && !explicitPageLaunch && forcedDirection == nil
+                && !isLiveDownload && !didOfferResume {
                 didOfferResume = true
                 let saved = UserDefaults.standard.integer(forKey: UDKey.localReaderBookmark(gid: meta.gid))
                 if saved > 0 && saved < meta.pageCount {
