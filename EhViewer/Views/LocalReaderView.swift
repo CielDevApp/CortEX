@@ -336,6 +336,7 @@ struct LocalReaderView: View {
         .onChange(of: storedDenoise) { _, _ in reprocessVisiblePages() }
         .onChange(of: storedNoFilter) { _, _ in reprocessVisiblePages() }
         .onAppear {
+                ShikigamiEngine.shared.currentScreen = "Reader-Local"
             if isLiveDownload {
                 scanAvailablePages()
                 startPageCheckTimer()

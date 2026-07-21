@@ -555,6 +555,7 @@ struct DownloadsView: View {
                 }
             }
             .onAppear {
+                ShikigamiEngine.shared.currentScreen = "Library"
                 // タブ遷移後にハイライト開始
                 if let gid = manager.lastImportedGid {
                     withAnimation(.easeInOut(duration: 0.4)) { highlightedGid = gid }

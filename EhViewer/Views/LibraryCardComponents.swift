@@ -31,6 +31,13 @@ enum LibraryCardConfig {
 /// 機能A (スクラブプレビュー) / 機能B (カードタイル) の両方がここを通ること。
 nonisolated enum LibraryThumbDecoder {
     static func decode(url: URL, maxPixel: CGFloat) -> PlatformImage? {
+        // 弾④ 計装: 稼働枚数 (弾② decodeCount) + 所要時間統計。ディスク decode なので常に miss。
+        ShikigamiDecodeTracker.shared.begin()
+        let _t0 = CFAbsoluteTimeGetCurrent()
+        defer {
+            ShikigamiDecodeTracker.shared.record(durationMs: (CFAbsoluteTimeGetCurrent() - _t0) * 1000, cacheHit: false)
+            ShikigamiDecodeTracker.shared.end()
+        }
         let opts: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceThumbnailMaxPixelSize: maxPixel,

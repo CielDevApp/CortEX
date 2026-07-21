@@ -396,6 +396,7 @@ struct GalleryListView: View {
             }
         }
         .onAppear {
+                ShikigamiEngine.shared.currentScreen = "Gallery"
             if nhVM.galleries.isEmpty && !nhVM.isLoading {
                 Task { await nhVM.loadGalleries() }
             }

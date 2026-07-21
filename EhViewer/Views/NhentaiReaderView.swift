@@ -593,6 +593,7 @@ struct NhentaiReaderView: View {
                             .id(index)
                             .frame(maxWidth: .infinity)
                             .onAppear {
+                                ShikigamiEngine.shared.currentScreen = "Reader-NH"
                                 // 診断 2026-07-02: iPad スライダー追従不具合 (Day14) の切り分け用
                                 LogManager.shared.log("iPadScroll", "NH cell onAppear idx=\(index)")
                                 currentIndex = index

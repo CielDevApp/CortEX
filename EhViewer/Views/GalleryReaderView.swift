@@ -506,6 +506,7 @@ struct GalleryReaderView: View {
             if viewModel.currentIndex != page { viewModel.currentIndex = page }
         }
         .onAppear {
+                ShikigamiEngine.shared.currentScreen = "Reader-EH"
             horizontalPage = viewModel.initialPage
         }
     }
