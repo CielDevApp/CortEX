@@ -802,9 +802,14 @@ struct DownloadsView: View {
     // 旧クラシック行 (小サムネ + タイトル密行) は田中確定で廃止、設定トグルも作らない。
     private func completedRow(meta: DownloadedGallery) -> some View {
         let isHighlighted = highlightedGid == meta.gid
-        LibraryCardView(meta: meta, onCover: { detailMeta = meta }, zoomNamespace: zoomNS) {
+        LibraryCardView(meta: meta, onCover: {
+            // 診断 2026-07-21 (iPad タップ無反応): タップがハンドラまで届いているかの計測器
+            LogManager.shared.log("Tap", "jacket gid=\(meta.gid)")
+            detailMeta = meta
+        }, zoomNamespace: zoomNS) {
             coverThumbnail(gid: meta.gid)
         } onRead: {
+            LogManager.shared.log("Tap", "read gid=\(meta.gid)")
             // 田中要望 2026-04-26: internal DL も pre-cache 経路に統一、ensureAnimatedWebpScanned
             // を background 完了させてから Reader 起動 (1000+ ページ初回 scan の freeze 回避)。
             zoomSourceKey = ""   // 読むは既定遷移 (B3: zoom はタイル経路のみ)
@@ -815,6 +820,7 @@ struct DownloadsView: View {
             readerExplicitPage = false
             startPreCacheAndOpenReader(meta: meta, count: 0)
         } onTapPage: { page in
+            LogManager.shared.log("Tap", "tile gid=\(meta.gid) page=\(page)")
             // タイルタップ → リーダーで該当ページ直接 (ワープ)。戻るはリストへ (fullScreenCover dismiss)
             zoomSourceKey = "\(meta.gid)-p\(page)"   // B3: このタイルから zoom
             readerInitialPage = page
@@ -822,6 +828,7 @@ struct DownloadsView: View {
             readerExplicitPage = true   // 明示ページ指定 (横強制は2026-07-21撤回、設定に従う)
             startPreCacheAndOpenReader(meta: meta, count: 0)
         } onMore: {
+            LogManager.shared.log("Tap", "more gid=\(meta.gid)")
             // 続きを見る → 既存ページ詳細 (LocalPreviewOverlay)
             previewMeta = meta
         }
@@ -1226,7 +1233,11 @@ struct DownloadsView: View {
     private func libraryGridCell(meta: DownloadedGallery) -> some View {
         Button {
             // プレビュー発動後の指離しはタップ扱いにしない (機能A A-3)
-            guard !ScrubPreviewController.shared.consumeSwallowTap() else { return }
+            guard !ScrubPreviewController.shared.consumeSwallowTap() else {
+                LogManager.shared.log("Tap", "grid cell SWALLOWED gid=\(meta.gid)")
+                return
+            }
+            LogManager.shared.log("Tap", "grid cell gid=\(meta.gid)")
             startPreCacheAndOpenReader(meta: meta, count: meta.source == "external_zip" ? 3 : 0)
         } label: {
             // UI 刷新 Phase 1.9 (2026-07-03): 一覧グリッドと同じカバー主役カード型

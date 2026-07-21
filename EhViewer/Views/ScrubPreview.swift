@@ -54,6 +54,9 @@ final class ScrubPreviewController: ObservableObject {
     private var activateTask: Task<Void, Never>?
     private var touchStart: CGPoint?
     private var swallowTapUntil: Date = .distantPast
+    /// スクラブ発動時刻。発動直後に指が離れた場合はタップとして通す (iPad 田中報告 2026-07-21:
+    /// 120ms 発動 + 一律 swallow で「ゆっくりめのタップ」が全部無反応になっていた)
+    private var activatedAt: Date = .distantPast
     private let haptic = UIImpactFeedbackGenerator(style: .light)
 
     /// 監査A2/A3: 端点の物理。掴んだ瞬間だけ沈める (critically damped、bounce なし)。
@@ -127,7 +130,16 @@ final class ScrubPreviewController: ObservableObject {
     func touchEnded() {
         activateTask?.cancel()
         if activeGID != nil {
-            swallowTapUntil = Date().addingTimeInterval(0.35)
+            // 発動から 0.35 秒以上保持していた時だけ「スクラブ操作だった」として tap を swallow。
+            // 発動直後の指離しはユーザー意図がタップなので素通しする (iPad 田中報告 2026-07-21:
+            // タイルのタップが「渋い・たまに開く」= 120ms を超えた普通のタップが全滅していた)。
+            let held = Date().timeIntervalSince(activatedAt)
+            if held > 0.35 {
+                swallowTapUntil = Date().addingTimeInterval(0.35)
+                LogManager.shared.log("Scrub", "end: held=\(Int(held * 1000))ms → swallow tap")
+            } else {
+                LogManager.shared.log("Scrub", "end: held=\(Int(held * 1000))ms → pass as tap")
+            }
         }
         reset()
     }
@@ -142,6 +154,8 @@ final class ScrubPreviewController: ObservableObject {
         reset()
         guard let cell = cells[gid], cell.pageCount >= ScrubPreviewConfig.minPagesToActivate else { return }
         activeGID = gid
+        activatedAt = Date()
+        LogManager.shared.log("Scrub", "activate gid=\(gid)")
         haptic.impactOccurred()
         // A2: 掴んだ瞬間に沈む (haptic と同フレーム = apple-design §13 harmony)
         animatePress(gid, to: pressDownScale, snappy: true)
