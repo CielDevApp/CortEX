@@ -311,6 +311,14 @@ struct ScrubTouchOverlay: UIViewRepresentable {
         let v = PassthroughView()
         v.backgroundColor = .clear
         let ctrl = ScrubPreviewController.shared
+        // 不具合修正 2026-07-21 (田中報告): window に貼る追跡専用 recognizer が
+        // タブバー等のタップを cancel/遅延していた (デフォルト cancelsTouchesInView=true /
+        // delaysTouchesEnded=true)。TabView はタブを生存させるため recognizer が window に
+        // 残り、「ライブラリを開いた後 他タブへ移動できない」を起こしていた。仕様 (A-3) が
+        // 要求する「スクロール/タップを一切ブロックしない」を明示設定して無害化する。
+        v.rec.cancelsTouchesInView = false
+        v.rec.delaysTouchesBegan = false
+        v.rec.delaysTouchesEnded = false
         v.rec.onBegan = { [weak v] p in
             // モーダル (リーダー/シート) 提示中はグリッドが裏に居ても発動させない
             guard let v, let w = v.window,
