@@ -135,6 +135,12 @@ struct LibraryCardView<Cover: View>: View {
             if let onCover {
                 Button(action: onCover) { coverBlock() }
                     .buttonStyle(.pressable)
+                    // 診断 2026-07-22: ジャケット Button の実登録 frame (吸収体特定用)
+                    .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { rect in
+                        if UserDefaults.standard.bool(forKey: "tapDiagEnabled") {
+                            LogManager.shared.log("TapDiag", "jacketFrame gid=\(meta.gid) (\(Int(rect.minX)),\(Int(rect.minY))) \(Int(rect.width))x\(Int(rect.height))")
+                        }
+                    }
             } else {
                 coverBlock()
             }
@@ -231,10 +237,18 @@ struct CardTile: View {
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
                                 .opacity(shown ? 1 : 0)
+                                // 2026-07-22 iPad「当たり判定がごく一部」事件の真因対策:
+                                // .fill 画像は枠外に±100pt あふれ、.clipped() は描画しか切らない。
+                                // あふれた不可視領域が後続行の Button の当たり判定として上の行を
+                                // 覆い、上段タイル/ジャケット/読むボタンのタップを全部殺していた
+                                // (simTap は発火・Button のみ死亡、最下段だけ生存、で機序確定)。
+                                // 装飾画像はヒットテストから外し、当たり判定を可視枠に一致させる。
+                                .allowsHitTesting(false)
                         }
                     }
                     .clipped()
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
 
                 Text("\(index + 1)")
                     .font(.system(size: 9, weight: .bold))
@@ -247,8 +261,22 @@ struct CardTile: View {
             }
         }
         .buttonStyle(.pressable)
+        // 診断 2026-07-22: Button が発火しない領域でもジェスチャ系が触知できているかの分離判定。
+        // simultaneousGesture は Button と競合しない (発火したら両方のログが出るのが正常)。
+        .simultaneousGesture(TapGesture().onEnded {
+            if UserDefaults.standard.bool(forKey: "tapDiagEnabled") {
+                LogManager.shared.log("TapDiag", "simTap gid=\(gid) idx=\(index)")
+            }
+        })
         // B3: zoom 遷移の source。sourceID は DownloadsView 側の "gid-p<page>" と一致させる。
         .modifier(ZoomSourceModifier(namespace: zoomNamespace, id: "\(gid)-p\(index)"))
+        // 診断 2026-07-22 (iPad 当たり判定極小): タイル Button の実登録 frame を記録し、
+        // TapDiag の着弾座標と突き合わせる (ズレ=ジオメトリ desync / 一致=上に吸収体)
+        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { rect in
+            if UserDefaults.standard.bool(forKey: "tapDiagEnabled") {
+                LogManager.shared.log("TapDiag", "tileFrame gid=\(gid) idx=\(index) (\(Int(rect.minX)),\(Int(rect.minY))) \(Int(rect.width))x\(Int(rect.height))")
+            }
+        }
         .onAppear { startLoad() }
         .onDisappear {
             loadTask?.cancel()

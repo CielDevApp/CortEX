@@ -82,6 +82,14 @@ enum CortexURLRouter {
             }
             LogManager.shared.log("CortexURL", "set-default \(k)=\(v)")
             return true
+        case "debug/tap-diag":
+            // 診断用 (2026-07-22): 全タッチの着弾点+hitTest先を記録する観察 recognizer を window に載せる。
+            // tapDiagEnabled でタイル frame 登録ログ (CardTile) も有効化。
+            UserDefaults.standard.set(true, forKey: "tapDiagEnabled")
+            #if canImport(UIKit)
+            DispatchQueue.main.async { TapDiagnostic.attach() }
+            #endif
+            return true
         case "debug/disk-space":
             dumpDiskSpace()
             return true

@@ -312,6 +312,7 @@ struct LocalReaderView: View {
                             }
                             .onEnded { value in
                                 if value.translation.width > 120 {
+                                    LogManager.shared.log("Tap", "local dismiss: edge-swipe")
                                     dismiss()
                                 } else {
                                     withAnimation(.easeOut(duration: 0.2)) {
@@ -543,7 +544,10 @@ struct LocalReaderView: View {
                 if let target = sliderJumpTarget, index != target { return }
                 if enhancedImages[index] == nil { processPage(index) }
             },
-            onDismiss: { dismiss() },
+            onDismiss: {
+                LogManager.shared.log("Tap", "local dismiss: paged-reader callback")
+                dismiss()
+            },
             onZoomImage: { img in zoomImage = img }
         )
         // 田中報告 2026-04-30: `.id(reprocessTrigger)` は ScrollView ごと再生成 → 暗転原因。
@@ -1085,6 +1089,7 @@ struct LocalReaderView: View {
         VStack {
             HStack {
                 Button {
+                    LogManager.shared.log("Tap", "local dismiss: close-button")
                     dismiss()
                 } label: {
                     Image(systemName: "xmark.circle.fill")

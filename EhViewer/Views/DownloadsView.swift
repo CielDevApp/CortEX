@@ -39,13 +39,21 @@ struct DownloadsView: View {
     @State private var readerExplicitPage = false
     @ViewBuilder
     private func readerCover(_ meta: DownloadedGallery) -> some View {
-        LocalReaderView(meta: meta, initialPage: readerInitialPage, forcedDirection: readerForcedDirection,
-                        explicitPageLaunch: readerExplicitPage, route: .libraryCardTile)
-            // B3: タップしたタイルから zoom。source 不一致時は既定遷移に自然フォールバック。
-            .navigationTransition(.zoom(sourceID: zoomSourceKey, in: zoomNS))
+        // 診断 2026-07-21 (iPad 1.5秒自動クローズ): zoom 遷移が犯人かの A/B レバー。
+        // cortex://debug/set-default?key=zoomTransitionDisabled&value=true で遠隔切替。
+        if UserDefaults.standard.bool(forKey: "zoomTransitionDisabled") {
+            LocalReaderView(meta: meta, initialPage: readerInitialPage, forcedDirection: readerForcedDirection,
+                            explicitPageLaunch: readerExplicitPage, route: .libraryCardTile)
+        } else {
+            LocalReaderView(meta: meta, initialPage: readerInitialPage, forcedDirection: readerForcedDirection,
+                            explicitPageLaunch: readerExplicitPage, route: .libraryCardTile)
+                // B3: タップしたタイルから zoom。source 不一致時は既定遷移に自然フォールバック。
+                .navigationTransition(.zoom(sourceID: zoomSourceKey, in: zoomNS))
+        }
     }
 
     private func resetReaderLaunchState() {
+        LogManager.shared.log("Tap", "readerCover onDismiss (launch state reset)")
         readerInitialPage = 0
         readerForcedDirection = nil
         readerExplicitPage = false
@@ -487,6 +495,10 @@ struct DownloadsView: View {
                 }
             }
             #if os(iOS)
+            // 診断 2026-07-21 (iPad 1.5秒自動クローズ): item が nil にされたのか外部要因 dismiss かの切り分け
+            .onChange(of: readerMeta?.gid) { oldValue, newValue in
+                LogManager.shared.log("Tap", "readerMeta \(oldValue.map(String.init) ?? "nil")→\(newValue.map(String.init) ?? "nil")")
+            }
             .fullScreenCover(item: $readerMeta, onDismiss: resetReaderLaunchState, content: readerCover)
             .fullScreenCover(item: $liveReaderMeta) { meta in
                 LocalReaderView(meta: meta, isLiveDownload: true, route: .libraryLiveDL)
