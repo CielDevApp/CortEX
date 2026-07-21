@@ -267,6 +267,18 @@ struct EhViewerApp: App {
                 UNUserNotificationCenter.current().delegate = appDelegate
                 LogManager.shared.startFrameMonitor()
                 #endif
+                // ShikigamiKit 弾① (指示書 Phase 1)。EhViewer 固有情報を注入して start。
+                // ゲート(cortexUnlocked)OFF or 送信先空なら engine 内で完全休眠する。
+                let sk = ShikigamiEngine.shared
+                sk.gateProvider = { UserDefaults.standard.bool(forKey: UDKey.cortexProtocolUnlocked) }
+                sk.destinationProvider = { UserDefaults.standard.string(forKey: UDKey.shikigamiDestination) ?? "" }
+                sk.libraryCountProvider = { DownloadManager.shared.downloads.count }
+                sk.buildVersionProvider = {
+                    // BuildInfo.tag = "日付 時刻 <hash> \"msg\"" の3トークン目 (git short hash)
+                    let p = BuildInfo.tag.split(separator: " ")
+                    return p.count >= 3 ? String(p[2]) : "unknown"
+                }
+                sk.start()
             }
             .onChange(of: scenePhase) { _, newPhase in
                 CoreMLImageProcessor.shared.isAppActive = (newPhase == .active)

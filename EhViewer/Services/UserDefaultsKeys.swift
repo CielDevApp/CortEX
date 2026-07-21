@@ -38,6 +38,8 @@ nonisolated enum UDKey {
 
     // MARK: - CORTEX PROTOCOL
     static let cortexProtocolUnlocked = "cortexProtocolUnlocked"
+    /// SHIKIGAMI 打電先 "IP:port"。デバッグ設定画面のみで操作。空=打電しない。ハードコード禁止。
+    static let shikigamiDestination = "shikigamiDestination"
     static let cortexCharacterAges = "cortex_character_ages"
     static let cortexEhTagsFetched = "cortex_eh_tags_fetched"
 

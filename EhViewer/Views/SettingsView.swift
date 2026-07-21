@@ -86,6 +86,8 @@ struct SettingsView: View {
         showUpdateResult = true
     }
     @AppStorage(UDKey.cortexProtocolUnlocked) private var cortexUnlocked = false
+    /// SHIKIGAMI 打電先 "IP:port" (デバッグモード内でのみ操作、ハードコード禁止)。
+    @AppStorage(UDKey.shikigamiDestination) private var shikigamiDest = ""
     @State private var showCortexActivation = false
     @State private var cortexSearchURL: URL?
 
@@ -163,6 +165,20 @@ struct SettingsView: View {
                             } label: {
                                 Label("CORTEX PROTOCOL 無効化", systemImage: "lock.fill")
                             }
+                        }
+                    }
+
+                    // SHIKIGAMI 打電先 (デバッグモード内のみ表示 = 一般ユーザー到達不能)。
+                    // 空なら打電しない。ハードコードせずここから入力。
+                    if cortexUnlocked {
+                        HStack {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                                .foregroundStyle(.secondary)
+                            TextField("SHIKIGAMI 打電先 IP:port", text: $shikigamiDest)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .font(.footnote.monospaced())
+                                .onSubmit { ShikigamiEngine.shared.start() }
                         }
                     }
 
