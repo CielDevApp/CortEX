@@ -66,6 +66,22 @@ enum CortexURLRouter {
         case "debug/dump-state":
             dumpState()
             return true
+        case "debug/set-default":
+            // 診断用 (2026-07-21): CUI から UserDefaults を書き換える。
+            // 例: cortex://debug/set-default?key=readerDirection&value=1
+            guard let k = params["key"], let v = params["value"] else {
+                LogManager.shared.log("CortexURL", "set-default: missing key/value")
+                return false
+            }
+            if let i = Int(v) {
+                UserDefaults.standard.set(i, forKey: k)
+            } else if v == "true" || v == "false" {
+                UserDefaults.standard.set(v == "true", forKey: k)
+            } else {
+                UserDefaults.standard.set(v, forKey: k)
+            }
+            LogManager.shared.log("CortexURL", "set-default \(k)=\(v)")
+            return true
         case "debug/disk-space":
             dumpDiskSpace()
             return true
@@ -81,6 +97,18 @@ enum CortexURLRouter {
             return openOnlineReader(params: params)
         case "reader/local":
             return openLocalReader(params: params)
+        case "reader/clear-override":
+            // 診断用 (2026-07-21): モード選択ダイアログを再発火させるため override を消す。
+            // 例: cortex://reader/clear-override?gid=3996706
+            guard let gidStr = params["gid"], let gid = Int(gidStr) else {
+                LogManager.shared.log("CortexURL", "clear-override: missing gid")
+                return false
+            }
+            DispatchQueue.main.async {
+                DownloadManager.shared.setReaderModeOverride(gid: gid, mode: nil)
+            }
+            LogManager.shared.log("CortexURL", "clear-override gid=\(gid)")
+            return true
         case "reader/close":
             DispatchQueue.main.async {
                 CortexCommandBus.shared.openOnlineReader = nil

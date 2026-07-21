@@ -5,6 +5,8 @@ import TipKit
 struct GalleryReaderView: View {
     let gallery: Gallery
     let host: GalleryHost
+    /// 起動経路ラベル (2026-07-21 第21条: 経路を機械が記録する)
+    let route: LaunchRoute
 
     @StateObject private var viewModel: ReaderViewModel
     @Environment(\.dismiss) private var dismiss
@@ -34,6 +36,11 @@ struct GalleryReaderView: View {
     /// 動画 WebP per-gallery モード解決結果。nil = 未解決（ダイアログ待ち）
     @State private var resolvedDirection: Int? = nil
     @State private var showAnimationDialog = false
+    /// 田中報告 2026-07-21: 動画ギャラリーのダイアログが0.3-0.6秒間隔で無限に再発火し閲覧不能
+    /// (SE2実ログで確定)。解決処理を1リーダー1回に固定する。
+    @State private var didResolveMode = false
+    /// 診断 2026-07-21: View 再生成の特定用 (再生成されるたびに別値になる)
+    @State private var diagInstance = String(UUID().uuidString.prefix(4))
     /// 一度ランタイム検知 dialog を出したら以降抑止（複数ページの動画で再度発火させない）
     @State private var animationDetectionHandled = false
     /// monitorAnimationDetection のハンドル。旧実装は `.task { Task { ... } }` の内側 Task に
@@ -56,9 +63,10 @@ struct GalleryReaderView: View {
     /// 初期値は FavoritesCache 実体から読む (nh の NhentaiFavoritesCache.contains 初期化と同型)。
     @State private var isFavorited: Bool
 
-    init(gallery: Gallery, host: GalleryHost, initialPage: Int = 0, thumbnails: [ThumbnailInfo] = []) {
+    init(gallery: Gallery, host: GalleryHost, initialPage: Int = 0, thumbnails: [ThumbnailInfo] = [], route: LaunchRoute) {
         self.gallery = gallery
         self.host = host
+        self.route = route
         self._viewModel = StateObject(wrappedValue: ReaderViewModel(gallery: gallery, host: host, initialPage: initialPage, thumbnails: thumbnails))
         // containsFast 必須 (憲兵令 2026-0610-001 真因): load() 直叩きは全件 JSON デコードで、
         // 親 body 再評価のたびに init が走る SwiftUI では main を 120-150ms 塞いでいた
@@ -205,6 +213,8 @@ struct GalleryReaderView: View {
         }
         .task {
             // 既読確定の保険 (主フックは詳細画面。プレビュー等リーダー直行経路用)。冪等。
+            ShikigamiEngine.shared.currentScreen = "R:\(route.rawValue)"
+            LogManager.shared.log("Route", "ROUTE \(route.rawValue) reader=EH inst=\(diagInstance) gid=\(gallery.gid) dirSetting=\(userReaderDirection)")
             ReadHistoryStore.shared.markAsRead(site: .eh, gid: gallery.gid)
 
             // 再表示時 (onDisappear → 再 onAppear) に閉鎖フラグを解除。
@@ -240,6 +250,7 @@ struct GalleryReaderView: View {
             // これをしないと SwiftUI が LazyVStack セルを即 unmount しない環境で
             // displayLink + rolling prefetch が reader 外で回り続け CPU 100% になる。
             // 加えて複数 animated source を開いた後 memory パンパンで戻る問題の回避も兼ねる。
+            LogManager.shared.log("Diag", "READER disappear inst=\(diagInstance)")
             AnimatedPlaybackCoordinator.shared.closeReader("cell-\(gallery.gid)")
             // 田中要望 2026-04-28 (3度目指摘): 静画系メモリも完全解放。
             // 旧 resetAllState は dict removeAll するが pageHolders 構造を維持していた → 解放不足。
@@ -509,6 +520,7 @@ struct GalleryReaderView: View {
                 ShikigamiEngine.shared.currentScreen = "Reader-EH"
             horizontalPage = viewModel.initialPage
         }
+        .onDisappear { ShikigamiEngine.shared.clearScreen("Reader-EH") }
     }
 
     // MARK: - 縦スクロールリーダー

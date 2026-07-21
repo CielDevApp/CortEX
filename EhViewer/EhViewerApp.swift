@@ -273,10 +273,21 @@ struct EhViewerApp: App {
                 sk.gateProvider = { UserDefaults.standard.bool(forKey: UDKey.cortexProtocolUnlocked) }
                 sk.destinationProvider = { UserDefaults.standard.string(forKey: UDKey.shikigamiDestination) ?? "" }
                 sk.libraryCountProvider = { DownloadManager.shared.downloads.count }
+                // r008 (2026-07-21): +dirty のままだと連投中どの修正版か打電から判別できない。
+                // hash に加えビルド時刻 (BuildInfo.tag 先頭の日付時刻) を付けて版を一意にする。
                 sk.buildVersionProvider = {
-                    // BuildInfo.tag = "日付 時刻 <hash> \"msg\"" の3トークン目 (git short hash)
+                    // BuildInfo.tag = "日付 時刻 <hash> \"msg\"" → "<hash>@時刻" で版を一意化。
+                    // +dirty の連投でも時刻で判別できる (r008)。
                     let p = BuildInfo.tag.split(separator: " ")
-                    return p.count >= 3 ? String(p[2]) : "unknown"
+                    guard p.count >= 3 else { return "unknown" }
+                    let hhmm = p[1].prefix(5)   // "HH:MM"
+                    return "\(p[2])@\(hhmm)"
+                }
+                // 画質/AI超解像トグルのスナップショット (田中指示: 状態を打電に含める)
+                sk.settingsProvider = {
+                    let q = UserDefaults.standard.integer(forKey: UDKey.onlineQualityMode)
+                    let ai = UserDefaults.standard.bool(forKey: UDKey.aiImageProcessing) ? 1 : 0
+                    return "q\(q)ai\(ai)"
                 }
                 sk.start()
             }

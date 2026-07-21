@@ -145,7 +145,7 @@ struct NhentaiScrollList: View {
         }
         #if os(iOS)
         .fullScreenCover(item: $previewReaderRequest) { req in
-            NhentaiReaderView(gallery: req.gallery, initialPage: req.page)
+            NhentaiReaderView(gallery: req.gallery, initialPage: req.page, route: .nhList)
                 .onAppear {
                     HistoryManager.shared.recordNhentai(gallery: req.gallery, page: req.page)
                     previewGallery = nil
@@ -240,7 +240,7 @@ struct NhentaiScrollList: View {
         }
         #if os(iOS)
         .fullScreenCover(item: $previewReaderRequest) { req in
-            NhentaiReaderView(gallery: req.gallery, initialPage: req.page)
+            NhentaiReaderView(gallery: req.gallery, initialPage: req.page, route: .nhList)
                 .onAppear {
                     HistoryManager.shared.recordNhentai(gallery: req.gallery, page: req.page)
                     previewGallery = nil
@@ -252,7 +252,8 @@ struct NhentaiScrollList: View {
 
 /// nhentaiプレビューから直接リーダー起動用
 struct NhentaiPreviewReaderRequest: Identifiable {
-    let id = UUID()
+    /// 2026-07-21: UUID だと再代入で identity が変わり cover が閉じ→再生成ループになる
+    var id: String { "\(gallery.id)-\(page)" }
     let gallery: NhentaiClient.NhGallery
     let page: Int
 }

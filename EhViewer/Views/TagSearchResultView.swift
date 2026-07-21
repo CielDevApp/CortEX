@@ -146,7 +146,7 @@ struct TagSearchResultView: View {
         }
         #if os(iOS)
         .fullScreenCover(item: $previewReaderRequest) { req in
-            GalleryReaderView(gallery: req.gallery, host: host, initialPage: req.page, thumbnails: req.thumbnails)
+            GalleryReaderView(gallery: req.gallery, host: host, initialPage: req.page, thumbnails: req.thumbnails, route: .onlineTagSearch)
                 .onAppear {
                     HistoryManager.shared.record(gallery: req.gallery, page: req.page)
                     previewGallery = nil

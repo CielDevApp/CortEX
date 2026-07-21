@@ -244,14 +244,14 @@ struct FavoritesView: View {
             #if os(iOS)
             .fullScreenCover(item: $previewEhReader) { req in
                 let host: GalleryHost = authVM.isLoggedIn ? .exhentai : .ehentai
-                GalleryReaderView(gallery: req.gallery, host: host, initialPage: req.page, thumbnails: req.thumbnails)
+                GalleryReaderView(gallery: req.gallery, host: host, initialPage: req.page, thumbnails: req.thumbnails, route: .onlineFavorites)
                     .onAppear {
                         HistoryManager.shared.record(gallery: req.gallery, page: req.page)
                         previewEhGallery = nil
                     }
             }
             .fullScreenCover(item: $previewNhReader) { req in
-                NhentaiReaderView(gallery: req.gallery, initialPage: req.page)
+                NhentaiReaderView(gallery: req.gallery, initialPage: req.page, route: .nhFavorites)
                     .onAppear {
                         HistoryManager.shared.recordNhentai(gallery: req.gallery, page: req.page)
                         previewNhGallery = nil

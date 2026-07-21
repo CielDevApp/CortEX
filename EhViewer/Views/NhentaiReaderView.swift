@@ -6,6 +6,8 @@ import CoreImage
 import Combine
 
 struct NhentaiReaderView: View {
+    /// 起動経路ラベル (2026-07-21 第21条: 経路を機械が記録する)
+    let route: LaunchRoute
     let gallery: NhentaiClient.NhGallery
     var initialPage: Int = 0
 
@@ -44,7 +46,8 @@ struct NhentaiReaderView: View {
     /// 0=低画質(サムネのみ), 2=標準(サムネ→標準画質のプログレッシブ)
     @AppStorage(UDKey.onlineQualityMode) private var onlineQualityMode = 2
 
-    init(gallery: NhentaiClient.NhGallery, initialPage: Int = 0) {
+    init(gallery: NhentaiClient.NhGallery, initialPage: Int = 0, route: LaunchRoute) {
+        self.route = route
         self.gallery = gallery
         self.initialPage = initialPage
         self._currentIndex = State(initialValue: initialPage)

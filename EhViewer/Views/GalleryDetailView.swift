@@ -7,7 +7,8 @@ import WebKit
 
 /// fullScreenCover(item:) 用のラッパー
 private struct ReaderRequest: Identifiable {
-    let id = UUID()
+    /// 2026-07-21: UUID だと再代入で identity が変わり cover が閉じ→再生成ループになる
+    var id: Int { page }
     let page: Int
 }
 
@@ -217,13 +218,20 @@ struct GalleryDetailView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        // 診断 2026-07-21: リーダー提示フラッピングの因果特定用 (第21条計測器)。
+        // cover の item が nil↔非nil で揺れているのか、item は安定なのに中身だけ
+        // appear/disappear しているのかを切り分ける。
+        .onChange(of: readerRequest?.id) { oldValue, newValue in
+            LogManager.shared.log("Diag", "readerRequest id \(oldValue.map(String.init) ?? "nil")→\(newValue.map(String.init) ?? "nil")")
+        }
         #if os(iOS)
         .fullScreenCover(item: $readerRequest) { request in
             GalleryReaderView(
                 gallery: detail?.gallery ?? gallery,
                 host: host,
                 initialPage: request.page,
-                thumbnails: thumbnails
+                thumbnails: thumbnails,
+                route: .onlineDetail
             )
             .onAppear {
                 HistoryManager.shared.record(gallery: detail?.gallery ?? gallery, page: request.page)
@@ -235,7 +243,8 @@ struct GalleryDetailView: View {
                 gallery: detail?.gallery ?? gallery,
                 host: host,
                 initialPage: request.page,
-                thumbnails: thumbnails
+                thumbnails: thumbnails,
+                route: .onlineDetail
             )
             .onAppear {
                 HistoryManager.shared.record(gallery: detail?.gallery ?? gallery, page: request.page)
@@ -244,7 +253,7 @@ struct GalleryDetailView: View {
         #endif
         #if os(iOS)
         .fullScreenCover(item: $selectedNhGallery) { nh in
-            NhentaiReaderView(gallery: nh)
+            NhentaiReaderView(gallery: nh, route: .nhDetail)
         }
         #endif
         .navigationDestination(for: TagSearch.self) { search in

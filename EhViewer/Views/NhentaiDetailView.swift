@@ -44,7 +44,7 @@ struct NhentaiDetailView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(item: $readerRequest) { req in
-            NhentaiReaderView(gallery: gallery, initialPage: req.page)
+            NhentaiReaderView(gallery: gallery, initialPage: req.page, route: .nhDetail)
         }
         #endif
         .navigationDestination(for: NhTagSearch.self) { search in
@@ -516,7 +516,8 @@ struct NhentaiDetailView: View {
 
 /// fullScreenCover(item:) 用
 private struct NhReaderRequest: Identifiable {
-    let id = UUID()
+    /// 2026-07-21: UUID だと再代入で identity が変わり cover が閉じ→再生成ループになる
+    var id: Int { page }
     let page: Int
 }
 
@@ -813,7 +814,7 @@ struct NhTagSearchResultView: View {
         }
         #if os(iOS)
         .fullScreenCover(item: $previewReaderRequest) { req in
-            NhentaiReaderView(gallery: req.gallery, initialPage: req.page)
+            NhentaiReaderView(gallery: req.gallery, initialPage: req.page, route: .nhDetailPreview)
                 .onAppear {
                     HistoryManager.shared.recordNhentai(gallery: req.gallery, page: req.page)
                     previewGallery = nil

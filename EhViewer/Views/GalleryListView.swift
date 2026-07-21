@@ -649,7 +649,8 @@ struct GalleryScrollList: View {
                 gallery: req.gallery,
                 host: viewModel.host,
                 initialPage: req.page,
-                thumbnails: req.thumbnails
+                thumbnails: req.thumbnails,
+                route: .onlineList
             )
             .onAppear {
                 HistoryManager.shared.record(gallery: req.gallery, page: req.page)
@@ -808,7 +809,8 @@ struct GalleryScrollList: View {
                 gallery: req.gallery,
                 host: viewModel.host,
                 initialPage: req.page,
-                thumbnails: req.thumbnails
+                thumbnails: req.thumbnails,
+                route: .onlineList
             )
             .onAppear {
                 HistoryManager.shared.record(gallery: req.gallery, page: req.page)
@@ -821,7 +823,11 @@ struct GalleryScrollList: View {
 
 /// プレビューから直接リーダーを開く用
 struct GalleryPreviewReaderRequest: Identifiable {
-    let id = UUID()
+    /// 田中報告 2026-07-21 (SE2 実ログで確定): id = UUID() だと再代入のたびに別 identity になり、
+    /// fullScreenCover が閉じて開き直す → リーダーが closeReader→再生成を 0.3-0.6 秒周期で
+    /// 無限反復し、モード選択ダイアログが連打されて閲覧不能になっていた。
+    /// 同じ作品・同じページなら同じ id にして identity を安定させる。
+    var id: String { "\(gallery.gid)-\(page)" }
     let gallery: Gallery
     let page: Int
     var thumbnails: [ThumbnailInfo] = []

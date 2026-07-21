@@ -27,6 +27,8 @@ nonisolated enum UDKey {
     static let animPlaybackMode = "animPlaybackMode"
     static let animMaxConcurrentPlay = "animMaxConcurrentPlay"
     static let animationDialogDontAskDefault = "animationDialogDontAskDefault"
+    /// WebP 動画の性能警告 (A17 以下端末) を今後表示しない。2026-07-21 SE2 実測より。
+    static let webpPerfWarningSuppressed = "webpPerfWarningSuppressed"
     static let preloadPlayback = "preloadPlayback"
     static let boomerangMode = "boomerangMode"
 

@@ -31,6 +31,19 @@ struct DownloadsView: View {
     @State private var externalCortexReadyCounter: Int = 0
     /// プレビューからリーダー起動する時の初期ページ（通常起動では 0）
     @State private var readerInitialPage: Int = 0
+    /// 田中要望 2026-07-21: タイル起動は左右モード。onDismiss で nil に戻す。
+    @State private var readerForcedDirection: Int? = nil
+    @ViewBuilder
+    private func readerCover(_ meta: DownloadedGallery) -> some View {
+        LocalReaderView(meta: meta, initialPage: readerInitialPage, forcedDirection: readerForcedDirection, route: .libraryCardTile)
+            // B3: タップしたタイルから zoom。source 不一致時は既定遷移に自然フォールバック。
+            .navigationTransition(.zoom(sourceID: zoomSourceKey, in: zoomNS))
+    }
+
+    private func resetReaderLaunchState() {
+        readerInitialPage = 0
+        readerForcedDirection = nil
+    }
     /// エクスポート進行フェーズ（nil = idle）。
     /// - processing: ZIP streaming 中、進捗バー表示
     /// - preparingSheet: 100% 完了、iOS ActivityViewController 準備中（失敗と錯覚しないよう明示表示）
@@ -468,13 +481,9 @@ struct DownloadsView: View {
                 }
             }
             #if os(iOS)
-            .fullScreenCover(item: $readerMeta, onDismiss: { readerInitialPage = 0 }) { meta in
-                LocalReaderView(meta: meta, initialPage: readerInitialPage)
-                    // B3: タップしたタイルから zoom。source 不一致時は既定遷移に自然フォールバック。
-                    .navigationTransition(.zoom(sourceID: zoomSourceKey, in: zoomNS))
-            }
+            .fullScreenCover(item: $readerMeta, onDismiss: resetReaderLaunchState, content: readerCover)
             .fullScreenCover(item: $liveReaderMeta) { meta in
-                LocalReaderView(meta: meta, isLiveDownload: true)
+                LocalReaderView(meta: meta, isLiveDownload: true, route: .libraryLiveDL)
             }
             #endif
             // 「この作品のページ詳細を見る」(田中指示 2026-04-25)
@@ -499,6 +508,8 @@ struct DownloadsView: View {
                             // も pre-cache 経路に統一。non-animated WebP / 大容量 internal DL でも
                             // ensureAnimatedWebpScanned 等の主処理を background 完了させて Reader 起動。
                             readerInitialPage = page
+
+                            readerForcedDirection = 1   // タイル起動=左右モード
                             previewMeta = nil
                             startPreCacheAndOpenReader(meta: m, count: 0)
                         }
@@ -791,11 +802,17 @@ struct DownloadsView: View {
             // 田中要望 2026-04-26: internal DL も pre-cache 経路に統一、ensureAnimatedWebpScanned
             // を background 完了させてから Reader 起動 (1000+ ページ初回 scan の freeze 回避)。
             zoomSourceKey = ""   // 読むは既定遷移 (B3: zoom はタイル経路のみ)
+            // 田中報告 2026-07-21: タイル起動の forced=1 が残留して「読む」経由でも横で開く。
+            // onDismiss リセット頼みをやめ、起動サイトごとに launch 状態を毎回明示する。
+            readerInitialPage = 0
+            readerForcedDirection = nil
             startPreCacheAndOpenReader(meta: meta, count: 0)
         } onTapPage: { page in
             // タイルタップ → リーダーで該当ページ直接 (ワープ)。戻るはリストへ (fullScreenCover dismiss)
             zoomSourceKey = "\(meta.gid)-p\(page)"   // B3: このタイルから zoom
             readerInitialPage = page
+
+            readerForcedDirection = 1   // タイル起動=左右モード
             startPreCacheAndOpenReader(meta: meta, count: 0)
         } onMore: {
             // 続きを見る → 既存ページ詳細 (LocalPreviewOverlay)
@@ -847,10 +864,15 @@ struct DownloadsView: View {
             coverThumbnail(gid: meta.gid)
         } onRead: {
             zoomSourceKey = ""
+            // 田中報告 2026-07-21: 残留 forced 対策 (completedRow 側と同じ)
+            readerInitialPage = 0
+            readerForcedDirection = nil
             startPreCacheAndOpenReader(meta: meta, count: 3)
         } onTapPage: { page in
             zoomSourceKey = "\(meta.gid)-p\(page)"
             readerInitialPage = page
+
+            readerForcedDirection = 1   // タイル起動=左右モード
             startPreCacheAndOpenReader(meta: meta, count: 3)
         } onMore: {
             previewMeta = meta
@@ -1418,6 +1440,11 @@ struct DownloadsView: View {
                 preCacheCancelled = false
                 if !cancelled {
                     readerMeta = meta  // cancel じゃなければ Reader 起動
+                } else {
+                    // 田中報告 2026-07-21: cancel だと cover が開かず onDismiss リセットも
+                    // 走らないため forced=1/initialPage が残留し、以後の「読む」起動が
+                    // 横強制で汚染される (縦設定なのに横のまま事件の機序)
+                    resetReaderLaunchState()
                 }
             }
         }

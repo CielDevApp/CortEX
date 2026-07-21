@@ -6,6 +6,11 @@ struct LocalReaderView: View {
     let meta: DownloadedGallery
     var isLiveDownload: Bool = false
     let initialPage: Int
+    /// 田中要望 2026-07-21: ライブラリのカードタイルから起動した時は左右モードで開く。
+    /// nil = 従来通り設定/override から解決。
+    var forcedDirection: Int? = nil
+    /// 起動経路ラベル (2026-07-21 第21条: 経路を機械が記録する)
+    let route: LaunchRoute
 
     @ObservedObject private var downloadManager = DownloadManager.shared
     @Environment(\.dismiss) private var dismiss
@@ -16,6 +21,8 @@ struct LocalReaderView: View {
     @State private var pendingResumePage: Int = 0
     @State private var showResumeDialog = false
     @State private var didOfferResume = false
+    /// 田中報告 2026-07-21: モード解決ダイアログ/警告が繰り返し出る → 1リーダー1回に固定
+    @State private var didResolveMode = false
     @State private var currentIndex: Int
     @State private var dragOffset: CGFloat = 0
     @State private var zoomImage: PlatformImage?
@@ -62,6 +69,8 @@ struct LocalReaderView: View {
     /// 動画 WebP ギャラリーの per-gallery モード解決結果 (nil = 未解決、ダイアログ待ち or scan 中)
     @State private var resolvedDirection: Int? = nil
     @State private var showAnimationDialog = false
+    /// WebP 動画の性能警告 (A17 以下端末のみ)。2026-07-21 SE2 実測より。
+    @State private var showWebPPerfWarning = false
 
     // Phase E1.B 後追加 (2026-04-26、田中指示): 外部参照 ZIP gallery で大幅 jump 時の
     // background pre-cache + overlay。main thread SMB IO による freeze 回避。
@@ -188,10 +197,13 @@ struct LocalReaderView: View {
     /// β-1 (2026-04-26): 外部参照 ZIP background materialize 完了通知で incrément、body 再描画 trigger
     @State private var externalCortexReadyCounter: Int = 0
 
-    init(meta: DownloadedGallery, isLiveDownload: Bool = false, initialPage: Int = 0) {
+    init(meta: DownloadedGallery, isLiveDownload: Bool = false, initialPage: Int = 0,
+         forcedDirection: Int? = nil, route: LaunchRoute) {
         self.meta = meta
         self.isLiveDownload = isLiveDownload
         self.initialPage = initialPage
+        self.forcedDirection = forcedDirection
+        self.route = route
         self._currentIndex = State(initialValue: initialPage)
         self._sliderValue = State(initialValue: Double(initialPage))
         self._horizontalPage = State(initialValue: initialPage)
@@ -342,7 +354,9 @@ struct LocalReaderView: View {
                 startPageCheckTimer()
             }
             // 自動栞 (Phase R-1): 明示ページ未指定 & 非ライブ & 栞あり → 続き/最初 選択ダイアログ
-            if initialPage == 0 && !isLiveDownload && !didOfferResume {
+            // 田中報告 2026-07-21: タイル起動 (forcedDirection 指定) はページ 0 タイルでも
+            // 明示ページ指定なので再開プロンプトを出さない
+            if initialPage == 0 && forcedDirection == nil && !isLiveDownload && !didOfferResume {
                 didOfferResume = true
                 let saved = UserDefaults.standard.integer(forKey: UDKey.localReaderBookmark(gid: meta.gid))
                 if saved > 0 && saved < meta.pageCount {
@@ -352,12 +366,19 @@ struct LocalReaderView: View {
             }
         }
         .task {
+            ShikigamiEngine.shared.currentScreen = "R:\(route.rawValue)"
+            LogManager.shared.log("Route", "ROUTE \(route.rawValue) reader=Local gid=\(meta.gid) pages=\(meta.pageCount) dirSetting=\(readerDirection) forced=\(forcedDirection.map(String.init) ?? "nil")")
             await resolveReaderMode()
         }
         .confirmationDialog("前回の続きから読みますか？", isPresented: $showResumeDialog, titleVisibility: .visible) {
             Button("\(pendingResumePage + 1)ページ目から再開") { resumeToBookmark(pendingResumePage) }
             Button("最初から見る", role: .cancel) { }
         }
+        // 田中報告 2026-07-21: 左右綴じでページめくりスワイプが zoom 遷移 (B3) の
+        // インタラクティブ dismiss に食われてリーダーが閉じる。横モードのみ無効化し、
+        // 縦モードのピンチ/ドラッグ閉じは残す。
+        .interactiveDismissDisabled(isHorizontal)
+        .webpPerfWarning(isPresented: $showWebPPerfWarning)
         .animationModeDialog(isPresented: $showAnimationDialog) { mode, dontAskAgain in
             if dontAskAgain {
                 downloadManager.setReaderModeOverride(gid: meta.gid, mode: mode)
@@ -365,6 +386,7 @@ struct LocalReaderView: View {
             resolvedDirection = (mode == .horizontal) ? 1 : 0
         }
         .onDisappear {
+            ShikigamiEngine.shared.clearScreen("Reader-Local")
             pageCheckTimer?.invalidate()
             pageCheckTimer = nil
             // reader close 時にこの reader 配下の再生を全停止 + 全 animated source cache 解放。
@@ -415,6 +437,19 @@ struct LocalReaderView: View {
 
     @MainActor
     private func resolveReaderMode() async {
+        // タイル起動 (田中要望 2026-07-21: 左右モードで開く)。
+        // ただし動画入りギャラリーは対象外 — 動画は既存のモード選択フロー (縦推奨) に委ねる。
+        // 横を強制すると動画の再生経路が壊れて再生ボタンが出ない (2026-07-21 田中報告)。
+        if let forced = forcedDirection {
+            await downloadManager.ensureAnimatedWebpScanned(gid: meta.gid)
+            let scanned = downloadManager.downloads[meta.gid] ?? meta
+            if !(scanned.hasAnimatedWebp ?? false) {
+                resolvedDirection = forced
+                LogManager.shared.log("Anim", "Local resolve: forced dir=\(forced) (tile, static gallery)")
+                return
+            }
+            LogManager.shared.log("Anim", "Local resolve: tile launch but animated → 通常解決へ")
+        }
         LogManager.shared.log("Anim", "Local resolve start gid=\(meta.gid) userDir=\(readerDirection)")
         // 縦設定 → 即解決 (どのみち WebP アニメ再生可能)
         guard readerDirection == 1 else {
@@ -431,6 +466,12 @@ struct LocalReaderView: View {
         if !hasAnim {
             resolvedDirection = 1
             return
+        }
+        // 性能警告 (2026-07-21 SE2 実測): A17 以下は WebP 動画の実時間再生に CPU が足りない。
+        // 未来の端末には出ない (DeviceCapability は世代番号の閾値判定)。1度きり + 抑止可能。
+        if DeviceCapability.isAnimatedWebPUnderpowered,
+           !UserDefaults.standard.bool(forKey: UDKey.webpPerfWarningSuppressed) {
+            showWebPPerfWarning = true
         }
         // 動画 WebP あり + 横設定: override 確認 → なければダイアログ
         if let ov = m.readerModeOverride {

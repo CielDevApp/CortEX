@@ -133,6 +133,10 @@ struct ContentView: View {
         // cortex:// scheme から reader 直接 open (Phase B、田中指示 2026-04-25)。
         // 既存の navigation 経由 (一覧 → 詳細 → reader) は触らず、ContentView レベルの
         // 独立 fullScreenCover で表示。bus を nil にすると閉じる (cortex://reader/close)。
+        // 診断 2026-07-21: リーダー提示フラッピングの因果特定用 (第21条計測器)
+        .onChange(of: cortexBus.openOnlineReader?.id) { oldValue, newValue in
+            LogManager.shared.log("Diag", "busOnlineReader id \(oldValue.map(\.uuidString.description) ?? "nil")→\(newValue.map(\.uuidString.description) ?? "nil")")
+        }
         .fullScreenCover(item: $cortexBus.openOnlineReader) { req in
             let host: GalleryHost = req.hostName == "exhentai" ? .exhentai : .ehentai
             let gallery = Gallery(
@@ -140,11 +144,11 @@ struct ContentView: View {
                 category: nil, coverURL: nil, rating: 0, pageCount: 999,
                 postedDate: "", uploader: nil, tags: []
             )
-            GalleryReaderView(gallery: gallery, host: host, initialPage: req.page)
+            GalleryReaderView(gallery: gallery, host: host, initialPage: req.page, route: .urlSchemeOnline)
         }
         .fullScreenCover(item: $cortexBus.openLocalReader) { req in
             if let meta = DownloadManager.shared.downloads[req.gid] {
-                LocalReaderView(meta: meta, isLiveDownload: false, initialPage: req.page)
+                LocalReaderView(meta: meta, isLiveDownload: false, initialPage: req.page, route: .urlSchemeLocal)
             } else {
                 Text("Local gallery not found for gid=\(req.gid)")
                     .padding()

@@ -115,14 +115,14 @@ struct HistoryView: View {
             }
             #if os(iOS)
             .fullScreenCover(item: $previewEhReader) { req in
-                GalleryReaderView(gallery: req.gallery, host: .exhentai, initialPage: req.page, thumbnails: req.thumbnails)
+                GalleryReaderView(gallery: req.gallery, host: .exhentai, initialPage: req.page, thumbnails: req.thumbnails, route: .onlineHistory)
                     .onAppear {
                         HistoryManager.shared.record(gallery: req.gallery, page: req.page)
                         previewEhGallery = nil
                     }
             }
             .fullScreenCover(item: $previewNhReader) { req in
-                NhentaiReaderView(gallery: req.gallery, initialPage: req.page)
+                NhentaiReaderView(gallery: req.gallery, initialPage: req.page, route: .nhHistory)
                     .onAppear {
                         HistoryManager.shared.recordNhentai(gallery: req.gallery, page: req.page)
                         previewNhGallery = nil

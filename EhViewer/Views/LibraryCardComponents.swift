@@ -156,6 +156,10 @@ struct LibraryCardView<Cover: View>: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                // 田中報告 2026-07-21: 「読む」ボタンを 44pt 化した分メタ行が圧迫され
+                // 「300 ペー/ジ」のように折り返した。1行固定 + 縮小で収める。
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
             }
 
             Spacer(minLength: 8)
@@ -215,20 +219,22 @@ struct CardTile: View {
     var body: some View {
         Button(action: onTap) {
             ZStack(alignment: .bottomTrailing) {
-                ZStack {
-                    // プレースホルダは常設。画像は上に重ねて opacity で出す
-                    // (emil「無から出現」禁止 — 空白→パッと出現を避ける)
-                    Color.gray.opacity(0.15)
-                    if let image {
-                        Image(platformImage: image)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .opacity(shown ? 1 : 0)
+                // 田中報告 2026-07-21: タイルがカード幅を突き破って画面端まで溢れ 3列グリッドが崩れた。
+                // 原因は ZStack 直下の .fill 画像が ZStack 自身のサイズを押し広げていたこと。
+                // プレースホルダで枠を確定させ、画像は overlay + clipped で枠内に閉じ込める。
+                Color.gray.opacity(0.15)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: LibraryCardConfig.tileHeight)
+                    .overlay {
+                        if let image {
+                            Image(platformImage: image)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .opacity(shown ? 1 : 0)
+                        }
                     }
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: LibraryCardConfig.tileHeight)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .clipped()
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
 
                 Text("\(index + 1)")
                     .font(.system(size: 9, weight: .bold))

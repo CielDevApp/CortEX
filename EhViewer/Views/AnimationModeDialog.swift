@@ -14,12 +14,32 @@ struct AnimationModeDialog: ViewModifier {
     @State private var dontAskAgain: Bool = true
 
     func body(content: Content) -> some View {
+        // 2026-07-21 リーダー無限ループ事件の恒久対策: .sheet 提示をやめ、リーダー内
+        // ZStack オーバーレイで描く。詳細画面は B3 zoom 遷移 (navigationTransition) の
+        // 遷移先で、そこからの fullScreenCover の上にさらに sheet を重ねる 3 層ネスト
+        // 提示になると cover が sheet 提示に巻き込まれて剥がれ、item が残っているため
+        // 再提示→再 resolve→再 sheet の自己ループになる (SE2 実測: ルート直下 cover では
+        // 同一ダイアログが正常動作 = 提示コンテキスト依存を計測で確定)。
+        // オーバーレイなら UIKit の presentation 機構を一切使わないため、この事故の
+        // クラスごと成立しなくなる。
         content
-            .sheet(isPresented: $isPresented) {
-                dialog
-                    .interactiveDismissDisabled()
+            .overlay {
+                if isPresented {
+                    ZStack {
+                        Color.black.opacity(0.55)
+                            .ignoresSafeArea()
+                        dialog
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+                            .padding(.horizontal, 24)
+                    }
+                    .transition(.opacity)
+                    // 診断 2026-07-21: リーダー提示フラッピングの因果特定用 (第21条計測器)
+                    .onAppear { LogManager.shared.log("Anim", "DIALOG overlay appear") }
+                    .onDisappear { LogManager.shared.log("Anim", "DIALOG overlay disappear") }
+                }
             }
-            .onChange(of: isPresented) { _, newValue in
+            .onChange(of: isPresented) { oldValue, newValue in
+                LogManager.shared.log("Anim", "DIALOG isPresented \(oldValue)→\(newValue)")
                 if newValue { dontAskAgain = dontAskAgainDefault }
             }
     }
@@ -75,8 +95,6 @@ struct AnimationModeDialog: ViewModifier {
             .padding(.horizontal, 24)
             .padding(.bottom, 28)
         }
-        .presentationDetents([.height(360)])
-        .presentationDragIndicator(.hidden)
     }
 }
 
