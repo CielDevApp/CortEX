@@ -92,6 +92,10 @@ struct GalleryListView: View {
                     nhentaiContent.tag(GallerySource.nhentai)
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
+                // 白帯修正 (2026-07-21): TabView(.page)=内部UIPageViewControllerが下端safe area
+                // に背景を通さず、そこに親の白が残る (ギャラリーだけ発症・iPhone/iPad両方)。TabView
+                // 自体を下端へ伸ばしてページ背景で塗り切る。個人版で効果確認済 → 配布版へ移植。
+                .ignoresSafeArea(.container, edges: .bottom)
                 #endif
             }
             // 田中報告 2026-07-03: ScrollView 側の ignoresSafeArea は TabView(.page) 境界で
