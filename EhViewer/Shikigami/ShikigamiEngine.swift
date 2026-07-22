@@ -70,6 +70,13 @@ final class ShikigamiEngine {
 
     // 弾① POST CORTEX <bundleID> <buildVersion> <蔵書件数> <deviceName>
     // bundleID はバイナリ自身が読む値 (Bundle.main) — 取り違えようがない。
+    /// 任意 KEIHO 打電 (2026-07-22: ZOMBIE displayLink 等、アプリ内で検知した異常を
+    /// 言上帳へ自動還流するための汎用口。gate 閉/打電先未設定なら無音)。
+    func keihoCustom(_ body: String) {
+        guard running else { return }
+        udp.send("KEIHO \(ShikigamiConfig.appTag) \(body)")
+    }
+
     private func sendPost() {
         let bundleID = Bundle.main.bundleIdentifier ?? "unknown"
         let build = buildVersionProvider?() ?? "unknown"

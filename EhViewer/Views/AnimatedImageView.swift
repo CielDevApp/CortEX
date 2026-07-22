@@ -353,6 +353,13 @@ final class AnimatedSourceImageView: UIImageView {
         rollingTimer = nil
     }
 
+    /// 法医学用の個体識別タグ (2026-07-22 OOM事件: tickログに個体識別が無くゾンビの
+    /// 出自特定に難儀した)。source のポインタ由来 4hex + フレーム数。
+    private var diagTag: String {
+        guard let s = animSource else { return "?" }
+        return "\(s.frameCount)f#\(String(format: "%04x", UInt(bitPattern: ObjectIdentifier(s).hashValue) & 0xffff))"
+    }
+
     private func startLink() {
         guard displayLink == nil, let source = animSource, source.frameCount > 1, source.totalDuration > 0 else { return }
         linkStartTime = CACurrentMediaTime()
@@ -362,7 +369,7 @@ final class AnimatedSourceImageView: UIImageView {
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 24, maximum: 30, preferred: 30)
         link.add(to: .main, forMode: .common)
         displayLink = link
-        LogManager.shared.log("Anim", "displayLink START frames=\(source.frameCount) rate=30fps")
+        LogManager.shared.log("Anim", "displayLink START \(diagTag) frames=\(source.frameCount) rate=30fps")
     }
 
     private func stopLink() {
@@ -394,11 +401,24 @@ final class AnimatedSourceImageView: UIImageView {
     @objc private func tick(_ link: CADisplayLink) {
         guard let source = animSource else { return }
         let elapsed = CACurrentMediaTime() - linkStartTime
+
+        // 2026-07-22 15PM OOM事件 (閉鎖後未解放・4度目) の自己治癒ガード:
+        // CADisplayLink は target を強参照するため、停止経路 (@Published購読 /
+        // willMove(toWindow:) / deinit) のどれかが届かなかった個体は永久に回り続け、
+        // フレーム窓ごとメモリを保持する (実測: closeReader 後 6 分間生存 ×2 本 → jetsam)。
+        // window から外れて tick している displayLink は定義上ゾンビなので、ここで自滅させる。
+        if window == nil {
+            LogManager.shared.log("Anim", "ZOMBIE displayLink self-stop \(diagTag) elapsed=\(String(format: "%.1f", elapsed))s (window=nil)")
+            ShikigamiEngine.shared.keihoCustom("ZOMBIE \(diagTag) \(Int(elapsed))s")
+            stopLink()
+            return
+        }
+
         let idx = frameIndex(elapsed: elapsed, source: source)
         tickCount += 1
 
         if tickCount % 30 == 0 {
-            LogManager.shared.log("Anim", "tick=\(tickCount) idx=\(idx) last=\(lastDisplayedIdx) miss=\(tickMissCount) elapsed=\(String(format: "%.2f", elapsed))s")
+            LogManager.shared.log("Anim", "tick=\(tickCount) \(diagTag) idx=\(idx) last=\(lastDisplayedIdx) miss=\(tickMissCount) elapsed=\(String(format: "%.2f", elapsed))s")
         }
 
         // 通常モード補正設定はライブで UserDefaults を読む。
