@@ -369,6 +369,11 @@ final class AnimatedSourceImageView: UIImageView {
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 24, maximum: 30, preferred: 30)
         link.add(to: .main, forMode: .common)
         displayLink = link
+        // stopLink がプリフェッチを巻き添えで止めるため、再開経路 (willMove 復帰等) では
+        // ここでプリフェッチも復活させる (2026-07-22 f41 デグレの再発防止)
+        if rollingTimer == nil {
+            startRollingPrefetch()
+        }
         LogManager.shared.log("Anim", "displayLink START \(diagTag) frames=\(source.frameCount) rate=30fps")
     }
 
@@ -406,11 +411,18 @@ final class AnimatedSourceImageView: UIImageView {
         // CADisplayLink は target を強参照するため、停止経路 (@Published購読 /
         // willMove(toWindow:) / deinit) のどれかが届かなかった個体は永久に回り続け、
         // フレーム窓ごとメモリを保持する (実測: closeReader 後 6 分間生存 ×2 本 → jetsam)。
-        // window から外れて tick している displayLink は定義上ゾンビなので、ここで自滅させる。
+        //
+        // ⚠️ f41 の初版は「window==nil なら即殺」で、makeUIView 直後 (window 搭載前) の
+        // 初 tick を誤射 → stopLink がプリフェッチを巻き添えにし「途中で止まる」デグレ
+        // (elapsed=0.0s の ZOMBIE 打電多発で確定)。本物のゾンビは分単位で回り続けるので、
+        // 「window 無しのまま 2 秒経過」をゾンビ認定条件にする。出生時/画面遷移中の
+        // 一瞬の未搭載は無処理 return (描画先が無いので tick 仕事もしない)。
         if window == nil {
-            LogManager.shared.log("Anim", "ZOMBIE displayLink self-stop \(diagTag) elapsed=\(String(format: "%.1f", elapsed))s (window=nil)")
-            ShikigamiEngine.shared.keihoCustom("ZOMBIE \(diagTag) \(Int(elapsed))s")
-            stopLink()
+            if elapsed > 2.0 {
+                LogManager.shared.log("Anim", "ZOMBIE displayLink self-stop \(diagTag) elapsed=\(String(format: "%.1f", elapsed))s (window=nil)")
+                ShikigamiEngine.shared.keihoCustom("ZOMBIE \(diagTag) \(Int(elapsed))s")
+                stopLink()
+            }
             return
         }
 
