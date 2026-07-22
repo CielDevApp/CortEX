@@ -1549,6 +1549,8 @@ private struct AsyncCoverThumbnail: View {
                 Image(platformImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
+                    // r010 (2026-07-22): .fill あふれは不可視タップ吸収体になる。装飾画像は hit 対象外
+                    .allowsHitTesting(false)
             } else {
                 RoundedRectangle(cornerRadius: 4)
                     .fill(Color.gray.opacity(0.2))
@@ -1583,6 +1585,8 @@ private struct AsyncCoverThumbnailFlexible: View {
                 Image(platformImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
+                    // r010 (2026-07-22): .fill あふれは不可視タップ吸収体になる。装飾画像は hit 対象外
+                    .allowsHitTesting(false)
             } else {
                 Image(systemName: "photo")
                     .foregroundStyle(.secondary)

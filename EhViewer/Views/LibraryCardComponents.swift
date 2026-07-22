@@ -117,6 +117,9 @@ struct LibraryCardView<Cover: View>: View {
     private func coverBlock() -> some View {
         cover()
             .clipShape(RoundedRectangle(cornerRadius: LibraryCardConfig.coverCorner, style: .continuous))
+            // r010 (2026-07-22): 中の .fill 画像を hit 対象外にした分、ジャケット Button の
+            // 当たり判定を可視枠で明示する (吸収体は殺し、正規のタップは枠通りに通す)
+            .contentShape(RoundedRectangle(cornerRadius: LibraryCardConfig.coverCorner, style: .continuous))
             .overlay(alignment: .bottomTrailing) {
                 if meta.isAnimatedGallery {
                     Image(systemName: "play.fill")
