@@ -168,6 +168,33 @@ nonisolated final class AnimatedImageSource {
     /// フレームキャッシュ（自前Dictionary管理でiOSメモリ圧迫でのevictを回避）
     private var frameCache: [Int: CGImage] = [:]
     private let cacheLock = NSLock()
+
+    /// 補正済みフレームの事前計算キャッシュ (2026-07-23 田中方針「時間かけて品質優先」段階②)。
+    /// SE2 実測でカクつきの真因が enhance 律速 (decode でなく denoise/personSeg が毎フレーム
+    /// 追いつかない) と確定したため、full プリロード時に補正まで前払いしてここへ置く。
+    /// view (AnimatedSourceImageView) の enhancedCache はここへのフォールバックを持つ。
+    /// dropFrameCache で一緒に解放される (メモリ回収経路は既存と同一)。
+    private var preEnhanced: [Int: CGImage] = [:]
+
+    func setPreEnhanced(_ cg: CGImage, at index: Int) {
+        cacheLock.lock()
+        preEnhanced[index] = cg
+        cacheLock.unlock()
+    }
+
+    func preEnhancedFrame(at index: Int) -> CGImage? {
+        cacheLock.lock()
+        let cg = preEnhanced[index]
+        cacheLock.unlock()
+        return cg
+    }
+
+    var preEnhancedCount: Int {
+        cacheLock.lock()
+        let n = preEnhanced.count
+        cacheLock.unlock()
+        return n
+    }
     /// プリフェッチ済み判定
     private var prefetchedMaxPixelSize: CGFloat = 0
     private(set) var isPrefetching: Bool = false
@@ -298,11 +325,13 @@ nonisolated final class AnimatedImageSource {
     func dropFrameCache() {
         cacheLock.lock()
         let n = frameCache.count
+        let ne = preEnhanced.count
         frameCache.removeAll()
+        preEnhanced.removeAll()
         prefetchedMaxPixelSize = 0
         prefetchCompleted = false
         cacheLock.unlock()
-        LogManager.shared.log("Mem", "AnimatedImageSource dropFrameCache dropped=\(n)")
+        LogManager.shared.log("Mem", "AnimatedImageSource dropFrameCache dropped=\(n) preEnhanced=\(ne)")
     }
 
     /// 全フレームを指定サイズで事前 decode してキャッシュ構築。

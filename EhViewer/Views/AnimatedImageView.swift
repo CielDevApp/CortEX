@@ -510,8 +510,14 @@ final class AnimatedSourceImageView: UIImageView {
 
     private func readEnhanced(_ idx: Int) -> CGImage? {
         enhancedCacheLock.lock()
-        defer { enhancedCacheLock.unlock() }
-        return enhancedCache[idx]
+        if let cg = enhancedCache[idx] {
+            enhancedCacheLock.unlock()
+            return cg
+        }
+        enhancedCacheLock.unlock()
+        // 段階② (2026-07-23): full プリロードが前払いした補正済みフレームへのフォールバック。
+        // これが無いと preEnhanced が居ても tick は miss 扱いになり前払いが無駄になる。
+        return animSource?.preEnhancedFrame(at: idx)
     }
 
     private func scheduleEnhance(idx: Int, cg: CGImage, config: AnimEnhanceConfig) {
@@ -979,6 +985,45 @@ struct BoomerangWebPView: View {
                 LogManager.shared.log("Anim", "preload progress \(batchEnd)/\(frameCount) elapsed=\(String(format: "%.2f", now))s")
             }
         }
+        // 段階② (2026-07-23 田中方針「時間かけて品質優先」): fullPreload は補正まで前払いする。
+        // SE2 実測でカクつきの真因が enhance 律速 (decode 全ヒットでも miss 89/90) と確定。
+        // メモリ予算: 補正済みはデコード済みと同サイズで倍増するため、
+        // 見積り (frames × dim² × 4B × 0.7) が空きメモリの 1/3 を超える時はスキップ (OOM 週の教訓)。
+        if fullPreload, !Task.isCancelled, coordinator.isPlaying(pageKey) {
+            let config = AnimEnhanceConfig.fromDefaults()
+            let estBytes = Double(frameCount) * Double(maxDim * maxDim) * 4.0 * 0.7
+            let budget = Double(os_proc_available_memory()) / 3.0
+            if config.hasAny && estBytes <= budget {
+                let te = CFAbsoluteTimeGetCurrent()
+                let gray: Bool = {
+                    guard let first = src.cachedFrame(at: 0) else { return false }
+                    return LanczosUpscaler.shared.isGrayscaleImage(first)
+                }()
+                var done = 0
+                var batch = 0
+                while batch < frameCount {
+                    if Task.isCancelled || !coordinator.isPlaying(pageKey) { break }
+                    let end = min(batch + batchSize, frameCount)
+                    let indices = Array(batch..<end)
+                    await Task.detached(priority: .userInitiated) { [src] in
+                        DispatchQueue.concurrentPerform(iterations: indices.count) { k in
+                            let i = indices[k]
+                            guard src.preEnhancedFrame(at: i) == nil,
+                                  let cg = src.cachedFrame(at: i),
+                                  let enhanced = AnimatedSourceImageView.applyEnhance(cg, config: config, isGrayscale: gray) else { return }
+                            src.setPreEnhanced(enhanced, at: i)
+                        }
+                    }.value
+                    done = end
+                    batch = end
+                    preloadProgress = Double(done) / Double(max(frameCount, 1))
+                }
+                LogManager.shared.log("Anim", "preload enhance phase done \(src.preEnhancedCount)/\(frameCount) dur=\(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - te))s")
+            } else if config.hasAny {
+                LogManager.shared.log("Anim", "preload enhance SKIP (est=\(Int(estBytes / 1_048_576))MB > budget=\(Int(budget / 1_048_576))MB)")
+            }
+        }
+
         let dur = CFAbsoluteTimeGetCurrent() - t0
         let cancelled = Task.isCancelled || !coordinator.isPlaying(pageKey)
         if cancelled {
