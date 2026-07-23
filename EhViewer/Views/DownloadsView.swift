@@ -1,6 +1,20 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// 負債返済ユニット3 (2026-07-23): リーダー起動パラメータを1つの値に束ねる。
+/// 旧実装はページ/強制方向/明示指定がバラバラの @State で、リセット規律を各起動サイトの
+/// 手作業と onDismiss に依存 → プリキャッシュ cancel 時の残留が「縦設定なのに横」事件を
+/// 起こした。起動サイトは毎回この値をアトミックに構築する = 残留という事故クラスが構造的に消える。
+private struct ReaderLaunch: Identifiable {
+    let meta: DownloadedGallery
+    var page: Int = 0
+    /// タイル起動=左右は 2026-07-21 田中裁定で撤回 (配管のみ残置、常に nil)
+    var forcedDirection: Int? = nil
+    /// タイルタップ等の明示ページ指定 (ページ0タイルでも再開プロンプトを出さない)
+    var explicitPage: Bool = false
+    var id: Int { meta.gid }   // 安定 id (UUID は再提示ループ地雷 = r007)
+}
+
 struct DownloadsView: View {
     @ObservedObject private var manager = DownloadManager.shared
     /// Phase E1 (2026-04-26): 外部参照フォルダ配下の作品リスト (Mac Catalyst のみ表示)。
@@ -10,7 +24,7 @@ struct DownloadsView: View {
     @State private var showImportPicker = false
     @State private var importMessage: String?
     @State private var highlightedGid: Int?
-    @State private var readerMeta: DownloadedGallery?
+    @State private var readerLaunch: ReaderLaunch?
     @State private var liveReaderMeta: DownloadedGallery?
     @State private var tabBarHidden = false
     /// 長押しプレビュー表示中のギャラリー（nil = 非表示）
@@ -29,34 +43,19 @@ struct DownloadsView: View {
     @State private var preCacheCancelled: Bool = false
     /// β-1 (2026-04-26): 外部参照 ZIP background materialize 完了通知でセル再描画 trigger
     @State private var externalCortexReadyCounter: Int = 0
-    /// プレビューからリーダー起動する時の初期ページ（通常起動では 0）
-    @State private var readerInitialPage: Int = 0
-    /// タイル起動=左右モード (forcedDirection=1) は 2026-07-21 深夜に田中裁定で撤回:
-    /// 「静止画をリストのサムネから開くと縦設定なのに横で開く」= 設定より強制が勝つのは誤り。
-    /// タイル起動も readerDirection 設定に従う。forcedDirection の配管は残すが常に nil。
-    @State private var readerForcedDirection: Int? = nil
-    /// タイルタップ = 明示ページ指定の印 (ページ0タイルでも再開プロンプトを出さないため)。
-    @State private var readerExplicitPage = false
     @ViewBuilder
-    private func readerCover(_ meta: DownloadedGallery) -> some View {
+    private func readerCover(_ launch: ReaderLaunch) -> some View {
         // 診断 2026-07-21 (iPad 1.5秒自動クローズ): zoom 遷移が犯人かの A/B レバー。
         // cortex://debug/set-default?key=zoomTransitionDisabled&value=true で遠隔切替。
         if UserDefaults.standard.bool(forKey: "zoomTransitionDisabled") {
-            LocalReaderView(meta: meta, initialPage: readerInitialPage, forcedDirection: readerForcedDirection,
-                            explicitPageLaunch: readerExplicitPage, route: .libraryCardTile)
+            LocalReaderView(meta: launch.meta, initialPage: launch.page, forcedDirection: launch.forcedDirection,
+                            explicitPageLaunch: launch.explicitPage, route: .libraryCardTile)
         } else {
-            LocalReaderView(meta: meta, initialPage: readerInitialPage, forcedDirection: readerForcedDirection,
-                            explicitPageLaunch: readerExplicitPage, route: .libraryCardTile)
+            LocalReaderView(meta: launch.meta, initialPage: launch.page, forcedDirection: launch.forcedDirection,
+                            explicitPageLaunch: launch.explicitPage, route: .libraryCardTile)
                 // B3: タップしたタイルから zoom。source 不一致時は既定遷移に自然フォールバック。
                 .navigationTransition(.zoom(sourceID: zoomSourceKey, in: zoomNS))
         }
-    }
-
-    private func resetReaderLaunchState() {
-        LogManager.shared.log("Tap", "readerCover onDismiss (launch state reset)")
-        readerInitialPage = 0
-        readerForcedDirection = nil
-        readerExplicitPage = false
     }
     /// エクスポート進行フェーズ（nil = idle）。
     /// - processing: ZIP streaming 中、進捗バー表示
@@ -496,10 +495,10 @@ struct DownloadsView: View {
             }
             #if os(iOS)
             // 診断 2026-07-21 (iPad 1.5秒自動クローズ): item が nil にされたのか外部要因 dismiss かの切り分け
-            .onChange(of: readerMeta?.gid) { oldValue, newValue in
-                LogManager.shared.log("Tap", "readerMeta \(oldValue.map(String.init) ?? "nil")→\(newValue.map(String.init) ?? "nil")")
+            .onChange(of: readerLaunch?.id) { oldValue, newValue in
+                LogManager.shared.log("Tap", "readerLaunch \(oldValue.map(String.init) ?? "nil")→\(newValue.map(String.init) ?? "nil")")
             }
-            .fullScreenCover(item: $readerMeta, onDismiss: resetReaderLaunchState, content: readerCover)
+            .fullScreenCover(item: $readerLaunch, content: readerCover)
             .fullScreenCover(item: $liveReaderMeta) { meta in
                 LocalReaderView(meta: meta, isLiveDownload: true, route: .libraryLiveDL)
             }
@@ -525,11 +524,8 @@ struct DownloadsView: View {
                             // 田中要望 2026-04-26: external_zip 以外 (internal DL / external subfolder)
                             // も pre-cache 経路に統一。non-animated WebP / 大容量 internal DL でも
                             // ensureAnimatedWebpScanned 等の主処理を background 完了させて Reader 起動。
-                            readerInitialPage = page
-
-                            readerExplicitPage = true   // 明示ページ指定 (横強制は2026-07-21撤回、設定に従う)
                             previewMeta = nil
-                            startPreCacheAndOpenReader(meta: m, count: 0)
+                            startPreCacheAndOpenReader(launch: ReaderLaunch(meta: m, page: page, explicitPage: true), count: 0)
                         }
                     )
                     .transition(.opacity)
@@ -825,20 +821,12 @@ struct DownloadsView: View {
             // 田中要望 2026-04-26: internal DL も pre-cache 経路に統一、ensureAnimatedWebpScanned
             // を background 完了させてから Reader 起動 (1000+ ページ初回 scan の freeze 回避)。
             zoomSourceKey = ""   // 読むは既定遷移 (B3: zoom はタイル経路のみ)
-            // 田中報告 2026-07-21: タイル起動の forced=1 が残留して「読む」経由でも横で開く。
-            // onDismiss リセット頼みをやめ、起動サイトごとに launch 状態を毎回明示する。
-            readerInitialPage = 0
-            readerForcedDirection = nil
-            readerExplicitPage = false
-            startPreCacheAndOpenReader(meta: meta, count: 0)
+            startPreCacheAndOpenReader(launch: ReaderLaunch(meta: meta), count: 0)
         } onTapPage: { page in
             LogManager.shared.log("Tap", "tile gid=\(meta.gid) page=\(page)")
             // タイルタップ → リーダーで該当ページ直接 (ワープ)。戻るはリストへ (fullScreenCover dismiss)
             zoomSourceKey = "\(meta.gid)-p\(page)"   // B3: このタイルから zoom
-            readerInitialPage = page
-
-            readerExplicitPage = true   // 明示ページ指定 (横強制は2026-07-21撤回、設定に従う)
-            startPreCacheAndOpenReader(meta: meta, count: 0)
+            startPreCacheAndOpenReader(launch: ReaderLaunch(meta: meta, page: page, explicitPage: true), count: 0)
         } onMore: {
             LogManager.shared.log("Tap", "more gid=\(meta.gid)")
             // 続きを見る → 既存ページ詳細 (LocalPreviewOverlay)
@@ -890,17 +878,10 @@ struct DownloadsView: View {
             coverThumbnail(gid: meta.gid)
         } onRead: {
             zoomSourceKey = ""
-            // 田中報告 2026-07-21: 残留 forced 対策 (completedRow 側と同じ)
-            readerInitialPage = 0
-            readerForcedDirection = nil
-            readerExplicitPage = false
-            startPreCacheAndOpenReader(meta: meta, count: 3)
+            startPreCacheAndOpenReader(launch: ReaderLaunch(meta: meta), count: 3)
         } onTapPage: { page in
             zoomSourceKey = "\(meta.gid)-p\(page)"
-            readerInitialPage = page
-
-            readerExplicitPage = true   // 明示ページ指定 (横強制は2026-07-21撤回、設定に従う)
-            startPreCacheAndOpenReader(meta: meta, count: 3)
+            startPreCacheAndOpenReader(launch: ReaderLaunch(meta: meta, page: page, explicitPage: true), count: 3)
         } onMore: {
             previewMeta = meta
         }
@@ -1250,7 +1231,7 @@ struct DownloadsView: View {
                 return
             }
             LogManager.shared.log("Tap", "grid cell gid=\(meta.gid)")
-            startPreCacheAndOpenReader(meta: meta, count: meta.source == "external_zip" ? 3 : 0)
+            startPreCacheAndOpenReader(launch: ReaderLaunch(meta: meta), count: meta.source == "external_zip" ? 3 : 0)
         } label: {
             // UI 刷新 Phase 1.9 (2026-07-03): 一覧グリッドと同じカバー主役カード型
             VStack(alignment: .leading, spacing: 0) {
@@ -1408,10 +1389,11 @@ struct DownloadsView: View {
     //
     // 外部参照 ZIP gallery の最初の N ページを background materialize してから
     // Reader を開く。pre-cache 中は overlay で "準備中... K/N" 進捗表示、
-    // 完了で readerMeta = meta セット → Reader 起動時には cache hit のため
+    // 完了で readerLaunch セット → Reader 起動時には cache hit のため
     // main thread の SMB IO ブロックが発生しない。
 
-    private func startPreCacheAndOpenReader(meta: DownloadedGallery, count: Int) {
+    private func startPreCacheAndOpenReader(launch: ReaderLaunch, count: Int) {
+        let meta = launch.meta
         // 田中要望 2026-04-27: 1000+ ページ作品で precache が 401/937 ページで止まる件。
         //   旧 budget = 3.5GB / 8GB 固定 → 1112 page 動画作品 (UnityNay 10GB) の全 page
         //   が入らない。cache budget も含め SSD 空きから動的算出 (空き - 4GB headroom、
@@ -1470,12 +1452,9 @@ struct DownloadsView: View {
                 preCacheMeta = nil
                 preCacheCancelled = false
                 if !cancelled {
-                    readerMeta = meta  // cancel じゃなければ Reader 起動
-                } else {
-                    // 田中報告 2026-07-21: cancel だと cover が開かず onDismiss リセットも
-                    // 走らないため forced=1/initialPage が残留し、以後の「読む」起動が
-                    // 横強制で汚染される (縦設定なのに横のまま事件の機序)
-                    resetReaderLaunchState()
+                    // cancel じゃなければ Reader 起動。launch は値ごと渡ってくるので
+                    // 残留・リセット漏れという事故クラスが存在しない (U3)
+                    readerLaunch = launch
                 }
             }
         }
