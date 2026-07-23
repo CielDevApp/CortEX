@@ -81,6 +81,10 @@ final class AnimatedSourceImageView: UIImageView {
         self.currentSourceID = sid
         self.isActive = isActive
         self.lastDisplayedIdx = -1
+        // カクカク検知 (2026-07-23 田中案): source 切替でカウンタと発火フラグをリセット
+        tickCount = 0
+        tickMissCount = 0
+        choppyFired = false
         enhancedCacheLock.lock()
         enhancedCache.removeAll(keepingCapacity: false)
         enhanceInflight.removeAll(keepingCapacity: false)
@@ -424,6 +428,11 @@ final class AnimatedSourceImageView: UIImageView {
 
     private var tickCount: Int = 0
     private var tickMissCount: Int = 0
+    /// カクカク検知 (2026-07-23 田中案「カクカク検知したらプリロード選べるように」):
+    /// rolling 追跡が追いつかない (= プリロード級分類の崖からこぼれた重量作品) を実測で検知し、
+    /// SwiftUI 側に一度だけ通知する。閾値: 3秒経過 (90tick) 以降に miss 率 30% 以上。
+    var onChoppy: (() -> Void)?
+    private var choppyFired = false
 
     @objc private func tick(_ link: CADisplayLink) {
         guard let source = animSource else { return }
@@ -453,6 +462,14 @@ final class AnimatedSourceImageView: UIImageView {
 
         if tickCount % 30 == 0 {
             LogManager.shared.log("Anim", "tick=\(tickCount) \(diagTag) idx=\(idx) last=\(lastDisplayedIdx) miss=\(tickMissCount) elapsed=\(String(format: "%.2f", elapsed))s")
+        }
+
+        // カクカク検知: 3秒 (90tick) 以降、miss 率 30% 以上で一度だけ通知。
+        // プリロード級分類 (canvas 2000px の崖) からこぼれた重量作品を実測で拾う。
+        if !choppyFired, tickCount >= 90, tickMissCount * 10 >= tickCount * 3 {
+            choppyFired = true
+            LogManager.shared.log("Anim", "CHOPPY detected \(diagTag) miss=\(tickMissCount)/\(tickCount) → suggest preload")
+            onChoppy?()
         }
 
         // 通常モード補正設定はライブで UserDefaults を読む。
@@ -638,6 +655,9 @@ struct BoomerangWebPView: View {
     @State private var loadFailed: Bool = false
     @State private var isPreloading: Bool = false
     @State private var preloadProgress: Double = 0
+    /// カクカク検知 → プリロード提案 (2026-07-23 田中案)。1再生につき1回だけ提案する
+    @State private var suggestPreload = false
+    @State private var choppyPreloadDone = false
     @ObservedObject private var coordinator = AnimatedPlaybackCoordinator.shared
     /// PSP PMDVis 方式プリロード: ▶ タップ → 全 frame 並列 decode → 完了後に再生開始。
     /// 初動チェース (~5s) を完全除去する代償に、再生開始まで待機時間 (iPhone 3-4s / Mac 1-2s)。
@@ -664,7 +684,8 @@ struct BoomerangWebPView: View {
             // 再生セル: source が ready かつプリロード中でない時のみ表示。
             // プリロード中は静止画 placeholder を残し、裏で全 frame decode を走らせる。
             if isPlaying, let source, !isPreloading {
-                AnimatedImageCellView(source: source, isActive: true, playbackKey: pageKey)
+                AnimatedImageCellView(source: source, isActive: true, playbackKey: pageKey,
+                                      onChoppy: choppyPreloadDone ? nil : { suggestPreload = true })
             }
             // ▶ オーバーレイ: 停止中 (再生もプリロードもしてない) のみ表示。
             if !isPlaying && !isPreloading {
@@ -707,6 +728,42 @@ struct BoomerangWebPView: View {
                 .padding(20)
                 .background(Color.black.opacity(0.55))
                 .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
+        }
+        // カクカク検知 → プリロード提案 (2026-07-23 田中案「カクカク検知したらプリロード選べるように」)。
+        // rolling が追いつかない重量作品 (プリロード級分類の崖からこぼれた個体) を実測で拾い、
+        // ユーザーの選択でプリロードに切り替える。無視も可 (X で閉じる)。
+        .overlay(alignment: .bottom) {
+            if suggestPreload && isPlaying && !isPreloading {
+                HStack(spacing: 10) {
+                    Button {
+                        suggestPreload = false
+                        choppyPreloadDone = true
+                        guard let src = source else { return }
+                        LogManager.shared.log("Anim", "choppy preload ACCEPTED key=\(readerID)#\(pageIndex)")
+                        Task { await runPreload(src) }
+                    } label: {
+                        Label("プリロードで滑らかに", systemImage: "bolt.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.blue)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    Button {
+                        suggestPreload = false
+                        choppyPreloadDone = true   // この再生では二度と出さない
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.bottom, 12)
+                .transition(.opacity)
             }
         }
         // 再生中に全体タップ → 停止 (▶ ボタンが非表示になっても "Tap to stop" できるよう)
@@ -952,18 +1009,22 @@ struct AnimatedImageCellView: UIViewRepresentable {
     var isActive: Bool = true
     /// Coordinator 管理下の再生ならセルの帳簿キー (負債返済ユニット1: enforced-stop 用)
     var playbackKey: AnimatedPlaybackCoordinator.PageKey? = nil
+    /// カクカク検知の通知先 (2026-07-23 田中案)。nil = 検知不要
+    var onChoppy: (() -> Void)? = nil
 
     func makeUIView(context: Context) -> AnimatedSourceImageView {
         let iv = AnimatedSourceImageView()
         iv.contentMode = .scaleAspectFit
         iv.clipsToBounds = true
         iv.playbackKey = playbackKey
+        iv.onChoppy = onChoppy
         iv.setSource(source, isActive: isActive)
         return iv
     }
 
     func updateUIView(_ uiView: AnimatedSourceImageView, context: Context) {
         uiView.playbackKey = playbackKey
+        uiView.onChoppy = onChoppy
         uiView.setSource(source, isActive: isActive)
     }
 }
