@@ -189,6 +189,14 @@ nonisolated final class AnimatedImageSource {
         return cg
     }
 
+    /// 現在キャッシュ済みフレーム数 (順次プリロードの進捗ポーリング用、2026-07-23)
+    var cachedFrameCount: Int {
+        cacheLock.lock()
+        let n = frameCache.count
+        cacheLock.unlock()
+        return n
+    }
+
     var preEnhancedCount: Int {
         cacheLock.lock()
         let n = preEnhanced.count

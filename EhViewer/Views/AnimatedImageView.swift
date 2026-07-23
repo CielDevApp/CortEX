@@ -3,6 +3,15 @@ import SwiftUI
 #if canImport(UIKit)
 import UIKit
 
+/// 順次プリロード (detached) の打ち切りフラグ。Main のポーラーが立て、
+/// background デコードループが shouldContinue で読む (2026-07-23)。
+final class PreloadCancelBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _cancelled = false
+    var cancelled: Bool { lock.lock(); defer { lock.unlock() }; return _cancelled }
+    func cancel() { lock.lock(); _cancelled = true; lock.unlock() }
+}
+
 /// 通常モード補正設定スナップショット。per-frame enhance の入力一式。
 /// 静画 applyFilterPipeline と同じ排他: enhanceFilter ON 時は HDR 抑止。
 /// ファイルスコープ struct (AnimatedSourceImageView の外) にすることで Equatable 適合が
@@ -967,15 +976,29 @@ struct BoomerangWebPView: View {
         // 差分エンコード WebP (libwebpDecoder=nil = 全フレーム非独立) は parallelFrame が
         // CGImageSource O(N²) に落ちる (STYKG: 1枚 203→3625ms)。順次デコーダ O(N) に切替。
         // 2026-07-23 真因確定: WebPParallelDecoder は独立フレームのみ、差分は順次一択。
+        // デコードは detached (順次同期ループを Main で回すとオーバーレイが描画されず
+        // 進捗が出ない + Main を塞ぐ)。Main はポーリングで進捗表示と再生停止監視だけ。
         if src.libwebpDecoder == nil {
-            let n = src.sequentialPreloadDiff(maxPixelSize: maxDim, shouldContinue: {
-                if Task.isCancelled || !coordinator.isPlaying(pageKey) { return false }
-                if CFAbsoluteTimeGetCurrent() - t0 >= wallCeiling { return false }
-                if Double(os_proc_available_memory()) < memFloorBytes { return false }
-                return true
-            }, onProgress: { done in
-                preloadProgress = Double(done) / Double(max(frameCount, 1))
-            })
+            let cancelBox = PreloadCancelBox()
+            let handle = Task.detached(priority: .userInitiated) { () -> Int in
+                src.sequentialPreloadDiff(maxPixelSize: maxDim, shouldContinue: {
+                    if cancelBox.cancelled { return false }
+                    if CFAbsoluteTimeGetCurrent() - t0 >= wallCeiling { return false }
+                    if Double(os_proc_available_memory()) < memFloorBytes { return false }
+                    return true
+                }, onProgress: { _ in })
+            }
+            // Main: 80ms 毎に進捗更新 + 再生停止監視。デコード完了は done フラグで検知。
+            let progressPoller = Task { @MainActor in
+                while !Task.isCancelled {
+                    if !coordinator.isPlaying(pageKey) { cancelBox.cancel() }
+                    preloadProgress = Double(src.cachedFrameCount) / Double(max(frameCount, 1))
+                    try? await Task.sleep(nanoseconds: 80_000_000)
+                }
+            }
+            if Task.isCancelled { cancelBox.cancel() }
+            let n = await handle.value
+            progressPoller.cancel()
             if n > 0 {
                 LogManager.shared.log("Anim", "preload SEQ (diff-encoded) preloaded=\(n)/\(frameCount) dur=\(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - t0))s")
                 isPreloading = false
