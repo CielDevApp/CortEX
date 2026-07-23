@@ -747,7 +747,7 @@ struct BoomerangWebPView: View {
                         choppyPreloadDone = true
                         guard let src = source else { return }
                         LogManager.shared.log("Anim", "choppy preload ACCEPTED key=\(readerID)#\(pageIndex)")
-                        Task { await runPreload(src, fullPreload: true) }
+                        Task { await runPreload(src, fullPreload: true, prepayEnhance: true) }
                     } label: {
                         Label("プリロードで滑らかに", systemImage: "bolt.fill")
                             .font(.caption.weight(.semibold))
@@ -953,7 +953,7 @@ struct BoomerangWebPView: View {
     /// - Parameter fullPreload: true = 時間予算を無視して全フレーム走行 (カクカク検知からの
     ///   ユーザー明示承諾用。2026-07-23: 級 .none は targetSeconds=0 のため予算方式だと
     ///   1バッチも走らず「押しても走らない」になる)。キャンセルは既存ボタンで可能。
-    private func runPreload(_ src: AnimatedImageSource, fullPreload: Bool = false) async {
+    private func runPreload(_ src: AnimatedImageSource, fullPreload: Bool = false, prepayEnhance: Bool = false) async {
         isPreloading = true
         preloadProgress = 0
         let t0 = CFAbsoluteTimeGetCurrent()
@@ -989,7 +989,7 @@ struct BoomerangWebPView: View {
         // SE2 実測でカクつきの真因が enhance 律速 (decode 全ヒットでも miss 89/90) と確定。
         // メモリ予算: 補正済みはデコード済みと同サイズで倍増するため、
         // 見積り (frames × dim² × 4B × 0.7) が空きメモリの 1/3 を超える時はスキップ (OOM 週の教訓)。
-        if fullPreload, !Task.isCancelled, coordinator.isPlaying(pageKey) {
+        if fullPreload, prepayEnhance, !Task.isCancelled, coordinator.isPlaying(pageKey) {
             let config = AnimEnhanceConfig.fromDefaults()
             let estBytes = Double(frameCount) * Double(maxDim * maxDim) * 4.0 * 0.7
             let budget = Double(os_proc_available_memory()) / 3.0
