@@ -963,11 +963,27 @@ struct BoomerangWebPView: View {
         LogManager.shared.log("Anim", "preload start frames=\(frameCount) target=\(fullPreload ? "full" : "\(target)s") maxDim=\(Int(maxDim))")
         let batchSize = 10
         var batchStart = 0
+        // 完走主義の物理上限 (2026-07-23 17e/STYKG 実測: 385f×844px は全コア連続 decode +
+        // 1.5GB キャッシュ蓄積でメモリ圧/熱スロットルに入り 1枚 114ms→3秒超へ劣化、外挿3分。
+        // 上限到達で再生開始し残りは rolling が裏で継続 (preloadOn 時は evict 停止なので蓄積する)。
+        let wallCeiling: Double = 15.0
+        let memFloorBytes = 800.0 * 1_048_576
+        var stopReason: String? = nil
         while batchStart < frameCount {
             if Task.isCancelled { break }
             if !coordinator.isPlaying(pageKey) { break }
             let elapsed = CFAbsoluteTimeGetCurrent() - t0
             if !fullPreload && elapsed >= target { break }
+            if fullPreload {
+                if elapsed >= wallCeiling {
+                    stopReason = "wallCeiling \(Int(wallCeiling))s"
+                    break
+                }
+                if Double(os_proc_available_memory()) < memFloorBytes {
+                    stopReason = "memFloor free<800MB"
+                    break
+                }
+            }
             let batchEnd = min(batchStart + batchSize, frameCount)
             let n = batchEnd - batchStart
             let start = batchStart
@@ -1028,6 +1044,8 @@ struct BoomerangWebPView: View {
         let cancelled = Task.isCancelled || !coordinator.isPlaying(pageKey)
         if cancelled {
             LogManager.shared.log("Anim", "preload CANCELLED at \(batchStart)/\(frameCount) dur=\(String(format: "%.2f", dur))s")
+        } else if let stopReason {
+            LogManager.shared.log("Anim", "preload BOUNDED (\(stopReason)) preloaded=\(batchStart)/\(frameCount) dur=\(String(format: "%.2f", dur))s (rolling decodes rest)")
         } else {
             LogManager.shared.log("Anim", "preload DONE duration=\(String(format: "%.2f", dur))s preloaded=\(batchStart)/\(frameCount) (rolling decodes rest)")
         }
