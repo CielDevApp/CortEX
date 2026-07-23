@@ -826,7 +826,7 @@ struct BoomerangWebPView: View {
             guard coordinator.isPlaying(pageKey) else { return }
             LogManager.shared.log("Boomerang", "source CACHE HIT frames=\(cached.frameCount)")
             if preloadPlayback && shouldPreload(cached) {
-                await runPreload(cached)
+                await runPreload(cached, fullPreload: true)
                 guard coordinator.isPlaying(pageKey), !Task.isCancelled else { return }
             }
             self.source = cached
@@ -863,7 +863,7 @@ struct BoomerangWebPView: View {
         }
         LogManager.shared.log("Boomerang", "source ready frames=\(loaded.frameCount) size=\(Int(loaded.pixelSize.width))x\(Int(loaded.pixelSize.height))")
         if preloadPlayback && shouldPreload(loaded) {
-            await runPreload(loaded)
+            await runPreload(loaded, fullPreload: true)
             guard coordinator.isPlaying(pageKey), !Task.isCancelled else { return }
         }
         self.source = loaded
