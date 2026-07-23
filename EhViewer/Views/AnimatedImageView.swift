@@ -961,7 +961,9 @@ struct BoomerangWebPView: View {
         let maxDim = preloadMaxDim(for: src)
         let target = classifyPreload(src).targetSeconds
         LogManager.shared.log("Anim", "preload start frames=\(frameCount) target=\(fullPreload ? "full" : "\(target)s") maxDim=\(Int(maxDim))")
-        let batchSize = 10
+        // batchSize 10→30 (2026-07-23 田中指摘「スレッド全部使ってんのか」): 6コア機で
+        // 10枚バッチは2波目が半端になり実効並列度が落ちる。30枚で波を埋める。
+        let batchSize = 30
         var batchStart = 0
         // 完走主義の物理上限 (2026-07-23 17e/STYKG 実測: 385f×844px は全コア連続 decode +
         // 1.5GB キャッシュ蓄積でメモリ圧/熱スロットルに入り 1枚 114ms→3秒超へ劣化、外挿3分。
@@ -987,11 +989,26 @@ struct BoomerangWebPView: View {
             let batchEnd = min(batchStart + batchSize, frameCount)
             let n = batchEnd - batchStart
             let start = batchStart
-            await Task.detached(priority: .userInitiated) { [src] in
+            // 並列度計測 (2026-07-23 田中指摘): wall vs Σper-frame で実効並列度を出す。
+            // 並列度が波ごとに崩れていくのか、1枚あたりが遅くなるのか (熱/メモリ圧) を分離する。
+            let tb = CFAbsoluteTimeGetCurrent()
+            let sumMicros = await Task.detached(priority: .userInitiated) { [src] () -> Int64 in
+                let box = UnsafeMutablePointer<Int64>.allocate(capacity: n)
+                box.initialize(repeating: 0, count: n)
                 DispatchQueue.concurrentPerform(iterations: n) { k in
+                    let wt = CFAbsoluteTimeGetCurrent()
                     _ = src.parallelFrame(at: start + k, maxPixelSize: maxDim)
+                    box[k] = Int64((CFAbsoluteTimeGetCurrent() - wt) * 1_000_000)
                 }
+                let total = (0..<n).reduce(Int64(0)) { $0 + box[$1] }
+                box.deinitialize(count: n)
+                box.deallocate()
+                return total
             }.value
+            let batchWallMs = Int((CFAbsoluteTimeGetCurrent() - tb) * 1000)
+            let batchSumMs = Int(sumMicros / 1000)
+            let par = batchWallMs > 0 ? Double(batchSumMs) / Double(batchWallMs) : 0
+            LogManager.shared.log("Perf", "preloadBatch [\(start)..<\(batchEnd)] wall=\(batchWallMs)ms avg=\(n > 0 ? batchSumMs / n : 0)ms/f par=\(String(format: "%.2f", par))x thermal=\(ProcessInfo.processInfo.thermalState.rawValue)")
             batchStart = batchEnd
             let now = CFAbsoluteTimeGetCurrent() - t0
             preloadProgress = fullPreload
