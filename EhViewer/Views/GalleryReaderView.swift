@@ -357,40 +357,20 @@ struct GalleryReaderView: View {
 
     @MainActor
     private func resolveReaderMode() async {
+        // 負債返済ユニット2 (2026-07-23): 判定ラダーは ReaderModeResolver に一元化。
+        // タイトル heuristic の計算 (E-H 固有) だけここに残す。
         LogManager.shared.log("Anim", "Online resolve start gid=\(gallery.gid) userDir=\(userReaderDirection) hasMeta=\(downloadManager.downloads[gallery.gid] != nil)")
-        guard userReaderDirection == 1 else {
-            resolvedDirection = userReaderDirection
-            return
-        }
-        // 1) DL 済み meta があれば実走査結果を優先 (確実)
-        if downloadManager.downloads[gallery.gid] != nil {
-            await downloadManager.ensureAnimatedWebpScanned(gid: gallery.gid)
-            if let m = downloadManager.downloads[gallery.gid] {
-                LogManager.shared.log("Anim", "Online resolve meta gid=\(gallery.gid) hasAnim=\(m.hasAnimatedWebp ?? false) override=\(m.readerModeOverride?.rawValue ?? "nil")")
-                if let ov = m.readerModeOverride {
-                    resolvedDirection = (ov == .horizontal) ? 1 : 0
-                    return
-                }
-                if m.hasAnimatedWebp == true {
-                    LogManager.shared.log("Anim", "Online resolve: SHOW DIALOG (meta) gid=\(gallery.gid)")
-                    showAnimationDialog = true
-                    return
-                }
-                if m.hasAnimatedWebp == false {
-                    resolvedDirection = 1
-                    return
-                }
-            }
-        }
-        // 2) DL 前のオンライン読みはタイトル/カテゴリ heuristic でフォールバック判定
         let title = gallery.title
         let isLikelyAnimated = title.contains("Animated") || title.contains("GIF") || title.contains("gif") || title.contains("🎥")
-        LogManager.shared.log("Anim", "Online resolve heuristic gid=\(gallery.gid) titleHit=\(isLikelyAnimated) title=\(title.prefix(40))")
-        if isLikelyAnimated {
-            // online 状態では override 保存先がないので毎回ダイアログ (DL 後に override 永続化される)
-            showAnimationDialog = true
-        } else {
-            resolvedDirection = 1
+        let outcome = await ReaderModeResolver.resolve(.init(
+            gid: gallery.gid,
+            userDirection: userReaderDirection,
+            heuristicHit: isLikelyAnimated,
+            logPrefix: "Online"
+        ))
+        switch outcome.resolution {
+        case .direction(let dir): resolvedDirection = dir
+        case .askUser: showAnimationDialog = true
         }
     }
 

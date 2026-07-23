@@ -336,40 +336,23 @@ struct NhentaiReaderView: View {
 
     @MainActor
     private func resolveReaderMode() async {
-        guard userReaderDirection == 1 else {
-            resolvedDirection = userReaderDirection
-            return
-        }
-        let nhGid = -gallery.id
-        // 1) DL 済み meta があれば実走査結果を優先
-        if downloadManager.downloads[nhGid] != nil {
-            await downloadManager.ensureAnimatedWebpScanned(gid: nhGid)
-            if let m = downloadManager.downloads[nhGid] {
-                if let ov = m.readerModeOverride {
-                    resolvedDirection = (ov == .horizontal) ? 1 : 0
-                    return
-                }
-                if m.hasAnimatedWebp == true {
-                    showAnimationDialog = true
-                    return
-                }
-                if m.hasAnimatedWebp == false {
-                    resolvedDirection = 1
-                    return
-                }
-            }
-        }
-        // 2) DL 前のオンライン読みは title + tags heuristic
+        // 負債返済ユニット2 (2026-07-23): 判定ラダーは ReaderModeResolver に一元化。
+        // title + tags heuristic の計算 (nh 固有) だけここに残す。
         let title = gallery.displayTitle
         let titleHit = title.contains("Animated") || title.contains("GIF") || title.contains("gif") || title.contains("🎥")
         let tagHit = (gallery.tags ?? []).contains { tag in
             let n = tag.name.lowercased()
             return n == "animated" || n.contains("gif")
         }
-        if titleHit || tagHit {
-            showAnimationDialog = true
-        } else {
-            resolvedDirection = 1
+        let outcome = await ReaderModeResolver.resolve(.init(
+            gid: -gallery.id,
+            userDirection: userReaderDirection,
+            heuristicHit: titleHit || tagHit,
+            logPrefix: "NH"
+        ))
+        switch outcome.resolution {
+        case .direction(let dir): resolvedDirection = dir
+        case .askUser: showAnimationDialog = true
         }
     }
 

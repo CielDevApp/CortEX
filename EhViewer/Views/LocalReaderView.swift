@@ -443,49 +443,27 @@ struct LocalReaderView: View {
 
     @MainActor
     private func resolveReaderMode() async {
-        // タイル起動 (田中要望 2026-07-21: 左右モードで開く)。
-        // ただし動画入りギャラリーは対象外 — 動画は既存のモード選択フロー (縦推奨) に委ねる。
-        // 横を強制すると動画の再生経路が壊れて再生ボタンが出ない (2026-07-21 田中報告)。
-        if let forced = forcedDirection {
-            await downloadManager.ensureAnimatedWebpScanned(gid: meta.gid)
-            let scanned = downloadManager.downloads[meta.gid] ?? meta
-            if !(scanned.hasAnimatedWebp ?? false) {
-                resolvedDirection = forced
-                LogManager.shared.log("Anim", "Local resolve: forced dir=\(forced) (tile, static gallery)")
-                return
-            }
-            LogManager.shared.log("Anim", "Local resolve: tile launch but animated → 通常解決へ")
-        }
+        // 負債返済ユニット2 (2026-07-23): 判定ラダーは ReaderModeResolver に一元化。
+        // ここは結果の反映と性能警告 (ローカル固有) だけを持つ。
         LogManager.shared.log("Anim", "Local resolve start gid=\(meta.gid) userDir=\(readerDirection)")
-        // 縦設定 → 即解決 (どのみち WebP アニメ再生可能)
-        guard readerDirection == 1 else {
-            resolvedDirection = readerDirection
-            LogManager.shared.log("Anim", "Local resolve: vertical setting, skip dialog")
-            return
-        }
-        // 既存ギャラリー migration (hasAnimatedWebp が nil なら scan + 保存)
-        await downloadManager.ensureAnimatedWebpScanned(gid: meta.gid)
-        let m = downloadManager.downloads[meta.gid] ?? meta
-        let hasAnim = m.hasAnimatedWebp ?? false
-        let ov = m.readerModeOverride
-        LogManager.shared.log("Anim", "Local resolve gid=\(meta.gid) hasAnim=\(hasAnim) override=\(ov?.rawValue ?? "nil")")
-        if !hasAnim {
-            resolvedDirection = 1
-            return
-        }
+        let outcome = await ReaderModeResolver.resolve(.init(
+            gid: meta.gid,
+            userDirection: readerDirection,
+            forcedDirection: forcedDirection,
+            localMeta: meta,
+            logPrefix: "Local"
+        ))
         // 性能警告 (2026-07-21 SE2 実測): A17 以下は WebP 動画の実時間再生に CPU が足りない。
         // 未来の端末には出ない (DeviceCapability は世代番号の閾値判定)。1度きり + 抑止可能。
-        if DeviceCapability.isAnimatedWebPUnderpowered,
+        if outcome.hasAnimatedConfirmed,
+           DeviceCapability.isAnimatedWebPUnderpowered,
            !UserDefaults.standard.bool(forKey: UDKey.webpPerfWarningSuppressed) {
             showWebPPerfWarning = true
         }
-        // 動画 WebP あり + 横設定: override 確認 → なければダイアログ
-        if let ov = m.readerModeOverride {
-            resolvedDirection = (ov == .horizontal) ? 1 : 0
-            return
+        switch outcome.resolution {
+        case .direction(let dir): resolvedDirection = dir
+        case .askUser: showAnimationDialog = true
         }
-        LogManager.shared.log("Anim", "Local resolve: SHOW DIALOG gid=\(meta.gid)")
-        showAnimationDialog = true
     }
 
     // MARK: - ライブDL監視
