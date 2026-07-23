@@ -961,15 +961,34 @@ struct BoomerangWebPView: View {
         let maxDim = preloadMaxDim(for: src)
         let target = classifyPreload(src).targetSeconds
         LogManager.shared.log("Anim", "preload start frames=\(frameCount) target=\(fullPreload ? "full" : "\(target)s") maxDim=\(Int(maxDim))")
+        let wallCeiling: Double = 15.0
+        let memFloorBytes = 800.0 * 1_048_576
+
+        // 差分エンコード WebP (libwebpDecoder=nil = 全フレーム非独立) は parallelFrame が
+        // CGImageSource O(N²) に落ちる (STYKG: 1枚 203→3625ms)。順次デコーダ O(N) に切替。
+        // 2026-07-23 真因確定: WebPParallelDecoder は独立フレームのみ、差分は順次一択。
+        if src.libwebpDecoder == nil {
+            let n = src.sequentialPreloadDiff(maxPixelSize: maxDim, shouldContinue: {
+                if Task.isCancelled || !coordinator.isPlaying(pageKey) { return false }
+                if CFAbsoluteTimeGetCurrent() - t0 >= wallCeiling { return false }
+                if Double(os_proc_available_memory()) < memFloorBytes { return false }
+                return true
+            }, onProgress: { done in
+                preloadProgress = Double(done) / Double(max(frameCount, 1))
+            })
+            if n > 0 {
+                LogManager.shared.log("Anim", "preload SEQ (diff-encoded) preloaded=\(n)/\(frameCount) dur=\(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - t0))s")
+                isPreloading = false
+                preloadProgress = 0
+                return
+            }
+            // n==0 = WebP でない / libwebp 非対応 → 既存並列へフォールスルー
+        }
+
         // batchSize 10→30 (2026-07-23 田中指摘「スレッド全部使ってんのか」): 6コア機で
         // 10枚バッチは2波目が半端になり実効並列度が落ちる。30枚で波を埋める。
         let batchSize = 30
         var batchStart = 0
-        // 完走主義の物理上限 (2026-07-23 17e/STYKG 実測: 385f×844px は全コア連続 decode +
-        // 1.5GB キャッシュ蓄積でメモリ圧/熱スロットルに入り 1枚 114ms→3秒超へ劣化、外挿3分。
-        // 上限到達で再生開始し残りは rolling が裏で継続 (preloadOn 時は evict 停止なので蓄積する)。
-        let wallCeiling: Double = 15.0
-        let memFloorBytes = 800.0 * 1_048_576
         var stopReason: String? = nil
         while batchStart < frameCount {
             if Task.isCancelled { break }

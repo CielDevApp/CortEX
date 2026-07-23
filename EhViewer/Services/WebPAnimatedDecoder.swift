@@ -23,9 +23,15 @@ nonisolated final class WebPAnimatedDecoder: @unchecked Sendable {
     /// 前回 getNext の timestamp（累積 ms）。delay 計算用
     private var lastTimestampMs: Int32 = 0
 
-    init?(url: URL) {
+    convenience init?(url: URL) {
         // ファイル全体をメモリへ読み込む（libwebp は連続メモリ参照が必要）
         guard let data = try? Data(contentsOf: url), !data.isEmpty else { return nil }
+        self.init(data: data)
+    }
+
+    /// 差分エンコード WebP の順次プリロード用 (2026-07-23)。rawData から直接構築。
+    init?(data: Data) {
+        guard !data.isEmpty else { return nil }
         let size = data.count
         let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: size)
         data.copyBytes(to: buf, count: size)

@@ -321,6 +321,55 @@ nonisolated final class AnimatedImageSource {
     }
     #endif
 
+    /// 差分エンコード WebP の順次プリロード (2026-07-23、STYKG作品のO(N²)爆発対策)。
+    ///
+    /// 背景: 差分エンコード WebP (dispose/blend/部分更新) は全フレーム独立でないため
+    /// WebPParallelDecoder に載らず (libwebpDecoder=nil)、parallelFrame が
+    /// CGImageSourceCreateThumbnailAtIndex に落ちる。これは frame N を得るのに内部で
+    /// 0→N を毎回合成 = O(N)。それを concurrentPerform で 385 枚ランダム並列 = O(N²)。
+    /// 17e 実測で 1 枚 203ms→3625ms へ爆発 (熱でもメモリ枯渇でもなく、頭出し累積が真因)。
+    ///
+    /// 対策: WebPAnimDecoder (順次デコーダ、前フレーム状態を再利用) で頭から 1 本で回す = O(N)。
+    /// 各フレームは差分 1 ステップ分だけなので一定コスト。並列はできないが O(N²)→O(N) の勝ち。
+    /// - Returns: キャッシュに入れたフレーム数 (0 = WebP でない / libwebp 非対応 → 呼び出し側は既存並列へ)
+    func sequentialPreloadDiff(maxPixelSize: CGFloat,
+                               shouldContinue: () -> Bool,
+                               onProgress: (Int) -> Void) -> Int {
+        #if canImport(libwebp)
+        guard let dec = WebPAnimatedDecoder(data: rawData) else { return 0 }
+        var i = 0
+        while i < frameCount {
+            if !shouldContinue() { break }
+            guard let (cg, _, _) = dec.nextFrame() else { break }
+            let stored = Self.downscaleIfNeeded(cg, maxPixelSize: maxPixelSize) ?? cg
+            cacheLock.lock()
+            frameCache[i] = stored
+            cacheLock.unlock()
+            i += 1
+            onProgress(i)
+        }
+        return i
+        #else
+        return 0
+        #endif
+    }
+
+    /// aspect 保持ダウンスケール。長辺 ≤ maxPixelSize ならそのまま返す。
+    private static func downscaleIfNeeded(_ cg: CGImage, maxPixelSize: CGFloat) -> CGImage? {
+        let longer = CGFloat(max(cg.width, cg.height))
+        guard maxPixelSize > 0, longer > maxPixelSize else { return cg }
+        let scale = maxPixelSize / longer
+        let w = max(1, Int(CGFloat(cg.width) * scale))
+        let h = max(1, Int(CGFloat(cg.height) * scale))
+        let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
+                                  bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: bitmapInfo) else { return cg }
+        ctx.interpolationQuality = .medium
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return ctx.makeImage()
+    }
+
     /// メモリ警告時にフレームキャッシュを解放。次回フレーム要求時に再 decode される。
     func dropFrameCache() {
         cacheLock.lock()

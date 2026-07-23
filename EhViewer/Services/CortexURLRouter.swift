@@ -105,6 +105,18 @@ enum CortexURLRouter {
             return openOnlineReader(params: params)
         case "reader/local":
             return openLocalReader(params: params)
+        case "reader/play":
+            // 診断用 (2026-07-23): CUI から ▶ 再生トグル (simctl はタップできないため)。
+            // 例: cortex://reader/play?readerID=local-990001&page=0
+            guard let rid = params["readerID"], let pageStr = params["page"], let page = Int(pageStr) else {
+                LogManager.shared.log("CortexURL", "reader/play: missing readerID/page")
+                return false
+            }
+            DispatchQueue.main.async {
+                AnimatedPlaybackCoordinator.shared.toggle(.init(readerID: rid, index: page))
+            }
+            LogManager.shared.log("CortexURL", "reader/play toggle \(rid)#\(page)")
+            return true
         case "reader/clear-override":
             // 診断用 (2026-07-21): モード選択ダイアログを再発火させるため override を消す。
             // 例: cortex://reader/clear-override?gid=3996706
