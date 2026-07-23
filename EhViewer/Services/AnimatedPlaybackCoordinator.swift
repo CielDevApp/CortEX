@@ -25,6 +25,32 @@ final class AnimatedPlaybackCoordinator: ObservableObject {
     /// @Published で全セルが contains 判定を購読、変化で body 再評価 → displayLink 即座 stop 可能。
     @Published private(set) var playing: [PageKey] = []
 
+    /// 負債返済ユニット1 (2026-07-23, 15PM OOM 事件由来): 帳簿と実体の乖離を構造的に禁止する。
+    /// 従来の停止は「@Published 変化 → セル body 再評価 → unmount」頼みで、画面外セルは
+    /// 再評価されず displayLink がゾンビ化した (closeReader 後 6 分生存 ×2 → jetsam)。
+    /// 再生実体 (AnimatedSourceImageView) は再生開始時に停止クロージャを登録し、
+    /// Coordinator は帳簿から外す瞬間に**必ず直接停止を執行**する。
+    /// SwiftUI 購読 / willMove / deinit / tick ゾンビガードはバックストップに格下げ。
+    private var stoppers: [PageKey: () -> Void] = [:]
+
+    /// 再生実体が停止手段を登録する (weak capture 前提。startLink 時に呼ぶ)。
+    func attachStopper(_ key: PageKey, _ stop: @escaping () -> Void) {
+        stoppers[key] = stop
+    }
+
+    /// 再生実体の破棄時に登録を外す (deinit / stopLink 時)。
+    func detachStopper(_ key: PageKey) {
+        stoppers[key] = nil
+    }
+
+    /// 帳簿から外したキーの実体停止を執行する。
+    private func enforceStop(_ key: PageKey, reason: String) {
+        guard let stop = stoppers[key] else { return }
+        stoppers[key] = nil
+        stop()
+        LogManager.shared.log("Anim", "enforced-stop \(key.readerID)#\(key.index) (\(reason))")
+    }
+
     /// 最大同時再生数。UserDefaults `animMaxConcurrentPlay` で可変、default=1。
     /// 1 件再生中に別ページ▶タップで旧再生が自動停止 = シンプルな切替動作。
     /// Mac Catalyst で 3 件同時は libwebp decode + 230MB×3 で負荷過多のため default を 1 に。
@@ -42,11 +68,13 @@ final class AnimatedPlaybackCoordinator: ObservableObject {
     func toggle(_ key: PageKey) {
         if let idx = playing.firstIndex(of: key) {
             playing.remove(at: idx)
+            enforceStop(key, reason: "toggle")
             LogManager.shared.log("Anim", "playback toggle STOP \(key.readerID)#\(key.index) playing=\(playing.count)/\(maxConcurrent)")
         } else {
             playing.insert(key, at: 0)
             if playing.count > maxConcurrent {
                 let evicted = playing.removeLast()
+                enforceStop(evicted, reason: "LRU")
                 LogManager.shared.log("Anim", "playback LRU EVICT \(evicted.readerID)#\(evicted.index) (new=\(key.readerID)#\(key.index))")
             } else {
                 LogManager.shared.log("Anim", "playback toggle START \(key.readerID)#\(key.index) playing=\(playing.count)/\(maxConcurrent)")
@@ -56,11 +84,11 @@ final class AnimatedPlaybackCoordinator: ObservableObject {
 
     /// reader close 時に呼ぶと、その reader 配下の再生を全停止。
     func resetForReader(_ readerID: String) {
-        let before = playing.count
+        let removed = playing.filter { $0.readerID == readerID }
+        guard !removed.isEmpty else { return }
         playing.removeAll { $0.readerID == readerID }
-        if playing.count != before {
-            LogManager.shared.log("Anim", "playback reset reader=\(readerID) stopped=\(before - playing.count)")
-        }
+        for key in removed { enforceStop(key, reason: "readerClose") }
+        LogManager.shared.log("Anim", "playback reset reader=\(readerID) stopped=\(removed.count)")
     }
 
     /// reader close 時の memory 解放統合 API。
@@ -80,6 +108,8 @@ final class AnimatedPlaybackCoordinator: ObservableObject {
     func stopAll() {
         guard !playing.isEmpty else { return }
         LogManager.shared.log("Anim", "playback stopAll count=\(playing.count)")
+        let removed = playing
         playing.removeAll()
+        for key in removed { enforceStop(key, reason: "stopAll") }
     }
 }

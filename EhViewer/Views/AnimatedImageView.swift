@@ -360,6 +360,25 @@ final class AnimatedSourceImageView: UIImageView {
         return "\(s.frameCount)f#\(String(format: "%04x", UInt(bitPattern: ObjectIdentifier(s).hashValue) & 0xffff))"
     }
 
+    /// 負債返済ユニット1 (2026-07-23): Coordinator が直接停止を執行するための自分の帳簿キー。
+    /// nil = Coordinator 管理外の再生 (ズームオーバーレイ等、親のライフサイクルに従う)。
+    var playbackKey: AnimatedPlaybackCoordinator.PageKey? {
+        didSet {
+            guard oldValue != playbackKey else { return }
+            if let old = oldValue { AnimatedPlaybackCoordinator.shared.detachStopper(old) }
+            if displayLink != nil, let key = playbackKey { attachStopper(key) }
+        }
+    }
+
+    private func attachStopper(_ key: AnimatedPlaybackCoordinator.PageKey) {
+        AnimatedPlaybackCoordinator.shared.attachStopper(key) { [weak self] in
+            guard let self else { return }
+            self.stopLink()
+            // 帳簿から外れた瞬間にフレーム窓も返す (unmount 待ちにしない = OOM 事件の教訓)
+            self.animSource?.dropFrameCache()
+        }
+    }
+
     private func startLink() {
         guard displayLink == nil, let source = animSource, source.frameCount > 1, source.totalDuration > 0 else { return }
         linkStartTime = CACurrentMediaTime()
@@ -374,6 +393,8 @@ final class AnimatedSourceImageView: UIImageView {
         if rollingTimer == nil {
             startRollingPrefetch()
         }
+        // 負債返済ユニット1: 再生開始と同時に停止手段を Coordinator へ預ける
+        if let key = playbackKey { attachStopper(key) }
         LogManager.shared.log("Anim", "displayLink START \(diagTag) frames=\(source.frameCount) rate=30fps")
     }
 
@@ -381,6 +402,7 @@ final class AnimatedSourceImageView: UIImageView {
         displayLink?.invalidate()
         displayLink = nil
         stopRollingPrefetch()
+        if let key = playbackKey { AnimatedPlaybackCoordinator.shared.detachStopper(key) }
     }
 
     /// Boomerang: 周期 = totalDuration * 2 - (delays[0] + delays[N-1]) 近似で。
@@ -642,7 +664,7 @@ struct BoomerangWebPView: View {
             // 再生セル: source が ready かつプリロード中でない時のみ表示。
             // プリロード中は静止画 placeholder を残し、裏で全 frame decode を走らせる。
             if isPlaying, let source, !isPreloading {
-                AnimatedImageCellView(source: source, isActive: true)
+                AnimatedImageCellView(source: source, isActive: true, playbackKey: pageKey)
             }
             // ▶ オーバーレイ: 停止中 (再生もプリロードもしてない) のみ表示。
             if !isPlaying && !isPreloading {
@@ -928,16 +950,20 @@ struct BoomerangWebPView: View {
 struct AnimatedImageCellView: UIViewRepresentable {
     let source: AnimatedImageSource
     var isActive: Bool = true
+    /// Coordinator 管理下の再生ならセルの帳簿キー (負債返済ユニット1: enforced-stop 用)
+    var playbackKey: AnimatedPlaybackCoordinator.PageKey? = nil
 
     func makeUIView(context: Context) -> AnimatedSourceImageView {
         let iv = AnimatedSourceImageView()
         iv.contentMode = .scaleAspectFit
         iv.clipsToBounds = true
+        iv.playbackKey = playbackKey
         iv.setSource(source, isActive: isActive)
         return iv
     }
 
     func updateUIView(_ uiView: AnimatedSourceImageView, context: Context) {
+        uiView.playbackKey = playbackKey
         uiView.setSource(source, isActive: isActive)
     }
 }
