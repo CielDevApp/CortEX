@@ -741,7 +741,7 @@ struct BoomerangWebPView: View {
                         choppyPreloadDone = true
                         guard let src = source else { return }
                         LogManager.shared.log("Anim", "choppy preload ACCEPTED key=\(readerID)#\(pageIndex)")
-                        Task { await runPreload(src) }
+                        Task { await runPreload(src, fullPreload: true) }
                     } label: {
                         Label("プリロードで滑らかに", systemImage: "bolt.fill")
                             .font(.caption.weight(.semibold))
@@ -944,21 +944,24 @@ struct BoomerangWebPView: View {
         #endif
     }
 
-    private func runPreload(_ src: AnimatedImageSource) async {
+    /// - Parameter fullPreload: true = 時間予算を無視して全フレーム走行 (カクカク検知からの
+    ///   ユーザー明示承諾用。2026-07-23: 級 .none は targetSeconds=0 のため予算方式だと
+    ///   1バッチも走らず「押しても走らない」になる)。キャンセルは既存ボタンで可能。
+    private func runPreload(_ src: AnimatedImageSource, fullPreload: Bool = false) async {
         isPreloading = true
         preloadProgress = 0
         let t0 = CFAbsoluteTimeGetCurrent()
         let frameCount = src.frameCount
         let maxDim = preloadMaxDim(for: src)
         let target = classifyPreload(src).targetSeconds
-        LogManager.shared.log("Anim", "preload start frames=\(frameCount) target=\(target)s maxDim=\(Int(maxDim))")
+        LogManager.shared.log("Anim", "preload start frames=\(frameCount) target=\(fullPreload ? "full" : "\(target)s") maxDim=\(Int(maxDim))")
         let batchSize = 10
         var batchStart = 0
         while batchStart < frameCount {
             if Task.isCancelled { break }
             if !coordinator.isPlaying(pageKey) { break }
             let elapsed = CFAbsoluteTimeGetCurrent() - t0
-            if elapsed >= target { break }
+            if !fullPreload && elapsed >= target { break }
             let batchEnd = min(batchStart + batchSize, frameCount)
             let n = batchEnd - batchStart
             let start = batchStart
@@ -969,7 +972,9 @@ struct BoomerangWebPView: View {
             }.value
             batchStart = batchEnd
             let now = CFAbsoluteTimeGetCurrent() - t0
-            preloadProgress = min(now / target, 1.0)
+            preloadProgress = fullPreload
+                ? Double(batchEnd) / Double(max(frameCount, 1))
+                : min(now / target, 1.0)
             if batchEnd % 30 == 0 {
                 LogManager.shared.log("Anim", "preload progress \(batchEnd)/\(frameCount) elapsed=\(String(format: "%.2f", now))s")
             }
